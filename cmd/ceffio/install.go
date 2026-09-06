@@ -7,6 +7,7 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/bootstrap"
 	"github.com/ceffio-suite/ceffio/internal/cluster"
 	"github.com/ceffio-suite/ceffio/internal/data"
+	"github.com/ceffio-suite/ceffio/internal/files"
 	"github.com/ceffio-suite/ceffio/internal/identity"
 	"github.com/ceffio-suite/ceffio/internal/platform"
 	"github.com/spf13/cobra"
@@ -128,8 +129,13 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 		return err
 	}
 
-	// TODO(phase-5) : fichiers (Nextcloud).
-	fmt.Println("\nÉtape suivante (Phase 5) : fichiers (Nextcloud).")
+	// 8. Fichiers (Phase 5).
+	if err := files.Deploy(ctx); err != nil {
+		return err
+	}
+
+	// TODO(phase-6) : office (ONLYOFFICE).
+	fmt.Println("\nÉtape suivante (Phase 6) : office (ONLYOFFICE).")
 	return nil
 }
 
