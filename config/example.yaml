@@ -1,0 +1,35 @@
+domain: company.fr
+profile: business-50
+
+runtime:
+  type: k3s
+
+features:
+  mail: true
+  office: true
+  video: true
+  monitoring: true
+
+identity:
+  provider: keycloak
+
+files:
+  provider: nextcloud
+
+office:
+  provider: onlyoffice
+
+chat:
+  provider: matrix
+
+video:
+  provider: jitsi
+
+mail:
+  provider: stalwart
+
+storage:
+  provider: local
+
+tls:
+  provider: letsencrypt

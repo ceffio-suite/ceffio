@@ -1,0 +1,9 @@
+name: business-100
+
+capacity:
+  users: 100
+
+requirements:
+  cpu: 24
+  memory: 96Gi
+  dataDisk: 4Ti

@@ -1,0 +1,30 @@
+name: business-50
+
+capacity:
+  users: 50
+
+requirements:
+  cpu: 16
+  memory: 64Gi
+  systemDisk: 500Gi
+  dataDisk: 2Ti
+
+resources:
+  keycloak:
+    memory: 2Gi
+  postgres:
+    memory: 6Gi
+  redis:
+    memory: 2Gi
+  nextcloud:
+    memory: 8Gi
+  onlyoffice:
+    memory: 6Gi
+  matrix:
+    memory: 4Gi
+  jitsi:
+    memory: 8Gi
+  mail:
+    memory: 6Gi
+  observability:
+    memory: 6Gi

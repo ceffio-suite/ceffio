@@ -1,0 +1,9 @@
+name: small
+
+capacity:
+  users: 20
+
+requirements:
+  cpu: 8
+  memory: 32Gi
+  systemDisk: 500Gi

@@ -1,0 +1,10 @@
+name: enterprise-ha
+
+requirements:
+  nodes: 3+
+  haPostgreSQL: true
+  distributedStorage: true
+  multipleIngressReplicas: true
+  multipleJVB: true
+  antiAffinity: true
+  podDisruptionBudgets: true
