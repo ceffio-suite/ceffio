@@ -5,15 +5,18 @@ package platform
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+
+	"github.com/ceffio-suite/ceffio/internal/charts"
 )
 
 const (
 	// certManagerChartVersion est pinnée, pas "latest" (principes du doc §111).
 	certManagerChartVersion = "v1.21.1"
-	chartPath               = "charts/ceffio"
 )
 
 // Deploy installe la plateforme de base (Phase 2) sur le cluster courant,
@@ -42,13 +45,44 @@ func Deploy(ctx context.Context) error {
 }
 
 func installUmbrella(ctx context.Context) error {
-	fmt.Println("∙ namespaces (chart ceffio)")
+	fmt.Println("∙ namespaces (chart ceffio embarqué)")
+	chart, err := embeddedChart(ctx)
+	if err != nil {
+		return err
+	}
 	cmd := exec.CommandContext(ctx, "helm", "upgrade", "--install", "ceffio",
-		chartPath,
+		chart,
 		"--namespace", "ceffio-system", "--create-namespace")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// embeddedChart extrait le chart "ceffio" du FS embarqué vers un dossier
+// temporaire et retourne son chemin. Garde le déploiement autoportant.
+func embeddedChart(ctx context.Context) (string, error) {
+	dir, err := os.MkdirTemp("", "ceffio-charts-*")
+	if err != nil {
+		return "", err
+	}
+	err = fs.WalkDir(charts.FS, "ceffio", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dir, p)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, err := fs.ReadFile(charts.FS, p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o644)
+	})
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "ceffio"), nil
 }
 
 func installCertManager(ctx context.Context) error {

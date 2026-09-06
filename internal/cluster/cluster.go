@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -67,14 +68,40 @@ func k3dExists(ctx context.Context, name string) bool {
 	return false
 }
 
-// provisionK3s installe un vrai cluster K3s via le script officiel (Linux).
+// provisionK3s installe un vrai cluster K3s via le script officiel (Linux),
+// plus helm (prérequis de la pile) et le kubeconfig par défaut de l'utilisateur.
 func provisionK3s(ctx context.Context) error {
 	// TODO(phase-1) : flags HA (--cluster-init), version pin, options servi-extra.
 	cmd := exec.CommandContext(ctx, "sh", "-c",
 		"curl -sfL https://get.k3s.io | INSTALL_K3S_SKIP_START=false sh -")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("get.k3s.io: %w", err)
+	}
+	// helm : prérequis (charts jetstack, umbrella). Auto-install si absent.
+	if _, err := exec.LookPath("helm"); err != nil {
+		fmt.Println("∙ helm absent → installation via get-helm-3")
+		hcmd := exec.CommandContext(ctx, "sh", "-c",
+			"curl -sfL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | sh")
+		hcmd.Stdout = os.Stdout
+		hcmd.Stderr = os.Stderr
+		if err := hcmd.Run(); err != nil {
+			return fmt.Errorf("install helm: %w", err)
+		}
+	}
+	// kubeconfig par défaut (kubectl/helm héritent de $HOME) depuis k3s.yaml.
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		kc := filepath.Join(home, ".kube")
+		os.MkdirAll(kc, 0o700)
+		cfg := filepath.Join(kc, "config")
+		if _, err := os.Stat(cfg); err != nil {
+			if data, err := os.ReadFile("/etc/rancher/k3s/k3s.yaml"); err == nil {
+				_ = os.WriteFile(cfg, data, 0o600)
+			}
+		}
+	}
+	return nil
 }
 
 // Health liste les nœuds du cluster courant (via kubectl).
