@@ -2,7 +2,10 @@ package main
 
 import (
 	"fmt"
+	"time"
 
+	"github.com/ceffio-suite/ceffio/internal/bootstrap"
+	"github.com/ceffio-suite/ceffio/internal/cluster"
 	"github.com/spf13/cobra"
 )
 
@@ -16,6 +19,8 @@ type installOptions struct {
 	video           bool
 	monitoring      bool
 }
+
+const devClusterName = "ceffio-dev"
 
 func newInstallCmd() *cobra.Command {
 	o := &installOptions{}
@@ -33,7 +38,7 @@ Exemples :
   ceffio install --runtime rke2
   ceffio install --existing-cluster`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runInstall(o)
+			return runInstall(cmd, o)
 		},
 	}
 
@@ -50,7 +55,7 @@ Exemples :
 	return c
 }
 
-func runInstall(o *installOptions) error {
+func runInstall(cmd *cobra.Command, o *installOptions) error {
 	if o.domain == "" {
 		return fmt.Errorf("--domain est requis (ex. --domain company.fr)")
 	}
@@ -66,7 +71,63 @@ func runInstall(o *installOptions) error {
 	fmt.Printf("Monitoring: %s\n", yesNo(o.monitoring))
 	fmt.Println()
 
-	// TODO(phase-1) : bootstrap Kubernetes + déploiement Helm réel.
-	fmt.Println("Le bootstrap Kubernetes et le déploiement Helm arrivent en Phase 1-2.")
+	ctx := cmd.Context()
+
+	// 1. Détection + validation matérielle/OS.
+	hw := bootstrap.Detect()
+	if err := bootstrap.Validate(hw.OS, hw.Arch); err != nil {
+		return err
+	}
+	mem := "n/a"
+	if hw.MemoryTotalMB > 0 {
+		mem = fmt.Sprintf("%d MB", hw.MemoryTotalMB)
+	}
+	fmt.Printf("Machine:    %s/%s · %d vCPU · RAM %s\n", hw.OS, hw.Arch, hw.CPUs, mem)
+
+	// 2. Résolution du runtime.
+	rt, err := resolveRuntime(o, hw.OS)
+	if err != nil {
+		return err
+	}
+
+	// 3. Provisionnement du cluster Kubernetes.
+	fmt.Printf("\nProvisioning cluster %q (%s)...\n", devClusterName, rt)
+	if _, err := cluster.Provision(ctx, rt, devClusterName); err != nil {
+		return err
+	}
+
+	// 4. Attente + check de santé.
+	if err := cluster.WaitReady(ctx, 120*time.Second); err != nil {
+		return err
+	}
+	nodes, err := cluster.Health(ctx)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("\n✓ Cluster %q prêt (%d nœud(s))\n", devClusterName, len(nodes))
+	for _, n := range nodes {
+		fmt.Printf("  ✓ node/%s Ready\n", n)
+	}
+
+	// 5. Suite : Helm platform (Phase 2).
+	fmt.Printf("\nÉtape suivante (Phase 2) : déploiement Helm de la plateforme (Traefik, cert-manager, stockage).\n")
 	return nil
+}
+
+func resolveRuntime(o *installOptions, osName string) (cluster.Runtime, error) {
+	if o.existingCluster {
+		return "", fmt.Errorf("--existing-cluster : pas encore implémenté (BYO Kubernetes)")
+	}
+	switch o.runtime {
+	case "k3s":
+		if osName == "darwin" {
+			return cluster.RuntimeDev, nil // macOS → k3d (boucle de dev)
+		}
+		return cluster.RuntimeK3s, nil // Linux → vrai K3s
+	case "rke2":
+		return "", fmt.Errorf("runtime rke2 : pas encore implémenté (Phase 17)")
+	default:
+		return "", fmt.Errorf("runtime inconnu %q", o.runtime)
+	}
 }
