@@ -1,4 +1,4 @@
-.PHONY: build test vet lint clean
+.PHONY: build test vet lint clean test-clean
 
 build:
 	go build -o bin/ceffio ./cmd/ceffio
@@ -13,3 +13,7 @@ lint: vet
 
 clean:
 	rm -rf bin/
+
+# Reproduction intégrale à zéro (à lancer après chaque phase).
+test-clean:
+	bash scripts/clean-test.sh
