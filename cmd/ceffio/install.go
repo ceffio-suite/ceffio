@@ -10,6 +10,7 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/data"
 	"github.com/ceffio-suite/ceffio/internal/files"
 	"github.com/ceffio-suite/ceffio/internal/identity"
+	"github.com/ceffio-suite/ceffio/internal/ingress"
 	"github.com/ceffio-suite/ceffio/internal/office"
 	"github.com/ceffio-suite/ceffio/internal/platform"
 	"github.com/ceffio-suite/ceffio/internal/sso"
@@ -159,6 +160,11 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	}
 
 	fmt.Println("\n✓ SSO OIDC configuré (login unique Keycloak sur Nextcloud + Element).")
+
+	// 12. Ingress / TLS réel (Phase 9).
+	if err := ingress.Deploy(ctx, o.domain); err != nil {
+		return err
+	}
 	return nil
 }
 
