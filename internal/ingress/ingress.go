@@ -74,8 +74,33 @@ func AdoptURLs(ctx context.Context, domain string) error {
 		return err
 	}
 
-	fmt.Println("✓ URLs publiques adoptées dans Element, Synapse, Nextcloud, ONLYOFFICE + redirects SSO")
+	// 6) Keycloak : hostname public + URL frontend https + proxy headers — sinon
+	// ses redirections navigateur pointent vers l'hostname interne codé en dur.
+	if err := adoptKeycloakHost(ctx, domain); err != nil {
+		return err
+	}
+
+	fmt.Println("✓ URLs publiques adoptées dans Element, Synapse, Nextcloud, ONLYOFFICE, Keycloak + redirects SSO")
 	return nil
+}
+
+// adoptKeycloakHost force l'hostname public de Keycloak (redirections navigateur)
+// avec une URL frontend https et les proxy headers de Traefik. Idempotent.
+func adoptKeycloakHost(ctx context.Context, domain string) error {
+	host := "keycloak." + domain
+	url := "https://" + host
+	cmd := exec.CommandContext(ctx, "kubectl", "set", "env", "-n", "ceffio-identity", "deploy/keycloak",
+		"KC_HOSTNAME="+host, "KC_HOSTNAME_URL="+url,
+		"KC_HOSTNAME_STRICT=false", "KC_PROXY_HEADERS=xforwarded")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	rcmd := exec.CommandContext(ctx, "kubectl", "rollout", "status", "deploy/keycloak", "-n", "ceffio-identity", "--timeout=240s")
+	rcmd.Stdout = os.Stdout
+	rcmd.Stderr = os.Stderr
+	return rcmd.Run()
 }
 
 // rewriteConfig fait une substitution simple dans une valeur de ConfigMap puis redémarre la cible.
