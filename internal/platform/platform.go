@@ -60,6 +60,7 @@ func installCertManager(ctx context.Context) error {
 		"jetstack/cert-manager",
 		"--namespace", "cert-manager", "--create-namespace",
 		"--set", "crds.enabled=true",
+		"--timeout", "15m",
 		"--version", certManagerChartVersion)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
