@@ -387,3 +387,100 @@ func apply(ctx context.Context, manifest string) error {
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
+
+// ConfigureOIDC ajoute le SSO Synapse ← Keycloak (provider OIDC) au homeserver.yaml
+// puis redémarre Synapse. Idempotent.
+func ConfigureOIDC(ctx context.Context) error {
+	fmt.Println("SSO Synapse ← Keycloak...")
+	clientID, err := readOIDCSecret(ctx, "client-id")
+	if err != nil {
+		return err
+	}
+	clientSecret, err := readOIDCSecret(ctx, "client-secret")
+	if err != nil {
+		return err
+	}
+	yamlData, err := configMapData(ctx, "synapse-config", "homeserver.yaml")
+	if err != nil {
+		return err
+	}
+	if strings.Contains(yamlData, "oidc_providers:") {
+		fmt.Println("∙ OIDC Synapse déjà configuré")
+		return nil
+	}
+	block := fmt.Sprintf(`oidc_providers:
+  - idp_id: keycloak
+    idp_name: Ceffio
+    issuer: "http://keycloak.ceffio-identity.svc:8080/realms/ceffio"
+    client_id: "%s"
+    client_secret: "%s"
+    scopes: ["openid", "profile", "email"]
+    user_mapping_provider:
+      config:
+        localpart_template: "{{ user.preferred_username }}"
+        display_name_template: "{{ user.name }}"
+`, clientID, clientSecret)
+	if err := applyConfigMapData(ctx, "synapse-config", map[string]string{"homeserver.yaml": yamlData + "\n" + block}); err != nil {
+		return err
+	}
+	if err := rolloutRestart(ctx, "deploy/synapse"); err != nil {
+		return err
+	}
+	if err := waitSynapseReady(ctx); err != nil {
+		return err
+	}
+	fmt.Println("✓ SSO Synapse configuré (login Keycloak sur Element)")
+	return nil
+}
+
+func readOIDCSecret(ctx context.Context, key string) (string, error) {
+	return readSecretValueNS(ctx, "ceffio-identity", "synapse-oidc", key)
+}
+
+func readSecretValueNS(ctx context.Context, sNs, name, key string) (string, error) {
+	out, err := exec.CommandContext(ctx, "kubectl", "get", "secret", name, "-n", sNs, "-o", "jsonpath={.data."+key+"}").Output()
+	if err != nil {
+		return "", err
+	}
+	dec, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(out)))
+	if err != nil {
+		return "", err
+	}
+	return string(dec), nil
+}
+
+func configMapData(ctx context.Context, name, key string) (string, error) {
+	tpl := "{.data." + strings.ReplaceAll(key, ".", "\\.") + "}"
+	out, err := exec.CommandContext(ctx, "kubectl", "get", "cm", name, "-n", ns, "-o", "jsonpath="+tpl).Output()
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+func applyConfigMapData(ctx context.Context, name string, data map[string]string) error {
+	key := "homeserver.yaml"
+	for k := range data {
+		key = k
+	}
+	tmp, err := os.CreateTemp("", "cm-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if err := os.WriteFile(tmp.Name(), []byte(data[key]), 0o600); err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, "sh", "-c",
+		"kubectl create configmap "+name+" -n "+ns+" --from-file="+key+"="+tmp.Name()+" --dry-run=client -o yaml | kubectl apply -f -")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func rolloutRestart(ctx context.Context, target string) error {
+	cmd := exec.CommandContext(ctx, "kubectl", "rollout", "restart", target, "-n", ns)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}

@@ -8,6 +8,7 @@ package files
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -273,4 +274,54 @@ func apply(ctx context.Context, manifest string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// ConfigureOIDC branche Nextcloud sur le SSO Keycloak : app user_oidc + provider.
+// Idempotent (l'app et le provider tolèrent "déjà présent").
+func ConfigureOIDC(ctx context.Context) error {
+	fmt.Println("SSO Nextcloud ← Keycloak...")
+	if err := ensureOccApp(ctx, "user_oidc"); err != nil {
+		return err
+	}
+	clientID, err := readSecretValue(ctx, "ceffio-identity", "nextcloud-oidc", "client-id")
+	if err != nil {
+		return fmt.Errorf("secret nextcloud-oidc: %w", err)
+	}
+	clientSecret, err := readSecretValue(ctx, "ceffio-identity", "nextcloud-oidc", "client-secret")
+	if err != nil {
+		return fmt.Errorf("secret nextcloud-oidc: %w", err)
+	}
+	const discovery = "http://keycloak.ceffio-identity.svc:8080/realms/ceffio/.well-known/openid-configuration"
+	out, err := runOccOutput(ctx, "user_oidc:provider", "Ceffio", "-c", clientID, "-s", clientSecret, "-d", discovery)
+	if err != nil && !strings.Contains(out, "already") {
+		return fmt.Errorf("user_oidc:provider: %w: %s", err, out)
+	}
+	fmt.Println("✓ SSO Nextcloud configuré (user_oidc + provider Ceffio)")
+	return nil
+}
+
+func ensureOccApp(ctx context.Context, app string) error {
+	out, err := runOccOutput(ctx, "app:install", app)
+	if err != nil && !strings.Contains(out, "already installed") && !strings.Contains(out, "already enabled") {
+		return fmt.Errorf("occ app:install %s: %w: %s", app, err, out)
+	}
+	return nil
+}
+
+func runOccOutput(ctx context.Context, args ...string) (string, error) {
+	occArgs := append([]string{"exec", "-n", ns, "deploy/nextcloud", "--", "php", "occ"}, args...)
+	out, err := exec.CommandContext(ctx, "kubectl", occArgs...).CombinedOutput()
+	return string(out), err
+}
+
+func readSecretValue(ctx context.Context, sNs, name, key string) (string, error) {
+	out, err := exec.CommandContext(ctx, "kubectl", "get", "secret", name, "-n", sNs, "-o", "jsonpath={.data."+key+"}").Output()
+	if err != nil {
+		return "", err
+	}
+	dec, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(out)))
+	if err != nil {
+		return "", err
+	}
+	return string(dec), nil
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/identity"
 	"github.com/ceffio-suite/ceffio/internal/office"
 	"github.com/ceffio-suite/ceffio/internal/platform"
+	"github.com/ceffio-suite/ceffio/internal/sso"
 	"github.com/spf13/cobra"
 )
 
@@ -146,8 +147,18 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 		return err
 	}
 
-	// TODO(phase-7b) : SSO OIDC Synapse ← Keycloak (login unique).
-	fmt.Println("\nÉtape suivante : SSO OIDC chat ← Keycloak (login unique du MVP).")
+	// 11. SSO (login unique du MVB) : clients OIDC Keycloak + Nextcloud + Synapse.
+	if err := sso.EnsureOIDCClients(ctx); err != nil {
+		return err
+	}
+	if err := files.ConfigureOIDC(ctx); err != nil {
+		return err
+	}
+	if err := chat.ConfigureOIDC(ctx); err != nil {
+		return err
+	}
+
+	fmt.Println("\n✓ SSO OIDC configuré (login unique Keycloak sur Nextcloud + Element).")
 	return nil
 }
 
