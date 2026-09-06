@@ -1,0 +1,26 @@
+# Valeurs du chart umbrella Ceffio.
+# Ce chart possède les namespaces de la plateforme (Phase 2).
+# Les sous-charts applicatifs arrivent dans les phases suivantes.
+
+global:
+  partOf: ceffio
+  managedBy: ceffio-operator
+
+# Noms logiques des namespaces. Le template rend "ceffio-<nom>".
+namespaces:
+  system: {}
+  identity: {}
+  data: {}
+  files: {}
+  office: {}
+  chat: {}
+  video: {}
+  mail: {}
+  observability: {}
+
+# cert-manager (installé à part, au niveau cluster).
+certmanager:
+  repo: jetstack
+  version: v1.21.1
+  namespace: cert-manager
+  installCRDs: true

@@ -6,6 +6,7 @@ import (
 
 	"github.com/ceffio-suite/ceffio/internal/bootstrap"
 	"github.com/ceffio-suite/ceffio/internal/cluster"
+	"github.com/ceffio-suite/ceffio/internal/platform"
 	"github.com/spf13/cobra"
 )
 
@@ -110,8 +111,13 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 		fmt.Printf("  ✓ node/%s Ready\n", n)
 	}
 
-	// 5. Suite : Helm platform (Phase 2).
-	fmt.Printf("\nÉtape suivante (Phase 2) : déploiement Helm de la plateforme (Traefik, cert-manager, stockage).\n")
+	// 5. Déploiement de la plateforme (Phase 2).
+	if err := platform.Deploy(ctx); err != nil {
+		return err
+	}
+
+	// TODO(phase-3) : data (PostgreSQL/CloudNativePG + Redis).
+	fmt.Println("\nÉtape suivante (Phase 3) : data (CloudNativePG/PostgreSQL + Redis).")
 	return nil
 }
 

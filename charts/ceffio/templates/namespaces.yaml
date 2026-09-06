@@ -1,0 +1,12 @@
+{{- range $ns, $_ := .Values.namespaces }}
+{{- $name := printf "ceffio-%s" $ns }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $name }}
+  labels:
+    app.kubernetes.io/part-of: {{ $.Values.global.partOf | quote }}
+    app.kubernetes.io/managed-by: {{ $.Values.global.managedBy | quote }}
+    app.kubernetes.io/name: {{ $name | quote }}
+---
+{{- end }}
