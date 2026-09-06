@@ -9,6 +9,7 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/data"
 	"github.com/ceffio-suite/ceffio/internal/files"
 	"github.com/ceffio-suite/ceffio/internal/identity"
+	"github.com/ceffio-suite/ceffio/internal/office"
 	"github.com/ceffio-suite/ceffio/internal/platform"
 	"github.com/spf13/cobra"
 )
@@ -134,8 +135,13 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 		return err
 	}
 
-	// TODO(phase-6) : office (ONLYOFFICE).
-	fmt.Println("\nÉtape suivante (Phase 6) : office (ONLYOFFICE).")
+	// 9. Office (Phase 6).
+	if err := office.Deploy(ctx); err != nil {
+		return err
+	}
+
+	// TODO(phase-7) : chat (Matrix Synapse + Element).
+	fmt.Println("\nÉtape suivante (Phase 7) : chat (Matrix Synapse + Element).")
 	return nil
 }
 
