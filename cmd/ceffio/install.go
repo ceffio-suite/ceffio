@@ -6,6 +6,7 @@ import (
 
 	"github.com/ceffio-suite/ceffio/internal/bootstrap"
 	"github.com/ceffio-suite/ceffio/internal/cluster"
+	"github.com/ceffio-suite/ceffio/internal/data"
 	"github.com/ceffio-suite/ceffio/internal/platform"
 	"github.com/spf13/cobra"
 )
@@ -116,8 +117,13 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 		return err
 	}
 
-	// TODO(phase-3) : data (PostgreSQL/CloudNativePG + Redis).
-	fmt.Println("\nÉtape suivante (Phase 3) : data (CloudNativePG/PostgreSQL + Redis).")
+	// 6. Couche données (Phase 3).
+	if err := data.Deploy(ctx); err != nil {
+		return err
+	}
+
+	// TODO(phase-4) : identité (Keycloak).
+	fmt.Println("\nÉtape suivante (Phase 4) : identité (Keycloak).")
 	return nil
 }
 
