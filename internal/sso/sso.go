@@ -9,6 +9,7 @@ package sso
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -38,22 +39,24 @@ var clients = []client{
 }
 
 // EnsureOIDCClients garantit l'existence des clients OIDC Keycloak (nextcloud,
-// synapse) avec un secret généré stocké en secret Kubernetes. Idempotent.
+// synapse) avec un secret généré stocké en secret Kubernetes. Idempotent et
+// auto-réparant : recrée un client absent (en réutilisant le secret stocké),
+// et (re)pose le secret si manquant.
 func EnsureOIDCClients(ctx context.Context) error {
 	fmt.Println("Déploiement du SSO Keycloak (Phase 8)...")
 	for _, c := range clients {
 		sec := c.app + "-oidc"
-		if secretExists(ctx, sec) {
-			fmt.Printf("∙ client %s déjà configuré (secret %s présent)\n", c.id, sec)
-			continue
-		}
-		secretVal, err := genSecret(24)
-		if err != nil {
-			return err
-		}
 		uuid, err := ensureClient(ctx, c.id, c.redirects)
 		if err != nil {
 			return fmt.Errorf("client OIDC %s: %w", c.id, err)
+		}
+		// Réutilise le secret existant (les apps pointent dessus), sinon génère.
+		secretVal, ok := readSecretVal(ctx, sec, "client-secret")
+		if !ok {
+			secretVal, err = genSecret(24)
+			if err != nil {
+				return err
+			}
 		}
 		if err := setClientSecret(ctx, uuid, secretVal); err != nil {
 			return fmt.Errorf("secret client %s: %w", c.id, err)
@@ -64,7 +67,11 @@ func EnsureOIDCClients(ctx context.Context) error {
 		}); err != nil {
 			return err
 		}
-		fmt.Printf("∙ client OIDC %s prêt (secret → %s)\n", c.id, sec)
+		if !ok {
+			fmt.Printf("∙ client OIDC %s créé (secret → %s)\n", c.id, sec)
+		} else {
+			fmt.Printf("∙ client OIDC %s réconcilié (secret → %s)\n", c.id, sec)
+		}
 	}
 	fmt.Println("✓ Clients OIDC Keycloak prêts (nextcloud, synapse)")
 	return nil
@@ -128,9 +135,9 @@ func runKcadm(ctx context.Context, args ...string) (string, error) {
 	for i, a := range args {
 		quoted[i] = "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
 	}
-	cmd := `/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user "$KC_BOOTSTRAP_ADMIN_USERNAME" --password "$KC_BOOTSTRAP_ADMIN_PASSWORD" >/dev/null && /opt/keycloak/bin/kcadm.sh ` + strings.Join(quoted, " ")
-	out, err := exec.CommandContext(ctx, "kubectl", "exec", "-n", ns, keycloakDepl, "--", "sh", "-c", cmd).CombinedOutput()
-	return string(out), err
+	cmd := `/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user "$KC_BOOTSTRAP_ADMIN_USERNAME" --password "$KC_BOOTSTRAP_ADMIN_PASSWORD" >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh ` + strings.Join(quoted, " ") + ` 2>/dev/null`
+	out, err := exec.CommandContext(ctx, "kubectl", "exec", "-n", ns, keycloakDepl, "--", "sh", "-c", cmd).Output()
+	return strings.TrimSpace(string(out)), err
 }
 
 func secretExists(ctx context.Context, name string) bool {
@@ -138,12 +145,25 @@ func secretExists(ctx context.Context, name string) bool {
 	return err == nil
 }
 
+func readSecretVal(ctx context.Context, name, key string) (string, bool) {
+	out, err := exec.CommandContext(ctx, "kubectl", "get", "secret", name, "-n", ns, "-o", "jsonpath={.data."+key+"}").Output()
+	if err != nil {
+		return "", false
+	}
+	b, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(out)))
+	if err != nil || len(b) == 0 {
+		return "", false
+	}
+	return string(b), true
+}
+
 func createSecretS(ctx context.Context, name string, data map[string]string) error {
-	args := []string{"create", "secret", "generic", name, "-n", ns}
+	args := []string{"kubectl", "create", "secret", "generic", name, "-n", ns, "--dry-run=client", "-o", "yaml"}
 	for k, v := range data {
 		args = append(args, "--from-literal="+k+"="+v)
 	}
-	cmd := exec.CommandContext(ctx, "kubectl", args...)
+	args = append(args, "|", "kubectl", "apply", "-f", "-")
+	cmd := exec.CommandContext(ctx, "sh", "-c", strings.Join(args, " "))
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

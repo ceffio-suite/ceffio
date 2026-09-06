@@ -165,6 +165,11 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	if err := ingress.Deploy(ctx, o.domain); err != nil {
 		return err
 	}
+
+	// 13. Adoption des URLs publiques dans les apps (homeserver, redirects SSO, https).
+	if err := ingress.AdoptURLs(ctx, o.domain); err != nil {
+		return err
+	}
 	return nil
 }
 
