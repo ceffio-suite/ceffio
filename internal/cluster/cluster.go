@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -48,7 +49,19 @@ func provisionK3d(ctx context.Context, name string) error {
 		fmt.Printf("cluster k3d %q existe déjà, réutilisation\n", name)
 		return nil
 	}
-	cmd := exec.CommandContext(ctx, "k3d", "cluster", "create", name)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	// Dossier hôte qui persiste le store d'images du nœud (containerd) : les
+	// images déjà tirées survivent aux recréations du cluster, ce qui rend les
+	// tests from-scratch rapides (pas de re-téléchargement).
+	imgDir := filepath.Join(home, ".ceffio", "k3s-containerd")
+	if err := os.MkdirAll(imgDir, 0o755); err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, "k3d", "cluster", "create", name,
+		"--volume", imgDir+":/var/lib/rancher/k3s/agent/containerd@server:0")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
