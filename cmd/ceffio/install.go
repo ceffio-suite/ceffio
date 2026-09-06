@@ -7,6 +7,7 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/bootstrap"
 	"github.com/ceffio-suite/ceffio/internal/cluster"
 	"github.com/ceffio-suite/ceffio/internal/data"
+	"github.com/ceffio-suite/ceffio/internal/identity"
 	"github.com/ceffio-suite/ceffio/internal/platform"
 	"github.com/spf13/cobra"
 )
@@ -122,8 +123,13 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 		return err
 	}
 
-	// TODO(phase-4) : identité (Keycloak).
-	fmt.Println("\nÉtape suivante (Phase 4) : identité (Keycloak).")
+	// 7. Identité / SSO (Phase 4).
+	if err := identity.Deploy(ctx); err != nil {
+		return err
+	}
+
+	// TODO(phase-5) : fichiers (Nextcloud).
+	fmt.Println("\nÉtape suivante (Phase 5) : fichiers (Nextcloud).")
 	return nil
 }
 
