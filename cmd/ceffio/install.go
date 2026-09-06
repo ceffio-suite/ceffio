@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ceffio-suite/ceffio/internal/bootstrap"
+	"github.com/ceffio-suite/ceffio/internal/chat"
 	"github.com/ceffio-suite/ceffio/internal/cluster"
 	"github.com/ceffio-suite/ceffio/internal/data"
 	"github.com/ceffio-suite/ceffio/internal/files"
@@ -140,8 +141,13 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 		return err
 	}
 
-	// TODO(phase-7) : chat (Matrix Synapse + Element).
-	fmt.Println("\nÉtape suivante (Phase 7) : chat (Matrix Synapse + Element).")
+	// 10. Chat (Phase 7).
+	if err := chat.Deploy(ctx); err != nil {
+		return err
+	}
+
+	// TODO(phase-7b) : SSO OIDC Synapse ← Keycloak (login unique).
+	fmt.Println("\nÉtape suivante : SSO OIDC chat ← Keycloak (login unique du MVP).")
 	return nil
 }
 

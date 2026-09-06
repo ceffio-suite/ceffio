@@ -178,8 +178,8 @@ func connectNextcloud(ctx context.Context) error {
 		return err
 	}
 
-	if err := runOcc(ctx, "app:install", "onlyoffice"); err != nil {
-		return fmt.Errorf("occ app:install onlyoffice: %w", err)
+	if err := ensureOccApp(ctx, "onlyoffice"); err != nil {
+		return err
 	}
 	if err := runOcc(ctx, "config:app:set", "onlyoffice", "documentServerUrl", "--value="+officeService); err != nil {
 		return fmt.Errorf("documentServerUrl: %w", err)
@@ -201,6 +201,25 @@ func runOcc(ctx context.Context, args ...string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// ensureOccApp installe (ou réinstalle sans erreur si déjà présente) une app.
+func ensureOccApp(ctx context.Context, app string) error {
+	out, err := runOccOutput(ctx, "app:install", app)
+	if err == nil {
+		return nil
+	}
+	if strings.Contains(out, "already installed") || strings.Contains(out, "already enabled") {
+		fmt.Printf("∙ app %s déjà installée\n", app)
+		return nil
+	}
+	return fmt.Errorf("occ app:install %s: %w: %s", app, err, out)
+}
+
+func runOccOutput(ctx context.Context, args ...string) (string, error) {
+	occArgs := append([]string{"exec", "-n", nextcloudNS, "deploy/nextcloud", "--", "php", "occ"}, args...)
+	out, err := exec.CommandContext(ctx, "kubectl", occArgs...).CombinedOutput()
+	return string(out), err
 }
 
 func readSecretJWT(ctx context.Context) (string, error) {
