@@ -163,13 +163,21 @@ spec:
             httpGet:
               path: /health/ready
               port: management
+            periodSeconds: 10
+            failureThreshold: 6
           livenessProbe:
             httpGet:
               path: /health/live
               port: management
+            initialDelaySeconds: 120
+            periodSeconds: 15
+            failureThreshold: 6
           resources:
+            requests:
+              memory: 1536Mi
+              cpu: 250m
             limits:
-              memory: 2Gi
+              memory: 3Gi
 ---
 apiVersion: v1
 kind: Service

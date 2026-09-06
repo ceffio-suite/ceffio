@@ -6,9 +6,10 @@ global:
   partOf: ceffio
   managedBy: ceffio-operator
 
-# Noms logiques des namespaces. Le template rend "ceffio-<nom>".
+# Noms logiques des namespaces applicatifs. Le template rend "ceffio-<nom>".
+# NB : "ceffio-system" est le namespace de la release helm (créé par --create-namespace)
+# et ne doit PAS être redéclaré ici sinon conflit "already exists" au déploiement.
 namespaces:
-  system: {}
   identity: {}
   data: {}
   files: {}
