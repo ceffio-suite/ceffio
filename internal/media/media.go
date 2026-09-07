@@ -213,9 +213,9 @@ spec:
         - {name: PUBLIC_URL, value: "https://%[11]s"}
         - {name: XMPP_SERVER, value: prosody}
         # Upstream XMPP pour /http-bind et /xmpp-websocket : par défaut le web image
-        # proxy vers http://xmpp.meet.jitsi:5280 (non résolu en cluster) — on pointe
-        # le Service prosody (cf. web/rootfs/defaults/meet.conf du produit).
-        - {name: XMPP_BOSH_URL_BASE, value: "http://prosody:5280"}
+        # proxy vers http://xmpp.meet.jitsi:5280 (non résolu). On pointe prosody en FQDN :
+        # le résolveur nginx (kube-dns) ne résout PAS le nom nu prosody, seulement le FQDN.
+        - {name: XMPP_BOSH_URL_BASE, value: "http://prosody.ceffio-video.svc.cluster.local:5280"}
         - {name: XMPP_DOMAIN, value: %[11]s}
         - {name: XMPP_AUTH_DOMAIN, value: "auth.%[11]s"}
         - {name: XMPP_MUC_DOMAIN, value: "conference.%[11]s"}
