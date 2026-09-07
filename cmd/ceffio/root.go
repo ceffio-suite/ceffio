@@ -27,6 +27,7 @@ Stalwart) derrière une expérience unifiée d'installation et de gestion.`,
 	c.AddCommand(
 		newInstallCmd(),
 		newUninstallCmd(),
+		newConsoleCmd(),
 		newStatusCmd(),
 		newDoctorCmd(),
 		newBackupCmd(),

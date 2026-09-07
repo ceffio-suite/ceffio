@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ceffio Admin</title>
+<style>
+  :root{--bg:#0f172a;--card:#1e293b;--line:#334155;--txt:#e2e8f0;--muted:#94a3b8;--ok:#22c55e;--ko:#ef4444;--acc:#38bdf8}
+  *{box-sizing:border-box} body{margin:0;font:15px/1.5 system-ui;background:var(--bg);color:var(--txt)}
+  header{padding:16px 24px;background:#0b1222;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+  h1{font-size:18px;margin:0} h1 span{color:var(--acc)} .wrap{padding:20px 24px;max-width:1200px;margin:0 auto}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px}
+  .card h3{margin:0 0 6px;font-size:14px;text-transform:capitalize;color:var(--muted)}
+  .card .big{font-size:22px;font-weight:700}.ok{color:var(--ok)} .ko{color:var(--ko)}
+  .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;border:1px solid var(--line)}
+  .pill.ok{color:var(--ok)} .pill.ko{color:var(--ko)}
+  table{width:100%;border-collapse:collapse;margin-top:8px;background:var(--card);border-radius:10px;overflow:hidden}
+  th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);font-size:13px}
+  th{color:var(--muted);font-weight:600;background:#16213a}
+  input,button{background:#0b1222;border:1px solid var(--line);color:var(--txt);padding:8px 10px;border-radius:8px;font-size:13px}
+  button{cursor:pointer;background:var(--acc);color:#06121d;font-weight:600}
+  button.ghost{background:transparent;color:var(--acc);border-color:var(--acc)}
+  section{margin-top:24px} section h2{font-size:15px;color:var(--muted);margin:0 0 8px;border-bottom:1px solid var(--line);padding-bottom:6px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .muted{color:var(--muted);font-size:12px}
+  #who{font-size:12px;color:var(--muted)}
+</style></head><body>
+<header>
+  <h1>Ceffio <span>Admin</span></h1>
+  <div class="row"><span id="who"></span><button class="ghost" onclick="promptKey()">Clé admin</button><button class="ghost" onclick="logoutC()">Déconnexion</button></div>
+</header>
+<div class="wrap">
+  <section><h2>État de la plateforme</h2><div id="stack" class="grid"></div></section>
+  <section><h2>URLs & certificats</h2><div class="row" id="ingress"></div><div id="certs" class="muted" style="margin-top:6px"></div></section>
+  <section><h2>Utilisateurs (SSO Keycloak)</h2>
+    <div class="row">
+      <input id="u_name" placeholder="identifiant"><input id="u_email" placeholder="email">
+      <input id="u_pwd" type="password" placeholder="mot de passe"><button onclick="createUser()">Créer</button>
+    </div>
+    <div id="users"></div>
+  </section>
+</div>
+<script>
+let key = localStorage.getItem('ceffio_key') || '';
+const H = () => ({ 'Content-Type':'application/json', 'Authorization':'Bearer '+key });
+function promptKey(){ key = prompt('Clé admin console:', key) || ''; localStorage.setItem('ceffio_key', key); load(); }
+async function j(url, opt){ const r = await fetch(url, Object.assign({headers:H()}, opt||{})); const d = await r.json().catch(()=>({})); if(r.status===401){ document.getElementById('who').textContent='Non connecté à l\'API'; } return d; }
+function who(){ document.getElementById('who').textContent = 'Jetons API admin actif'; }
+function logoutC(){ localStorage.removeItem('ceffio_key'); key=''; location.reload(); }
+async function load(){
+  const st = await j('/api/status');
+  const box = document.getElementById('stack');
+  box.innerHTML = (st.stack||[]).map(l => `
+    <div class="card">
+      <h3>${l.name}</h3>
+      <div class="big ${l.ready===l.total && l.total>0 ? 'ok':'ko'}">${l.ready}/${l.total}</div>
+      <div>${(l.pods||[]).map(p=>`<span class="pill ${p.ready?'ok':'ko'}">${p.name.split('-')[0]}</span>`).join(' ')}</div>
+      ${(l.pods||[]).some(p=>p.restarts>0)?'<div class="muted">restarts: '+ (l.pods||[]).reduce((a,p)=>a+p.restarts,0)+'</div>':''}
+    </div>`).join('');
+  document.getElementById('ingress').innerHTML = (st.ingress||[]).map(i=>`<span class="pill ${i.host?'ok':'ko'}">${i.host}</span>`).join(' ');
+  document.getElementById('certs').textContent = 'Certs TLS: ' + (st.certs||[]).map(c=>`${c.name}@${c.ns}=${c.condition}`).join(' · ');
+  await loadUsers();
+}
+async function loadUsers(){
+  const d = await j('/api/users');
+  const rows = (d.users||[]).map(u => `<tr><td>${u.username}</td><td>${esc(u.email||'')}</td>
+    <td>${u.enabled?'<span class="pill ok">actif</span>':'<span class="pill ko">désactivé</span>'}</td>
+    <td><button class="ghost" onclick="resetPwd('${u.id}')">Reset mdp</button>
+      ${u.enabled?`<button class="ghost" onclick="deact('${u.id}')">Désactiver</button>`:''}</td></tr>`).join('');
+  document.getElementById('users').innerHTML = `<table><tr><th>Identifiant</th><th>Email</th><th>État</th><th>Actions</th></tr>${rows}</table>`;
+}
+const esc = s => (s||'').replace(/[<>&]/g, c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+async function createUser(){
+  const b = JSON.stringify({username:document.getElementById('u_name').value, email:document.getElementById('u_email').value, password:document.getElementById('u_pwd').value});
+  const r = await fetch('/api/users',{method:'POST',headers:H(),body:b});
+  alert(r.ok?'Utilisateur créé':(await r.json()).error||'erreur'); load();
+}
+async function deact(id){ await fetch('/api/users/'+id+'/deactivate',{method:'POST',headers:H()}); load(); }
+async function resetPwd(id){
+  const p = prompt('Nouveau mot de passe:');
+  if(!p) return; await fetch('/api/users/'+id+'/password',{method:'POST',headers:H(),body:JSON.stringify({password:p})}); load();
+}
+load(); who();
+</script>
+</body></html>
