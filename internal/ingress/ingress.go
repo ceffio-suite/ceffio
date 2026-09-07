@@ -289,7 +289,7 @@ func patchApp(ctx context.Context, ns, deploy, container, traefikIP string, host
 		},
 	}
 	b, _ := json.Marshal(patch)
-	cmd := exec.CommandContext(ctx, "kubectl", "patch", "deploy", deploy, "-n", ns, "--type=merge", "-p", string(b))
+	cmd := exec.CommandContext(ctx, "kubectl", "patch", "deploy", deploy, "-n", ns, "--type=strategic", "-p", string(b))
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
