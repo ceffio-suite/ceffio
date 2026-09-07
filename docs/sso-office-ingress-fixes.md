@@ -90,11 +90,15 @@ Le serveur ONLYOFFICE (pod office) récupère le document via l'URL (`DocumentSe
 - confiance CA (cf. §3) ;
 - JWT aligné entre Nextcloud (`secret`) et le serveur (`JWT_SECRET`).
 
-## 7. Comportement d'ouverture par type de fichier
-- **docx/xlsx/pptx** s'ouvrent à l'éditeur au **clic simple**.
-- **ODF (odt/ods/odg/odp)** : suppirtés par l'éditeur mais au clic simple Nextcloud les
-  **télécharge** (association front-end OOXML seulement) → ouvrir via le **menu « ⋮ → Ouvrir
-  dans ONLYOFFICE »**. (À affiner : forcer l'association MIME ODF en front sans casser le reste.)
+## 7. Ouverture par défaut de TOUS les formats (OOXML + ODF) dans ONLYOFFICE
+- Par défaut le connecteur n'affecte une **action d'ouverture** (`def`) qu'à
+  docx/docxf/oform/xlsx/pptx/pdf → **les ODF (odt/ods/odp/odg) se téléchargent au clic simple**
+  (ouverture seulement via « ⋮ → Ouvrir dans ONLYOFFICE »).
+- Fix : configurer `defFormats` (map JSON `{format: true/false}`, clés = extensions) en activant
+  TOUT : `occ config:app:set onlyoffice defFormats --value='{"docx":true,...,"odt":true,"ods":true,"odp":true,"odg":true,"odf":true,...}'`.
+  NB : la valeur doit être un **JSON valide** (clés entre guillemets) — passer par un fichier pour
+  éviter l'écrasement des quotes par la coquille.
+- Redémarrer Nextcloud (cache config) puis le clic simple ouvre les ODF dans l'éditeur.
 
 ## 8. Secrets OIDC réconciliés
 `EnsureOIDCClients` doit **réconcilier client ET secret** (le secret Keycloak auto-généré à la

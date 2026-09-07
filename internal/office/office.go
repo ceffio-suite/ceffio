@@ -190,6 +190,12 @@ func connectNextcloud(ctx context.Context) error {
 	if err := runOcc(ctx, "config:app:set", "onlyoffice", "secret", "--value="+jwt); err != nil {
 		return fmt.Errorf("secret (JWT): %w", err)
 	}
+	// Ouvre PAR DÉFAUT tous les formats supportés (OOXML + ODF) au clic simple.
+	// defFormats est une map JSON {format: bool}. Sans ça, les ODF se téléchargent au clic.
+	const defFormats = `{"docx":true,"docxf":true,"oform":true,"xlsx":true,"csv":true,"pptx":true,"odt":true,"odf":true,"ots":true,"ott":true,"ods":true,"odp":true,"odg":true,"pdf":true,"txt":true,"doc":true,"xls":true,"ppt":true,"rtf":true,"html":true}`
+	if err := runOcc(ctx, "config:app:set", "onlyoffice", "defFormats", "--value="+defFormats); err != nil {
+		return fmt.Errorf("defFormats: %w", err)
+	}
 	if err := runOcc(ctx, "config:app:set", "onlyoffice", "jwt_header", "--value=Authorization"); err != nil {
 		return fmt.Errorf("jwt_header: %w", err)
 	}
