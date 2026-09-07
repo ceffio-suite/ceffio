@@ -7,6 +7,7 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/bootstrap"
 	"github.com/ceffio-suite/ceffio/internal/chat"
 	"github.com/ceffio-suite/ceffio/internal/cluster"
+	"github.com/ceffio-suite/ceffio/internal/console"
 	"github.com/ceffio-suite/ceffio/internal/data"
 	"github.com/ceffio-suite/ceffio/internal/files"
 	"github.com/ceffio-suite/ceffio/internal/identity"
@@ -172,7 +173,12 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 		return err
 	}
 
-	// 14. Visioconférence (Phase 10) : Jitsi Meet sur meet.<domain> — optionnel (--video).
+	// 11. Console d'administration (dashboard + utilisateurs SSO).
+	if err := console.Deploy(ctx, o.domain); err != nil {
+		return err
+	}
+
+	// 12. Visioconférence (Phase 10) : Jitsi Meet sur meet.<domain> — optionnel (--video).
 	if o.video {
 		if err := media.Deploy(ctx, o.domain); err != nil {
 			return err

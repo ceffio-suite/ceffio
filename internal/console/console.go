@@ -41,7 +41,7 @@ func New(domain, apiKey string) *Server {
 // Handler construit le routeur HTTP de la console.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.requireAuth(s.handleIndex))
+	mux.HandleFunc("/", s.handleIndex) // page publique (le JS demande la clé pour /api/*)
 	mux.HandleFunc("/api/status", s.requireAuth(s.handleStatus))
 	mux.HandleFunc("/api/users", s.requireAuth(s.handleUsers))
 	mux.HandleFunc("/api/users/", s.requireAuth(s.handleUsersByID))
