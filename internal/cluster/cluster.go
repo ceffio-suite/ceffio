@@ -104,6 +104,52 @@ func provisionK3s(ctx context.Context) error {
 	return nil
 }
 
+// Destroy démonte le cluster provisionné et nettoie l'état local de Ceffio.
+// La dérivation des consommateurs est le reflet de Provision (même switch).
+func Destroy(ctx context.Context, rt Runtime, name string) error {
+	switch rt {
+	case RuntimeK3s:
+		// k3s-uninstall.sh arrête le service et purge /etc/rancher, /var/lib/rancher,
+		// les binaires et le service systemd (données/volumes local-path inclus).
+		cmd := exec.CommandContext(ctx, "sh", "-c",
+			"systemctl stop k3s 2>/dev/null; [ -x /usr/local/bin/k3s-uninstall.sh ] && /usr/local/bin/k3s-uninstall.sh || echo 'k3s-uninstall.sh absent (k3s non installé via le script officiel)'")
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("k3s-uninstall: %w", err)
+		}
+		fmt.Println("✓ K3s démonté (k3s-uninstall.sh)")
+	case RuntimeDev:
+		if !k3dExists(ctx, name) {
+			fmt.Printf("cluster k3d %q absent, rien à supprimer\n", name)
+		} else {
+			cmd := exec.CommandContext(ctx, "k3d", "cluster", "delete", name)
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("k3d cluster delete: %w", err)
+			}
+			fmt.Printf("✓ cluster k3d %q supprimé\n", name)
+		}
+	default:
+		return fmt.Errorf("runtime de cluster inconnu %q", rt)
+	}
+	return cleanupLocal(ctx, rt, name)
+}
+
+// cleanupLocal supprime l'état local de Ceffio. Le kubeconfig (~/.kube/config) est
+// laissé en place : il peut contenir d'autres clusters ; on ne touche pas d'un revers.
+func cleanupLocal(ctx context.Context, rt Runtime, name string) error {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		ce := filepath.Join(home, ".ceffio")
+		if _, err := os.Stat(ce); err == nil {
+			_ = os.RemoveAll(ce)
+			fmt.Println("✓ état local ~/.ceffio supprimé")
+		}
+	}
+	return nil
+}
+
 // Health liste les nœuds du cluster courant (via kubectl).
 func Health(ctx context.Context) ([]string, error) {
 	out, err := exec.CommandContext(ctx, "kubectl", "get", "nodes", "-o", "name").CombinedOutput()
