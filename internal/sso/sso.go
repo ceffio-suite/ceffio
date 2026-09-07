@@ -131,9 +131,14 @@ func parseID(out string) string {
 // runKcadm exécute kcadm.sh dans le pod Keycloak (credentials admin relus depuis
 // l'env du pod) et renvoie la sortie combinée.
 func runKcadm(ctx context.Context, args ...string) (string, error) {
-	quoted := make([]string, len(args))
+	// Injecte -r <realm> après le verbe : les clients OIDC vivent dans le realm
+	// applicatif (ceffio), PAS master (realm admin de config credentials).
+	quoted := make([]string, 0, len(args)+3)
 	for i, a := range args {
-		quoted[i] = "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
+		quoted = append(quoted, "'"+strings.ReplaceAll(a, "'", `'\''`)+"'")
+		if i == 0 {
+			quoted = append(quoted, "'-r'", "'"+realm+"'")
+		}
 	}
 	cmd := `/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user "$KC_BOOTSTRAP_ADMIN_USERNAME" --password "$KC_BOOTSTRAP_ADMIN_PASSWORD" >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh ` + strings.Join(quoted, " ") + ` 2>/dev/null`
 	out, err := exec.CommandContext(ctx, "kubectl", "exec", "-n", ns, keycloakDepl, "--", "sh", "-c", cmd).Output()
