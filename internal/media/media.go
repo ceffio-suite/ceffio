@@ -224,7 +224,7 @@ spec:
         - {name: AUTH_TYPE, value: internal}
         - {name: TZ, value: Europe/Paris}
         ports:
-        - {name: http, containerPort: 80}
+        - {name: http, containerPort: 8000}
         volumeMounts:
         - {name: config, mountPath: /config}
         resources: {limits: {memory: 512Mi}}
@@ -239,7 +239,7 @@ metadata:
 spec:
   selector: {app: web}
   ports:
-  - {name: http, port: 80, targetPort: 80}
+  - {name: http, port: 8000, targetPort: 8000}
 ---
 apiVersion: v1
 kind: Service
@@ -277,7 +277,7 @@ func waitWebReady(ctx context.Context) error {
 	// Vérification fonctionnelle : le frontend sert le HTML de Jitsi Meet.
 	for i := 0; i < 30; i++ {
 		o, _ := exec.CommandContext(ctx, "kubectl", "exec", "deploy/web", "-n", ns, "--",
-			"sh", "-c", "curl -fs -o /dev/null -w '%{http_code}' http://localhost/").Output()
+			"sh", "-c", "curl -fs -o /dev/null -w '%{http_code}' http://localhost:8000/").Output()
 		if strings.TrimSpace(string(o)) == "200" {
 			fmt.Println("  ✓ frontend Jitsi répond (HTTP 200)")
 			return nil
@@ -316,7 +316,7 @@ func secretExists(ctx context.Context, name string) bool {
 }
 
 func createSecret(ctx context.Context, name string, data map[string]string) error {
-	args := []string{"create", "secret", "generic", name, "-n", ns, "--dry-run=client", "-o", "yaml"}
+	args := []string{"kubectl", "create", "secret", "generic", name, "-n", ns, "--dry-run=client", "-o", "yaml"}
 	for k, v := range data {
 		args = append(args, "--from-literal="+k+"="+v)
 	}
