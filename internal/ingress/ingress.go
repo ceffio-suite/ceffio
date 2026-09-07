@@ -8,6 +8,7 @@ package ingress
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -55,6 +56,11 @@ func AdoptURLs(ctx context.Context, domain string) error {
 		"public_baseurl: "+host+"\n", "public_baseurl:", "deploy/synapse"); err != nil {
 		return err
 	}
+	// 2b) OIDC Synapse → issuer/endpoints publics https (discover:false). Sinon le
+	// navigateur est renvoyé vers l'URL interne, et un token_endpoint http est refusé.
+	if err := rewriteSynapseOidc(ctx, domain); err != nil {
+		return err
+	}
 
 	// 3) Nextcloud : protocole https + URL publique + SSRF + proxy derrière Traefik.
 	// Le HttpClient de Nextcloud bloque par défaut les adresses privées (SSRF) :
@@ -98,6 +104,15 @@ func AdoptURLs(ctx context.Context, domain string) error {
 		return err
 	}
 
+	// 7) Durcissement DEMO uniquement (domaine privé `.local`, TLS auto-signé) :
+	// hostAliases→Traefik + injection CA dans les pods. Un vrai domaine public n'en
+	// a pas besoin (DNS réel + CA Let's Encrypt).
+	if isDemo(domain) {
+		if err := HardenDemo(ctx, domain); err != nil {
+			return err
+		}
+	}
+
 	fmt.Println("✓ URLs publiques adoptées dans Element, Synapse, Nextcloud, ONLYOFFICE, Keycloak + redirects SSO")
 	return nil
 }
@@ -121,8 +136,172 @@ func adoptKeycloakHost(ctx context.Context, domain string) error {
 	return rcmd.Run()
 }
 
+// isDemo → domaine privé `.local` : pas de DNS réel ni CA publique → durcissement
+// hostAliases + injection CA. Un domaine public n'en a pas besoin.
+func isDemo(domain string) bool {
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(domain)), ".local")
+}
+
+// rewriteSynapseOidc bascule le bloc OIDC de Synapse vers issuer + endpoints publics
+// https (discover:false). Sinon le navigateur reçoit l'URL interne et un token_endpoint
+// http est refusé par Synapse.
+func rewriteSynapseOidc(ctx context.Context, domain string) error {
+	key := "homeserver.yaml"
+	data, err := cmData(ctx, "ceffio-chat", "synapse-config", key)
+	if err != nil {
+		return err
+	}
+	oldIssuer := `issuer: "http://keycloak.ceffio-identity.svc:8080/realms/ceffio"`
+	if !strings.Contains(data, oldIssuer) {
+		return nil // déjà public
+	}
+	kc := "keycloak." + domain
+	newBlock := fmt.Sprintf(`issuer: "https://%s/realms/ceffio"
+    discover: false
+    authorization_endpoint: "https://%s/realms/ceffio/protocol/openid-connect/auth"
+    token_endpoint: "https://%s/realms/ceffio/protocol/openid-connect/token"
+    userinfo_endpoint: "https://%s/realms/ceffio/protocol/openid-connect/userinfo"
+    jwks_uri: "https://%s/realms/ceffio/protocol/openid-connect/certs"`, kc, kc, kc, kc, kc)
+	data = strings.Replace(data, oldIssuer, newBlock, 1)
+	if err := applyCMData(ctx, "ceffio-chat", "synapse-config", key, data); err != nil {
+		return err
+	}
+	return rolloutRestart(ctx, "deploy/synapse")
+}
+
+// HardenDemo (déploiements DEMO uniquement) : hostAliases → Traefik + CA ceffio injectée
+// pour que les calls serveur→serveur en https public fonctionnent.
+func HardenDemo(ctx context.Context, domain string) error {
+	fmt.Println("Durcissement DEMO : hostAliases→Traefik + CA ceffio injectée...")
+	tip, err := svcIP(ctx, "traefik", "kube-system")
+	if err != nil {
+		return fmt.Errorf("IP Traefik: %w", err)
+	}
+	ca, err := caCert(ctx)
+	if err != nil {
+		return err
+	}
+	kc := "keycloak." + domain
+	cloud := "cloud." + domain
+	office := "office." + domain
+
+	// Nextcloud (PHP) : CA via php.ini pointant sur la CA montée (persistant pour PHP).
+	if err := createCAConfigs(ctx, "ceffio-files", ca); err != nil {
+		return err
+	}
+	if err := patchApp(ctx, "ceffio-files", "nextcloud", "nextcloud", tip,
+		[]string{kc, office}, []envKV{{"SSL_CERT_FILE", "/etc/ceffio-ca/ceffio-ca.crt"}}, true); err != nil {
+		return err
+	}
+
+	// Synapse (Python) : SSL_CERT_FILE.
+	if err := createCAConfigs(ctx, "ceffio-chat", ca); err != nil {
+		return err
+	}
+	if err := patchApp(ctx, "ceffio-chat", "synapse", "synapse", tip,
+		[]string{kc}, []envKV{{"SSL_CERT_FILE", "/etc/ceffio-ca/ceffio-ca.crt"}}, false); err != nil {
+		return err
+	}
+
+	// ONLYOFFICE (Node.js) : NODE_EXTRA_CA_CERTS.
+	if err := createCAConfigs(ctx, "ceffio-office", ca); err != nil {
+		return err
+	}
+	if err := patchApp(ctx, "ceffio-office", "onlyoffice", "onlyoffice", tip,
+		[]string{cloud, office, kc}, []envKV{{"NODE_EXTRA_CA_CERTS", "/etc/ceffio-ca/ceffio-ca.crt"}}, false); err != nil {
+		return err
+	}
+	fmt.Println("✓ Durcissement DEMO appliqué (hostAliases→" + tip + ")")
+	return nil
+}
+
+type envKV struct{ name, value string }
+
+// svcIP lit le ClusterIP d'un Service.
+func svcIP(ctx context.Context, name, ns string) (string, error) {
+	out, err := exec.CommandContext(ctx, "kubectl", "get", "svc", name, "-n", ns, "-o", "jsonpath={.spec.clusterIP}").Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// caCert lit le certificat CA de la chaîne signée par cert-manager (ceffio-ca-tls).
+func caCert(ctx context.Context) (string, error) {
+	out, err := exec.CommandContext(ctx, "kubectl", "get", "secret", "ceffio-ca-tls", "-n", "cert-manager", "-o", "jsonpath={.data.ca\\.crt}").Output()
+	if err != nil {
+		return "", err
+	}
+	b, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(out)))
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// createCAConfigs crée les ConfigMaps ceffio-ca-cm (CA) + ceffio-phpini (php.ini) dans le ns.
+func createCAConfigs(ctx context.Context, ns, ca string) error {
+	cmd := exec.CommandContext(ctx, "sh", "-c",
+		"kubectl create configmap ceffio-ca-cm -n "+ns+" --from-file=ceffio-ca.crt=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -")
+	cmd.Stdin = strings.NewReader(ca)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	ini := "openssl.cafile=/etc/ceffio-ca/ceffio-ca.crt\ncurl.cainfo=/etc/ceffio-ca/ceffio-ca.crt\n"
+	cmd2 := exec.CommandContext(ctx, "sh", "-c",
+		"kubectl create configmap ceffio-phpini -n "+ns+" --from-file=zz-ceffio.ini=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -")
+	cmd2.Stdin = strings.NewReader(ini)
+	cmd2.Stdout = os.Stdout
+	cmd2.Stderr = os.Stderr
+	return cmd2.Run()
+}
+
+// patchApp applique hostAliases + volume CA + env (+ php.ini) via merge patch (idempotent).
+func patchApp(ctx context.Context, ns, deploy, container, traefikIP string, hosts []string, envs []envKV, withPHPIni bool) error {
+	ha := []map[string]any{{"ip": traefikIP, "hostnames": hosts}}
+	vols := []map[string]any{{"name": "ceffio-ca", "configMap": map[string]string{"name": "ceffio-ca-cm"}}}
+	env := []map[string]string{}
+	for _, e := range envs {
+		env = append(env, map[string]string{"name": e.name, "value": e.value})
+	}
+	mounts := []map[string]string{{"name": "ceffio-ca", "mountPath": "/etc/ceffio-ca"}}
+	if withPHPIni {
+		vols = append(vols, map[string]any{"name": "ceffio-phpini", "configMap": map[string]string{"name": "ceffio-phpini"}})
+		mounts = append(mounts, map[string]string{"name": "ceffio-phpini", "mountPath": "/usr/local/etc/php/conf.d"})
+	}
+	patch := map[string]any{
+		"spec": map[string]any{
+			"template": map[string]any{
+				"spec": map[string]any{
+					"hostAliases": ha,
+					"volumes":     vols,
+					"containers": []any{
+						map[string]any{
+							"name":         container,
+							"env":          env,
+							"volumeMounts": mounts,
+						},
+					},
+				},
+			},
+		},
+	}
+	b, _ := json.Marshal(patch)
+	cmd := exec.CommandContext(ctx, "kubectl", "patch", "deploy", deploy, "-n", ns, "--type=merge", "-p", string(b))
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	r := exec.CommandContext(ctx, "kubectl", "rollout", "status", "deploy/"+deploy, "-n", ns, "--timeout=200s")
+	r.Stdout = os.Stdout
+	r.Stderr = os.Stderr
+	return r.Run()
+}
+
 // rewriteConfig fait une substitution simple dans une valeur de ConfigMap puis redémarre la cible.
-// old=="" → ne fait rien (utilisé pour vider le cache de lecture avant appendNonDuplicate).
 func rewriteConfig(ctx context.Context, ns, cm, key, old, repl, target string) error {
 	data, err := cmData(ctx, ns, cm, key)
 	if err != nil {
