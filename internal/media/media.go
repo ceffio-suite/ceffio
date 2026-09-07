@@ -298,10 +298,13 @@ func nodeInternalIP(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if ip := strings.TrimSpace(string(out)); ip != "" {
-		return ip, nil
+	// Le nœud expose parfois IPv4 + IPv6 → ne garder que l'IPv4 (JVB_ADVERTISE_IPS).
+	for _, tok := range strings.Fields(string(out)) {
+		if strings.Contains(tok, ".") {
+			return tok, nil
+		}
 	}
-	return "", fmt.Errorf("IP interne du nœud introuvable")
+	return "", fmt.Errorf("adresse IPv4 interne du nœud introuvable")
 }
 
 // ---------------- helpers (répliqués des autres couches) ----------------
