@@ -110,13 +110,13 @@ func Destroy(ctx context.Context, rt Runtime, name string) error {
 	switch rt {
 	case RuntimeK3s:
 		// k3s-uninstall.sh arrête le service et purge /etc/rancher, /var/lib/rancher,
-		// les binaires et le service systemd (données/volumes local-path inclus).
+		// les binaires et le service systemd (données/volumes local-path inclus). Leur
+		// trace (set -x) est redirigée vers un log : on n'affiche rien en cas de succès.
 		cmd := exec.CommandContext(ctx, "sh", "-c",
-			"systemctl stop k3s 2>/dev/null; [ -x /usr/local/bin/k3s-uninstall.sh ] && /usr/local/bin/k3s-uninstall.sh || echo 'k3s-uninstall.sh absent (k3s non installé via le script officiel)'")
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("k3s-uninstall: %w", err)
+			"systemctl stop k3s 2>/dev/null; if [ -x /usr/local/bin/k3s-uninstall.sh ]; then /usr/local/bin/k3s-uninstall.sh >/tmp/ceffio-k3s-uninstall.log 2>&1; else echo 'k3s-uninstall.sh absent (k3s non installé via le script officiel)'; fi")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("k3s-uninstall: %w (%s)", err, strings.TrimSpace(string(out)))
 		}
 		fmt.Println("✓ K3s démonté (k3s-uninstall.sh)")
 	case RuntimeDev:
