@@ -505,6 +505,7 @@ func ingressesManifest(domain string) string {
 		{sub: "matrix", namespace: "ceffio-chat", service: "synapse", port: 8008},
 		{sub: "keycloak", namespace: "ceffio-identity", service: "keycloak", port: 8080},
 		{sub: "office", namespace: "ceffio-office", service: "onlyoffice", port: 80},
+		{sub: "meet", namespace: "ceffio-video", service: "web", port: 80},
 	}
 	var sb strings.Builder
 	for _, r := range routes {

@@ -11,6 +11,7 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/files"
 	"github.com/ceffio-suite/ceffio/internal/identity"
 	"github.com/ceffio-suite/ceffio/internal/ingress"
+	"github.com/ceffio-suite/ceffio/internal/media"
 	"github.com/ceffio-suite/ceffio/internal/office"
 	"github.com/ceffio-suite/ceffio/internal/platform"
 	"github.com/ceffio-suite/ceffio/internal/sso"
@@ -169,6 +170,13 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	// 13. Adoption des URLs publiques dans les apps (homeserver, redirects SSO, https).
 	if err := ingress.AdoptURLs(ctx, o.domain); err != nil {
 		return err
+	}
+
+	// 14. Visioconférence (Phase 10) : Jitsi Meet sur meet.<domain> — optionnel (--video).
+	if o.video {
+		if err := media.Deploy(ctx, o.domain); err != nil {
+			return err
+		}
 	}
 	return nil
 }
