@@ -408,15 +408,15 @@ func runKcadm(ctx context.Context, args ...string) (string, error) {
 			quoted = append(quoted, "'-r'", "'ceffio'")
 		}
 	}
-	cmdStr := `/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user "$KC_BOOTSTRAP_ADMIN_USERNAME" --password "$KC_BOOTSTRAP_ADMIN_PASSWORD" >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh ` + strings.Join(quoted, " ") + ` 2>/dev/null`
+	cmdStr := `/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user "$KC_BOOTSTRAP_ADMIN_USERNAME" --password "$KC_BOOTSTRAP_ADMIN_PASSWORD" >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh ` + strings.Join(quoted, " ")
 	full := []string{"exec", "-n", "ceffio-identity", "deploy/keycloak", "--", "sh", "-c", cmdStr}
-	out, err := exec.CommandContext(ctx, "kubectl", full...).Output()
+	out, err := exec.CommandContext(ctx, "kubectl", full...).CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }
 
 // kcadmRedirect ajoute un redirect URI au client OIDC Keycloak sans écraser les existants.
 func kcadmRedirect(ctx context.Context, clientID, uri string) error {
-	out, err := runKcadm(ctx, "get", "clients", "-r", "ceffio", "-q", "clientId="+clientID, "--fields", "id,redirectUris")
+	out, err := runKcadm(ctx, "get", "clients", "-q", "clientId="+clientID, "--fields", "id,redirectUris")
 	if err != nil {
 		return fmt.Errorf("get client %s: %w (%s)", clientID, err, out)
 	}
@@ -440,7 +440,7 @@ func kcadmRedirect(ctx context.Context, clientID, uri string) error {
 		}
 	}
 	val, _ := json.Marshal(uris)
-	_, err = runKcadm(ctx, "update", "clients/"+c.ID, "-r", "ceffio", "-s", "redirectUris="+string(val))
+	_, err = runKcadm(ctx, "update", "clients/"+c.ID, "-s", "redirectUris="+string(val))
 	return err
 }
 
