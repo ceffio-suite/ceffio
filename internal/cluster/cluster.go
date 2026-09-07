@@ -91,14 +91,14 @@ func provisionK3s(ctx context.Context) error {
 		}
 	}
 	// kubeconfig par défaut (kubectl/helm héritent de $HOME) depuis k3s.yaml.
+	// TOUJOURS réécrit : un ~/.kube/config périmé d'un précédent k3s (autre CA) ferait
+	// échouer helm/kubectl en « x509: certificate signed by unknown authority ».
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		kc := filepath.Join(home, ".kube")
 		os.MkdirAll(kc, 0o700)
 		cfg := filepath.Join(kc, "config")
-		if _, err := os.Stat(cfg); err != nil {
-			if data, err := os.ReadFile("/etc/rancher/k3s/k3s.yaml"); err == nil {
-				_ = os.WriteFile(cfg, data, 0o600)
-			}
+		if data, err := os.ReadFile("/etc/rancher/k3s/k3s.yaml"); err == nil {
+			_ = os.WriteFile(cfg, data, 0o600)
 		}
 	}
 	return nil
