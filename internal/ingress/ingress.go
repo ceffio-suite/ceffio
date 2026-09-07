@@ -269,7 +269,10 @@ func patchApp(ctx context.Context, ns, deploy, container, traefikIP string, host
 	mounts := []map[string]string{{"name": "ceffio-ca", "mountPath": "/etc/ceffio-ca"}}
 	if withPHPIni {
 		vols = append(vols, map[string]any{"name": "ceffio-phpini", "configMap": map[string]string{"name": "ceffio-phpini"}})
-		mounts = append(mounts, map[string]string{"name": "ceffio-phpini", "mountPath": "/usr/local/etc/php/conf.d"})
+		// subPath sur le FICHIER : l'entrypoint Nextcloud écrit redis-session.ini dans
+		// conf.d au boot — monter un ConfigMap répertoire read-only sur ce dossier casse
+		// l'entrypoint (Read-only file system). subPath ne monte que le fichier zz-ceffio.ini.
+		mounts = append(mounts, map[string]string{"name": "ceffio-phpini", "mountPath": "/usr/local/etc/php/conf.d/zz-ceffio.ini", "subPath": "zz-ceffio.ini"})
 	}
 	patch := map[string]any{
 		"spec": map[string]any{
