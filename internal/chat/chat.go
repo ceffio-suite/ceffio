@@ -123,6 +123,7 @@ data:
         type: http
         tls: false
         bind_addresses: ['0.0.0.0']
+        x_forwarded: true
         resources:
           - names: [client, federation]
     database:

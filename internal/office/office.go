@@ -181,11 +181,14 @@ func connectNextcloud(ctx context.Context) error {
 	if err := ensureOccApp(ctx, "onlyoffice"); err != nil {
 		return err
 	}
-	if err := runOcc(ctx, "config:app:set", "onlyoffice", "documentServerUrl", "--value="+officeService); err != nil {
-		return fmt.Errorf("documentServerUrl: %w", err)
+	if err := runOcc(ctx, "config:app:set", "onlyoffice", "DocumentServerUrl", "--value="+officeService); err != nil {
+		return fmt.Errorf("DocumentServerUrl: %w", err)
 	}
-	if err := runOcc(ctx, "config:app:set", "onlyoffice", "jwt_secret", "--value="+jwt); err != nil {
-		return fmt.Errorf("jwt_secret: %w", err)
+	if err := runOcc(ctx, "config:app:set", "onlyoffice", "DocumentServerInternalUrl", "--value="+officeService); err != nil {
+		return fmt.Errorf("DocumentServerInternalUrl: %w", err)
+	}
+	if err := runOcc(ctx, "config:app:set", "onlyoffice", "secret", "--value="+jwt); err != nil {
+		return fmt.Errorf("secret (JWT): %w", err)
 	}
 	if err := runOcc(ctx, "config:app:set", "onlyoffice", "jwt_header", "--value=Authorization"); err != nil {
 		return fmt.Errorf("jwt_header: %w", err)

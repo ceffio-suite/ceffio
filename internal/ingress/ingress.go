@@ -56,7 +56,18 @@ func AdoptURLs(ctx context.Context, domain string) error {
 		return err
 	}
 
-	// 3) Nextcloud : protocole https + URL publique dans la config.
+	// 3) Nextcloud : protocole https + URL publique + SSRF + proxy derrière Traefik.
+	// Le HttpClient de Nextcloud bloque par défaut les adresses privées (SSRF) :
+	// or Keycloak/ONLYOFFICE sont en IP de cluster → autoriser les serveurs locaux.
+	if err := occSet(ctx, "config:system:set", "allow_local_remote_servers", "--type", "boolean", "--value", "true"); err != nil {
+		return err
+	}
+	if err := occSet(ctx, "config:system:set", "trusted_proxies", "0", "--value", "10.42.0.0/16"); err != nil {
+		return err
+	}
+	if err := occSet(ctx, "config:system:set", "overwritehost", "--value", cloud); err != nil {
+		return err
+	}
 	if err := occSet(ctx, "config:system:set", "overwriteprotocol", "--value", "https"); err != nil {
 		return err
 	}
@@ -69,8 +80,15 @@ func AdoptURLs(ctx context.Context, domain string) error {
 		return err
 	}
 
-	// 5) Connecteur ONLYOFFICE → URL publique.
-	if err := occSet(ctx, "config:app:set", "onlyoffice", "documentServerUrl", "--value", "https://"+office+"/"); err != nil {
+	// 5) Connecteur ONLYOFFICE → URL publique. Clés EXACTES (casse CamelCase,
+	// sinon "L'application ONLYOFFICE n'est pas configuré").
+	if err := occSet(ctx, "config:app:set", "onlyoffice", "DocumentServerUrl", "--value", "https://"+office+"/"); err != nil {
+		return err
+	}
+	if err := occSet(ctx, "config:app:set", "onlyoffice", "DocumentServerInternalUrl", "--value", "https://"+office+"/"); err != nil {
+		return err
+	}
+	if err := occSet(ctx, "config:app:set", "onlyoffice", "StorageUrl", "--value", "https://"+cloud+"/"); err != nil {
 		return err
 	}
 
