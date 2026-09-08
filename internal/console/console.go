@@ -8,7 +8,6 @@
 package console
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -18,24 +17,51 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 const (
 	realm    = "ceffio"
-	kcDepl   = "deploy/keycloak"
 	kcNS     = "ceffio-identity"
+	kcSvc    = "http://keycloak.ceffio-identity.svc:8080"
 	ConsPort = 8088
 )
 
-// Server rassemble l'état de la console.
+// Server rassemble l'état de la console (clients in-cluster).
 type Server struct {
-	Domain string
-	APIKey string
+	Domain  string
+	APIKey  string
+	kube    kubernetes.Interface
+	kcAdmin string // user admin Keycloak
+	kcPass  string // mot de passe admin Keycloak
 }
 
-// New crée le serveur console pour un domaine public + un jeton d'admin.
-func New(domain, apiKey string) *Server {
-	return &Server{Domain: domain, APIKey: apiKey}
+// New crée le serveur console : client K8s in-cluster (ou kubeconfig hors cluster),
+// et accès admin Keycloak lu depuis le secret keycloak-admin.
+func New(domain, apiKey string) (*Server, error) {
+	s := &Server{Domain: domain, APIKey: apiKey}
+	// Client Kubernetes : in-cluster si possible, sinon kubeconfig par défaut.
+	if cfg, err := rest.InClusterConfig(); err == nil {
+		cs, err := kubernetes.NewForConfig(cfg)
+		if err == nil {
+			s.kube = cs
+		}
+	}
+	if s.kube == nil {
+		rules := clientcmd.NewDefaultClientConfigLoadingRules()
+		if cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{}).ClientConfig(); err == nil {
+			if cs, err := kubernetes.NewForConfig(cfg); err == nil {
+				s.kube = cs
+			}
+		}
+	}
+	// Credentials admin Keycloak (lues depuis le secret dans le cluster ou env).
+	s.kcAdmin = strings.TrimSpace(os.Getenv("KC_ADMIN"))
+	s.kcPass = strings.TrimSpace(os.Getenv("KC_ADMIN_PASSWORD"))
+	return s, nil
 }
 
 // Handler construit le routeur HTTP de la console.
@@ -73,7 +99,7 @@ func apiErr(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg})
 }
 
-// kubectl helpers (le serveur tourne sur le nœud, kubectl + kubeconfig dispo).
+// kubectl helpers (gardés pour d'éventuels besoins hors-API).
 func kubeCombined(args ...string) (string, error) {
 	out, err := exec.Command("kubectl", args...).CombinedOutput()
 	return strings.TrimSpace(string(out)), err
@@ -81,21 +107,6 @@ func kubeCombined(args ...string) (string, error) {
 
 func kubeRun(args ...string) error {
 	return exec.Command("kubectl", args...).Run()
-}
-
-// runKcadm exécute kcadm dans le pod Keycloak (realm applicatif), combined output.
-// kcadm imprime le résultat (ex. nouvel id) sur stderr → on capture les deux.
-func runKcadm(ctx context.Context, args ...string) (string, error) {
-	quoted := make([]string, 0, len(args)+3)
-	for i, a := range args {
-		quoted = append(quoted, "'"+strings.ReplaceAll(a, "'", `'\''`)+"'")
-		if i == 0 {
-			quoted = append(quoted, "'-r'", "'"+realm+"'")
-		}
-	}
-	cmd := `/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user "$KC_BOOTSTRAP_ADMIN_USERNAME" --password "$KC_BOOTSTRAP_ADMIN_PASSWORD" >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh ` + strings.Join(quoted, " ")
-	out, err := exec.CommandContext(ctx, "kubectl", "exec", "-n", kcNS, kcDepl, "--", "sh", "-c", cmd).CombinedOutput()
-	return strings.TrimSpace(string(out)), err
 }
 
 func genSecret(n int) (string, error) {

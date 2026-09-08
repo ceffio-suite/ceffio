@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/spf13/cobra"
 
@@ -25,6 +26,9 @@ func newConsoleCmd() *cobra.Command {
 				return fmt.Errorf("--domain est requis")
 			}
 			if apiKey == "" {
+				apiKey = os.Getenv("CEFFIO_KEY")
+			}
+			if apiKey == "" {
 				k, err := genConsoleKey()
 				if err != nil {
 					return err
@@ -33,7 +37,10 @@ func newConsoleCmd() *cobra.Command {
 				fmt.Println(k)
 				apiKey = k
 			}
-			srv := console.New(domain, apiKey)
+			srv, err := console.New(domain, apiKey)
+			if err != nil {
+				return err
+			}
 			log.Printf("Console Ceffio démarrée sur %s (admin.<%s>)", addr, domain)
 			return http.ListenAndServe(addr, srv.Handler())
 		},

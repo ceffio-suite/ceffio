@@ -2,9 +2,12 @@ package console
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
-	"regexp"
+	"net/url"
 	"strings"
+	"sync"
+	"time"
 )
 
 // KCUser est un utilisateur Keycloak (champs utiles à la console).
@@ -15,27 +18,108 @@ type KCUser struct {
 	Enabled  bool   `json:"enabled"`
 }
 
-var uuidRe = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+// ---------------------------------------------------------------------------
+// Client REST Keycloak Admin (realm master → token ; admin/realms/ceffio).
 
-// GET /api/users → liste des utilisateurs du realm.
+var (
+	kcTokMu   sync.Mutex
+	kcToken   string
+	kcExpires time.Time
+)
+
+// kcToken renvoie un token d'admin valide (realm master, grant password).
+func (s *Server) kcToken(r *http.Request) (string, error) {
+	kcTokMu.Lock()
+	defer kcTokMu.Unlock()
+	if kcToken != "" && time.Now().Before(kcExpires.Add(-10*time.Second)) {
+		return kcToken, nil
+	}
+	if s.kcAdmin == "" || s.kcPass == "" {
+		return "", fmt.Errorf("credentials admin Keycloak absents (KC_ADMIN/KC_ADMIN_PASSWORD)")
+	}
+	form := url.Values{
+		"grant_type": {"password"},
+		"client_id":  {"admin-cli"},
+		"username":   {s.kcAdmin},
+		"password":   {s.kcPass},
+	}
+	req, _ := http.NewRequestWithContext(r.Context(), http.MethodPost,
+		kcSvc+"/realms/master/protocol/openid-connect/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var tok struct {
+		Access  string `json:"access_token"`
+		Expires int    `json:"expires_in"`
+		Error   string `json:"error_description"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&tok); err != nil {
+		return "", err
+	}
+	if tok.Access == "" {
+		return "", fmt.Errorf("token Keycloak: %s", tok.Error)
+	}
+	kcToken, kcExpires = tok.Access, time.Now().Add(time.Duration(tok.Expires)*time.Second)
+	return kcToken, nil
+}
+
+// kcReq exécute une requête authentifiée vers l'API Keycloak Admin.
+func (s *Server) kcReq(r *http.Request, method, path, body string) (*http.Response, error) {
+	tok, err := s.kcToken(r)
+	if err != nil {
+		return nil, err
+	}
+	var br *strings.Reader
+	if body != "" {
+		br = strings.NewReader(body)
+	} else {
+		br = strings.NewReader("")
+	}
+	req, _ := http.NewRequestWithContext(r.Context(), method, kcSvc+path, br)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode == http.StatusUnauthorized { // token expiré → on réessaie une fois
+		resp.Body.Close()
+		kcTokMu.Lock()
+		kcToken = ""
+		kcTokMu.Unlock()
+		return s.kcReq(r, method, path, body)
+	}
+	return resp, nil
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/users → liste ; POST /api/users → création (mot de passe non-temporaire).
+
 func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		out, err := runKcadm(r.Context(), "get", "users")
+		resp, err := s.kcReq(r, http.MethodGet, "/admin/realms/"+realm+"/users", "")
 		if err != nil {
-			apiErr(w, 502, "kcadm get users: "+err.Error())
+			apiErr(w, 502, "list users: "+err.Error())
 			return
 		}
+		defer resp.Body.Close()
 		var users []KCUser
-		_ = json.Unmarshal([]byte(out), &users)
+		_ = json.NewDecoder(resp.Body).Decode(&users)
 		writeJSON(w, 200, map[string]any{"users": users})
+
 	case http.MethodPost:
 		var body struct {
 			Username string `json:"username"`
 			Email    string `json:"email"`
 			Password string `json:"password"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Username == "" {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Username) == "" {
 			apiErr(w, 400, "username requis")
 			return
 		}
@@ -45,52 +129,79 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, 201, map[string]any{"id": id, "username": body.Username, "created": true})
+
 	default:
 		apiErr(w, 405, "méthode non supportée")
 	}
 }
 
-// createUser crée l'utilisateur Keycloak et (si mot de passe fourni) le fige non-temporaire.
 func (s *Server) createUser(r *http.Request, username, email, password string) (string, error) {
-	args := []string{"create", "users", "-s", "username=" + username, "-s", "enabled=true"}
+	payload := map[string]any{"username": username, "enabled": true}
 	if email != "" {
-		args = append(args, "-s", "email="+email, "-s", "emailVerified=true")
+		payload["email"] = email
+		payload["emailVerified"] = true
 	}
-	out, err := runKcadm(r.Context(), args...)
+	b, _ := json.Marshal(payload)
+	resp, err := s.kcReq(r, http.MethodPost, "/admin/realms/"+realm+"/users", string(b))
 	if err != nil {
 		return "", err
 	}
-	id := uuidRe.FindString(out)
-	if id == "" {
-		return "", errUserNoID(out)
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusConflict {
+		return "", fmt.Errorf("l'utilisateur %q existe déjà", username)
 	}
+	if resp.StatusCode != http.StatusCreated {
+		return "", fmt.Errorf("Keycloak a répondu %d", resp.StatusCode)
+	}
+	// L'id est dans l'en-tête Location.
+	loc := resp.Header.Get("Location")
+	id := loc[strings.LastIndex(loc, "/")+1:]
 	if password != "" {
-		cred := `credentials=[{"type":"password","value":"` + password + `","temporary":false}]`
-		if _, err := runKcadm(r.Context(), "update", "users/"+id, "-s", cred); err != nil {
+		if err := s.setPassword(r, id, password); err != nil {
 			return id, err
 		}
 	}
 	return id, nil
 }
 
+// setPassword pose un mot de passe non-temporaire à l'utilisateur.
+func (s *Server) setPassword(r *http.Request, id, password string) error {
+	payload, _ := json.Marshal(map[string]any{"type": "password", "value": password, "temporary": false})
+	resp, err := s.kcReq(r, http.MethodPut, "/admin/realms/"+realm+"/users/"+id+"/reset-password", string(payload))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("reset mdp: HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
 // POST /api/users/{id}/deactivate|password
 func (s *Server) handleUsersByID(w http.ResponseWriter, r *http.Request) {
-	rest := strings.TrimPrefix(r.URL.Path, "/api/users/")
-	parts := strings.Split(strings.Trim(rest, "/"), "/")
-	if len(parts) != 2 {
+	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/users/"), "/")
+	parts := strings.Split(rest, "/")
+	if len(parts) != 2 || parts[0] == "" {
 		apiErr(w, 400, "chemin attendu: /api/users/{id}/{action}")
 		return
 	}
 	id, action := parts[0], parts[1]
-	if action == "deactivate" && r.Method == http.MethodPost {
-		if _, err := runKcadm(r.Context(), "update", "users/"+id, "-s", "enabled=false"); err != nil {
+	if r.Method != http.MethodPost {
+		apiErr(w, 405, "méthode non supportée")
+		return
+	}
+	switch action {
+	case "deactivate":
+		payload, _ := json.Marshal(map[string]any{"enabled": false})
+		resp, err := s.kcReq(r, http.MethodPut, "/admin/realms/"+realm+"/users/"+id, string(payload))
+		if err != nil {
 			apiErr(w, 502, "désactivation: "+err.Error())
 			return
 		}
+		resp.Body.Close()
 		writeJSON(w, 200, map[string]any{"deactivated": true, "id": id})
-		return
-	}
-	if action == "password" && r.Method == http.MethodPost {
+	case "password":
 		var body struct {
 			Password string `json:"password"`
 		}
@@ -99,21 +210,12 @@ func (s *Server) handleUsersByID(w http.ResponseWriter, r *http.Request) {
 			apiErr(w, 400, "password requis")
 			return
 		}
-		cred := `credentials=[{"type":"password","value":"` + body.Password + `","temporary":false}]`
-		if _, err := runKcadm(r.Context(), "update", "users/"+id, "-s", cred); err != nil {
+		if err := s.setPassword(r, id, body.Password); err != nil {
 			apiErr(w, 502, "reset mot de passe: "+err.Error())
 			return
 		}
 		writeJSON(w, 200, map[string]any{"passwordUpdated": true, "id": id})
-		return
+	default:
+		apiErr(w, 405, "action inconnue")
 	}
-	apiErr(w, 405, "action inconnue")
-}
-
-type errWithMsg struct{ msg string }
-
-func (e errWithMsg) Error() string { return e.msg }
-
-func errUserNoID(out string) error {
-	return errWithMsg{"création sans id (kcadm ne retourne pas d'uuid): " + out}
 }
