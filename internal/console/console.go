@@ -8,6 +8,7 @@
 package console
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -18,6 +19,7 @@ import (
 	"os/exec"
 	"strings"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -37,6 +39,7 @@ type Server struct {
 	kube    kubernetes.Interface
 	kcAdmin string // user admin Keycloak
 	kcPass  string // mot de passe admin Keycloak
+	kcBase  string // base URL API Keycloak (Service ClusterIP résolu)
 }
 
 // New crée le serveur console : client K8s in-cluster (ou kubeconfig hors cluster),
@@ -58,9 +61,22 @@ func New(domain, apiKey string) (*Server, error) {
 			}
 		}
 	}
-	// Credentials admin Keycloak (lues depuis le secret dans le cluster ou env).
+	// Credentials admin Keycloak : env en priorité, sinon secret k8s keycloak-admin.
 	s.kcAdmin = strings.TrimSpace(os.Getenv("KC_ADMIN"))
 	s.kcPass = strings.TrimSpace(os.Getenv("KC_ADMIN_PASSWORD"))
+	if s.kcAdmin == "" && s.kube != nil {
+		if sec, err := s.kube.CoreV1().Secrets(kcNS).Get(context.Background(), "keycloak-admin", metav1.GetOptions{}); err == nil {
+			s.kcAdmin = string(sec.Data["username"])
+			s.kcPass = string(sec.Data["password"])
+		}
+	}
+	// Base URL Keycloak : ClusterIP du Service (résout aussi bien hors pod qu'en pod).
+	s.kcBase = kcSvc
+	if s.kube != nil {
+		if svc, err := s.kube.CoreV1().Services(kcNS).Get(context.Background(), "keycloak", metav1.GetOptions{}); err == nil && svc.Spec.ClusterIP != "" {
+			s.kcBase = "http://" + svc.Spec.ClusterIP + ":8080"
+		}
+	}
 	return s, nil
 }
 

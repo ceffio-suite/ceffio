@@ -44,7 +44,7 @@ func (s *Server) kcToken(r *http.Request) (string, error) {
 		"password":   {s.kcPass},
 	}
 	req, _ := http.NewRequestWithContext(r.Context(), http.MethodPost,
-		kcSvc+"/realms/master/protocol/openid-connect/token", strings.NewReader(form.Encode()))
+		s.kcBase+"/realms/master/protocol/openid-connect/token", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -78,7 +78,7 @@ func (s *Server) kcReq(r *http.Request, method, path, body string) (*http.Respon
 	} else {
 		br = strings.NewReader("")
 	}
-	req, _ := http.NewRequestWithContext(r.Context(), method, kcSvc+path, br)
+	req, _ := http.NewRequestWithContext(r.Context(), method, s.kcBase+path, br)
 	req.Header.Set("Authorization", "Bearer "+tok)
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
