@@ -1,84 +1,356 @@
 <!doctype html>
-<html lang="fr"><head><meta charset="utf-8">
+<html lang="fr">
+<head>
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ceffio Admin</title>
+<title>Ceffio — Console d'administration</title>
 <style>
-  :root{--bg:#0f172a;--card:#1e293b;--line:#334155;--txt:#e2e8f0;--muted:#94a3b8;--ok:#22c55e;--ko:#ef4444;--acc:#38bdf8}
-  *{box-sizing:border-box} body{margin:0;font:15px/1.5 system-ui;background:var(--bg);color:var(--txt)}
-  header{padding:16px 24px;background:#0b1222;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
-  h1{font-size:18px;margin:0} h1 span{color:var(--acc)} .wrap{padding:20px 24px;max-width:1200px;margin:0 auto}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px}
-  .card h3{margin:0 0 6px;font-size:14px;text-transform:capitalize;color:var(--muted)}
-  .card .big{font-size:22px;font-weight:700}.ok{color:var(--ok)} .ko{color:var(--ko)}
-  .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;border:1px solid var(--line)}
-  .pill.ok{color:var(--ok)} .pill.ko{color:var(--ko)}
-  table{width:100%;border-collapse:collapse;margin-top:8px;background:var(--card);border-radius:10px;overflow:hidden}
-  th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);font-size:13px}
-  th{color:var(--muted);font-weight:600;background:#16213a}
-  input,button{background:#0b1222;border:1px solid var(--line);color:var(--txt);padding:8px 10px;border-radius:8px;font-size:13px}
-  button{cursor:pointer;background:var(--acc);color:#06121d;font-weight:600}
-  button.ghost{background:transparent;color:var(--acc);border-color:var(--acc)}
-  section{margin-top:24px} section h2{font-size:15px;color:var(--muted);margin:0 0 8px;border-bottom:1px solid var(--line);padding-bottom:6px}
-  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-  .muted{color:var(--muted);font-size:12px}
-  #who{font-size:12px;color:var(--muted)}
-</style></head><body>
-<header>
-  <h1>Ceffio <span>Admin</span></h1>
-  <div class="row"><span id="who"></span><button class="ghost" onclick="promptKey()">Clé admin</button><button class="ghost" onclick="logoutC()">Déconnexion</button></div>
-</header>
-<div class="wrap">
-  <section><h2>État de la plateforme</h2><div id="stack" class="grid"></div></section>
-  <section><h2>URLs & certificats</h2><div class="row" id="ingress"></div><div id="certs" class="muted" style="margin-top:6px"></div></section>
-  <section><h2>Utilisateurs (SSO Keycloak)</h2>
-    <div class="row">
-      <input id="u_name" placeholder="identifiant"><input id="u_email" placeholder="email">
-      <input id="u_pwd" type="password" placeholder="mot de passe"><button onclick="createUser()">Créer</button>
+  :root{
+    --bg:#0b0f1a; --bg2:#0f1526; --panel:#131b30; --panel2:#182238;
+    --line:#24304d; --line2:#2f3e63;
+    --txt:#e8edf7; --muted:#8b98b8; --faint:#5b6a8c;
+    --acc:#5b8cff; --acc2:#38bdf8;
+    --ok:#34d399; --okbg:rgba(52,211,153,.12);
+    --ko:#f87171; --kobg:rgba(248,113,113,.12);
+    --warn:#fbbf24; --warnbg:rgba(251,191,36,.12);
+    --radius:14px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;font:14px/1.55 "Inter",system-ui,-apple-system,"Segoe UI",sans-serif;background:radial-gradient(1200px 800px at 80% -10%, #16203c 0%, var(--bg) 55%);color:var(--txt)}
+  a{color:var(--acc2);text-decoration:none}
+  button,input{ font:inherit }
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#263252;border-radius:8px}
+  ::-webkit-scrollbar-track{background:transparent}
+
+  /* ── Layout ─────────────────────────────────────────── */
+  .app{display:flex;min-height:100vh}
+  .side{width:230px;flex:0 0 230px;background:var(--bg2);border-right:1px solid var(--line);padding:20px 14px;display:flex;flex-direction:column;gap:4px;position:sticky;top:0;height:100vh}
+  .brand{display:flex;align-items:center;gap:10px;padding:6px 10px 18px;border-bottom:1px solid var(--line);margin-bottom:12px}
+  .brand .logo{width:32px;height:32px;border-radius:9px;background:linear-gradient(135deg,var(--acc),var(--acc2));display:grid;place-items:center;font-weight:800;color:#06121d}
+  .brand b{font-size:15px;letter-spacing:.3px}
+  .brand small{display:block;color:var(--muted);font-size:11px;font-weight:500}
+  .nav-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:9px;color:var(--muted);cursor:pointer;border:1px solid transparent;user-select:none}
+  .nav-item:hover{background:var(--panel);color:var(--txt)}
+  .nav-item.active{background:linear-gradient(90deg,rgba(91,140,255,.16),rgba(56,189,248,.08));border-color:var(--line2);color:#fff}
+  .nav-item svg{width:16px;height:16px;flex:0 0 16px}
+  .side .foot{margin-top:auto;color:var(--faint);font-size:11px;padding:8px 12px;border-top:1px solid var(--line)}
+  .main{flex:1;min-width:0;display:flex;flex-direction:column}
+  .topbar{display:flex;align-items:center;gap:14px;padding:14px 26px;border-bottom:1px solid var(--line);background:rgba(11,15,26,.7);backdrop-filter:blur(8px);position:sticky;top:0;z-index:5}
+  .topbar h1{font-size:17px;margin:0;font-weight:700}
+  .topbar .crumb{color:var(--muted);font-size:12.5px}
+  .topbar .spacer{flex:1}
+  .content{padding:26px;max-width:1220px;width:100%;margin:0 auto}
+
+  /* ── Composants ─────────────────────────────────────── */
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px}
+  .card h3{margin:0 0 10px;font-size:12.5px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
+  .grid-stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;position:relative;overflow:hidden}
+  .stat .ico{position:absolute;right:12px;top:12px;width:26px;height:26px;border-radius:8px;display:grid;place-items:center;background:var(--panel2);color:var(--muted)}
+  .stat .lbl{font-size:12px;color:var(--muted);text-transform:capitalize}
+  .stat .val{font-size:22px;font-weight:800;margin:2px 0}
+  .stat .sub{font-size:11.5px;color:var(--faint)}
+  .stat .bar{height:4px;border-radius:99px;background:var(--panel2);margin-top:10px;overflow:hidden}
+  .stat .bar i{display:block;height:100%;border-radius:99px;background:var(--ok)}
+  .stat.bad .bar i{background:var(--ko)}
+
+  .badge{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:600;border:1px solid transparent}
+  .badge .dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+  .badge.ok{color:var(--ok);background:var(--okbg);border-color:rgba(52,211,153,.25)}
+  .badge.ko{color:var(--ko);background:var(--kobg);border-color:rgba(248,113,113,.25)}
+  .badge.warn{color:var(--warn);background:var(--warnbg);border-color:rgba(251,191,36,.25)}
+  .badge.mut{color:var(--muted);background:var(--panel2);border-color:var(--line)}
+
+  .table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+  .table th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:600;padding:10px 14px;background:var(--bg2);border-bottom:1px solid var(--line)}
+  .table td{padding:11px 14px;border-bottom:1px solid var(--line);font-size:13.5px;vertical-align:middle}
+  .table tr:last-child td{border-bottom:0}
+  .table tr:hover td{background:rgba(91,140,255,.04)}
+
+  .btn{background:linear-gradient(135deg,var(--acc),var(--acc2));color:#06121d;font-weight:700;border:0;padding:8px 14px;border-radius:9px;cursor:pointer;font-size:13px}
+  .btn:hover{filter:brightness(1.08)}
+  .btn:disabled{opacity:.5;cursor:default}
+  .btn-ghost{background:transparent;color:var(--acc2);border:1px solid var(--line2);padding:6px 11px;border-radius:8px;cursor:pointer;font-size:12.5px;font-weight:600}
+  .btn-ghost:hover{background:var(--panel2);border-color:var(--acc2)}
+  .btn-danger{background:transparent;color:var(--ko);border:1px solid rgba(248,113,113,.4);padding:6px 11px;border-radius:8px;cursor:pointer;font-size:12.5px;font-weight:600}
+  .btn-danger:hover{background:var(--kobg)}
+
+  input{background:var(--bg2);border:1px solid var(--line);color:var(--txt);padding:9px 12px;border-radius:9px;font-size:13px;min-width:0}
+  input:focus{outline:none;border-color:var(--acc);box-shadow:0 0 0 3px rgba(91,140,255,.15)}
+  input::placeholder{color:var(--faint)}
+
+  .section{display:none;animation:fade .18s ease}
+  .section.active{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1}}
+  .section-title{margin:0 0 16px;font-size:15px;font-weight:700}
+
+  .form-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+  .form-row input{flex:1;min-width:150px}
+
+  .mono{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:12px}
+  .muted{color:var(--muted);font-size:12.5px}
+  .empty{padding:26px;text-align:center;color:var(--faint);border:1px dashed var(--line);border-radius:var(--radius)}
+
+  /* toast */
+  #toasts{position:fixed;right:20px;bottom:20px;display:flex;flex-direction:column;gap:8px;z-index:99}
+  .toast{background:var(--panel2);border:1px solid var(--line2);border-left:3px solid var(--acc);border-radius:10px;padding:10px 16px;font-size:13px;box-shadow:0 8px 24px rgba(0,0,0,.4);animation:fade .2s ease;max-width:340px}
+  .toast.ok{border-left-color:var(--ok)}
+  .toast.ko{border-left-color:var(--ko)}
+
+  /* modal clé */
+  .overlay{position:fixed;inset:0;background:rgba(4,7,14,.7);backdrop-filter:blur(3px);display:none;place-items:center;z-index:50}
+  .overlay.show{display:grid}
+  .modal{width:400px;background:var(--panel);border:1px solid var(--line2);border-radius:16px;padding:22px}
+  .modal h2{margin:0 0 6px;font-size:16px}
+  .modal p{color:var(--muted);font-size:13px;margin:0 0 14px}
+  .modal input{width:100%;margin-bottom:12px}
+
+  @media (max-width:900px){ .side{display:none} }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">
+      <div class="logo">C</div>
+      <div><b>Ceffio</b><small>Console d'admin</small></div>
     </div>
-    <div id="users"></div>
-  </section>
+    <div class="nav-item active" data-tab="dashboard">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+      Tableau de bord
+    </div>
+    <div class="nav-item" data-tab="users">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17.5" cy="8.5" r="2.5"/><path d="M21 20c0-2.5-1.5-4.5-3.5-5.5"/></svg>
+      Utilisateurs
+    </div>
+    <div class="nav-item" data-tab="net">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9S14.5 18.5 12 21c-2.5-2.5-3.5-5.5-3.5-9S9.5 5.5 12 3z"/></svg>
+      URLs &amp; TLS
+    </div>
+    <div class="foot" id="sideFoot">—</div>
+  </aside>
+
+  <div class="main">
+    <div class="topbar">
+      <h1 id="pageTitle">Tableau de bord</h1>
+      <span class="crumb" id="crumb">état de la plateforme</span>
+      <div class="spacer"></div>
+      <span class="badge mut" id="clock"></span>
+      <button class="btn-ghost" onclick="openKeyModal()">Clé API</button>
+      <button class="btn-ghost" onclick="refresh()">Rafraîchir</button>
+    </div>
+
+    <div class="content">
+      <!-- DASHBOARD -->
+      <section class="section active" id="tab-dashboard">
+        <div class="grid-stats" id="stats"></div>
+        <div style="height:18px"></div>
+        <div class="card">
+          <h3>Détail des couches</h3>
+          <table class="table" id="stackTable">
+            <thead><tr><th>Couche</th><th>Pods prêts</th><th>Redémarrages</th><th>Pods</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- USERS -->
+      <section class="section" id="tab-users">
+        <h2 class="section-title">Comptes du SSO (realm Keycloak « ceffio »)</h2>
+        <div class="card">
+          <div class="form-row">
+            <input id="u_name" placeholder="Identifiant">
+            <input id="u_email" placeholder="Email">
+            <input id="u_pwd" type="password" placeholder="Mot de passe">
+            <button class="btn" id="btnCreate" onclick="createUser()">Créer le compte</button>
+          </div>
+          <div class="muted">Un compte créé ici peut se connecter à Nextcloud et Element via le login unique.</div>
+        </div>
+        <div style="height:14px"></div>
+        <table class="table" id="usersTable">
+          <thead><tr><th>Identifiant</th><th>Email</th><th>État</th><th style="text-align:right">Actions</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <!-- NET -->
+      <section class="section" id="tab-net">
+        <h2 class="section-title">Endpoints publics &amp; certificats</h2>
+        <div class="card"><h3>Routes d'accès</h3><div id="routes" class="form-row"></div></div>
+        <div style="height:14px"></div>
+        <table class="table" id="certTable">
+          <thead><tr><th>Certificat</th><th>Namespace</th><th>État</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+    </div>
+  </div>
 </div>
+
+<!-- Modal clé API -->
+<div class="overlay" id="keyOverlay">
+  <div class="modal">
+    <h2>Clé d'administration</h2>
+    <p>La clé se trouve dans <span class="mono">/etc/ceffio/console.key</span> sur le serveur. Elle n'est stockée que dans votre navigateur.</p>
+    <input id="keyInput" type="password" placeholder="Clé admin" autocomplete="off">
+    <div class="form-row">
+      <button class="btn" onclick="saveKey()" style="flex:1">Connexion</button>
+      <button class="btn-ghost" onclick="clearKey()">Oublier</button>
+    </div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
 <script>
-let key = localStorage.getItem('ceffio_key') || '';
-const H = () => ({ 'Content-Type':'application/json', 'Authorization':'Bearer '+key });
-function promptKey(){ key = prompt('Clé admin console:', key) || ''; localStorage.setItem('ceffio_key', key); load(); }
-async function j(url, opt){ const r = await fetch(url, Object.assign({headers:H()}, opt||{})); const d = await r.json().catch(()=>({})); if(r.status===401){ document.getElementById('who').textContent='Non connecté à l\'API'; } return d; }
-function who(){ document.getElementById('who').textContent = 'Jetons API admin actif'; }
-function logoutC(){ localStorage.removeItem('ceffio_key'); key=''; location.reload(); }
-async function load(){
-  const st = await j('/api/status');
-  const box = document.getElementById('stack');
-  box.innerHTML = (st.stack||[]).map(l => `
-    <div class="card">
-      <h3>${l.name}</h3>
-      <div class="big ${l.ready===l.total && l.total>0 ? 'ok':'ko'}">${l.ready}/${l.total}</div>
-      <div>${(l.pods||[]).map(p=>`<span class="pill ${p.ready?'ok':'ko'}">${p.name.split('-')[0]}</span>`).join(' ')}</div>
-      ${(l.pods||[]).some(p=>p.restarts>0)?'<div class="muted">restarts: '+ (l.pods||[]).reduce((a,p)=>a+p.restarts,0)+'</div>':''}
-    </div>`).join('');
-  document.getElementById('ingress').innerHTML = (st.ingress||[]).map(i=>`<span class="pill ${i.host?'ok':'ko'}">${i.host}</span>`).join(' ');
-  document.getElementById('certs').textContent = 'Certs TLS: ' + (st.certs||[]).map(c=>`${c.name}@${c.ns}=${c.condition}`).join(' · ');
-  await loadUsers();
-}
-async function loadUsers(){
-  const d = await j('/api/users');
-  const rows = (d.users||[]).map(u => `<tr><td>${u.username}</td><td>${esc(u.email||'')}</td>
-    <td>${u.enabled?'<span class="pill ok">actif</span>':'<span class="pill ko">désactivé</span>'}</td>
-    <td><button class="ghost" onclick="resetPwd('${u.id}')">Reset mdp</button>
-      ${u.enabled?`<button class="ghost" onclick="deact('${u.id}')">Désactiver</button>`:''}</td></tr>`).join('');
-  document.getElementById('users').innerHTML = `<table><tr><th>Identifiant</th><th>Email</th><th>État</th><th>Actions</th></tr>${rows}</table>`;
-}
-const esc = s => (s||'').replace(/[<>&]/g, c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
-async function createUser(){
-  const b = JSON.stringify({username:document.getElementById('u_name').value, email:document.getElementById('u_email').value, password:document.getElementById('u_pwd').value});
-  const r = await fetch('/api/users',{method:'POST',headers:H(),body:b});
-  alert(r.ok?'Utilisateur créé':(await r.json()).error||'erreur'); load();
-}
-async function deact(id){ await fetch('/api/users/'+id+'/deactivate',{method:'POST',headers:H()}); load(); }
-async function resetPwd(id){
-  const p = prompt('Nouveau mot de passe:');
-  if(!p) return; await fetch('/api/users/'+id+'/password',{method:'POST',headers:H(),body:JSON.stringify({password:p})}); load();
-}
-load(); who();
+(() => {
+  let key = localStorage.getItem('ceffio_key') || '';
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? '').replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+
+  const TITLES = {
+    dashboard: ['Tableau de bord', 'état de la plateforme'],
+    users:     ['Utilisateurs', 'comptes du login unique'],
+    net:       ['URLs & TLS', 'endpoints et certificats'],
+  };
+
+  // ── Navigation ──
+  document.querySelectorAll('.nav-item').forEach(el => el.onclick = () => {
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    el.classList.add('active');
+    document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+    const tab = el.dataset.tab;
+    $('tab-' + tab).classList.add('active');
+    $('pageTitle').textContent = TITLES[tab][0];
+    $('crumb').textContent = TITLES[tab][1];
+  });
+
+  // ── Horloge ──
+  setInterval(() => { $('clock').textContent = new Date().toLocaleTimeString('fr-FR'); }, 1000);
+
+  // ── Toasts ──
+  function toast(msg, kind = 'ok') {
+    const t = document.createElement('div');
+    t.className = 'toast ' + kind;
+    t.textContent = msg;
+    $('toasts').appendChild(t);
+    setTimeout(() => t.remove(), 3500);
+  }
+
+  // ── Clé API ──
+  window.openKeyModal = () => { $('keyInput').value = key; $('keyOverlay').classList.add('show'); $('keyInput').focus(); };
+  window.saveKey = () => {
+    key = $('keyInput').value.trim();
+    localStorage.setItem('ceffio_key', key);
+    $('keyOverlay').classList.remove('show');
+    if (key) { toast('Clé enregistrée'); refresh(); }
+  };
+  window.clearKey = () => { key = ''; localStorage.removeItem('ceffio_key'); $('keyOverlay').classList.remove('show'); toast('Clé oubliée', 'ko'); };
+  $('keyInput').addEventListener('keydown', e => { if (e.key === 'Enter') saveKey(); });
+
+  // ── API ──
+  async function api(path, opt = {}) {
+    const r = await fetch(path, { ...opt, headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key } });
+    if (r.status === 401) { openKeyModal(); throw new Error('auth'); }
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    return d;
+  }
+
+  // ── Dashboard ──
+  function renderDashboard(st) {
+    const layers = st.stack || [];
+    $('stats').innerHTML = layers.map(l => {
+      const good = l.total > 0 && l.ready === l.total;
+      const pct = l.total ? Math.round(100 * l.ready / l.total) : 0;
+      const restarts = (l.pods || []).reduce((a, p) => a + (p.restarts || 0), 0);
+      return `<div class="stat ${good ? '' : 'bad'}">
+        <div class="lbl">${esc(l.name)}</div>
+        <div class="val" style="color:${good ? 'var(--ok)' : 'var(--ko)'}">${l.ready}<span class="muted" style="font-size:14px">/${l.total}</span></div>
+        <div class="sub">${restarts ? restarts + ' restart(s)' : 'stable'}</div>
+        <div class="bar"><i style="width:${pct}%"></i></div>
+      </div>`;
+    }).join('');
+    $('stackTable').querySelector('tbody').innerHTML = layers.map(l => {
+      const good = l.total > 0 && l.ready === l.total;
+      const restarts = (l.pods || []).reduce((a, p) => a + (p.restarts || 0), 0);
+      return `<tr>
+        <td style="text-transform:capitalize;font-weight:600">${esc(l.name)}</td>
+        <td><span class="badge ${good ? 'ok' : 'ko'}"><span class="dot"></span>${l.ready}/${l.total}</span></td>
+        <td>${restarts ? `<span class="badge warn">${restarts}</span>` : '<span class="muted">0</span>'}</td>
+        <td>${(l.pods || []).map(p => `<span class="badge ${p.ready ? 'ok' : 'ko'}" title="${esc(p.name)}"><span class="dot"></span>${esc(p.name.split('-')[0])}</span>`).join(' ')}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  // ── Users ──
+  async function renderUsers() {
+    const d = await api('/api/users');
+    const rows = (d.users || []).map(u => `<tr>
+      <td style="font-weight:600">${esc(u.username)}</td>
+      <td class="muted">${esc(u.email || '—')}</td>
+      <td>${u.enabled ? '<span class="badge ok"><span class="dot"></span>actif</span>' : '<span class="badge ko"><span class="dot"></span>désactivé</span>'}</td>
+      <td style="text-align:right;white-space:nowrap">
+        <button class="btn-ghost" onclick="resetPwd('${esc(u.id)}')">Réinit. mdp</button>
+        ${u.enabled ? `<button class="btn-danger" onclick="deact('${esc(u.id)}','${esc(u.username)}')">Désactiver</button>` : ''}
+      </td></tr>`).join('');
+    $('usersTable').querySelector('tbody').innerHTML = rows || `<tr><td colspan="4"><div class="empty">Aucun utilisateur — créez le premier compte ci-dessus.</div></td></tr>`;
+  }
+
+  window.createUser = async () => {
+    const username = $('u_name').value.trim(), email = $('u_email').value.trim(), password = $('u_pwd').value;
+    if (!username) { toast('Identifiant requis', 'ko'); return; }
+    if (!password) { toast('Mot de passe requis', 'ko'); return; }
+    $('btnCreate').disabled = true;
+    try {
+      await api('/api/users', { method: 'POST', body: JSON.stringify({ username, email, password }) });
+      toast('Compte « ' + username + ' » créé');
+      $('u_name').value = $('u_email').value = $('u_pwd').value = '';
+      await renderUsers();
+    } catch (e) { toast('Erreur : ' + e.message, 'ko'); }
+    finally { $('btnCreate').disabled = false; }
+  };
+
+  window.deact = async (id, name) => {
+    if (!confirm('Désactiver « ' + name + ' » ?')) return;
+    try { await api('/api/users/' + id + '/deactivate', { method: 'POST' }); toast(name + ' désactivé'); await renderUsers(); }
+    catch (e) { toast('Erreur : ' + e.message, 'ko'); }
+  };
+
+  window.resetPwd = async id => {
+    const p = prompt('Nouveau mot de passe (non temporaire) :');
+    if (!p) return;
+    try { await api('/api/users/' + id + '/password', { method: 'POST', body: JSON.stringify({ password: p }) }); toast('Mot de passe réinitialisé'); }
+    catch (e) { toast('Erreur : ' + e.message, 'ko'); }
+  };
+
+  // ── URLs & TLS ──
+  function renderNet(st) {
+    $('routes').innerHTML = (st.ingress || [])
+      .sort((a, b) => a.host.localeCompare(b.host))
+      .map(i => `<a class="badge mut" href="https://${esc(i.host)}" target="_blank" rel="noopener">${esc(i.host)} ↗</a>`).join('');
+    $('certTable').querySelector('tbody').innerHTML = (st.certs || []).map(c => `<tr>
+      <td class="mono">${esc(c.name)}</td><td class="muted">${esc(c.ns)}</td>
+      <td>${c.condition === 'True' ? '<span class="badge ok"><span class="dot"></span>READY</span>' : '<span class="badge ko"><span class="dot"></span>' + esc(c.condition) + '</span>'}</td>
+    </tr>`).join('');
+  }
+
+  // ── Refresh ──
+  window.refresh = async () => {
+    if (!key) { openKeyModal(); return; }
+    try {
+      const st = await api('/api/status');
+      renderDashboard(st); renderNet(st);
+      await renderUsers();
+      $('sideFoot').textContent = st.domain || '';
+    } catch (e) { if (e.message !== 'auth') toast('Erreur : ' + e.message, 'ko'); }
+  };
+
+  refresh();
+  setInterval(() => { if (key) api('/api/status').then(s => { renderDashboard(s); renderNet(s); }).catch(() => {}); }, 30000);
+})();
 </script>
-</body></html>
+</body>
+</html>
