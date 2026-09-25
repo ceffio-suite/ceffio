@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -107,7 +108,10 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	}
 
 	// 4. Attente + check de santé.
-	if err := cluster.WaitReady(ctx, 120*time.Second); err != nil {
+	// 5 min : sur une VM à froid, k3s doit démarrer son API, tirer les images
+	// système (Traefik, CoreDNS, local-path) et faire passer le nœud Ready.
+	// 120 s échouait systématiquement au premier boot (nœud Ready vers ~3 min).
+	if err := cluster.WaitReady(ctx, 5*time.Minute); err != nil {
 		return err
 	}
 	nodes, err := cluster.Health(ctx)
@@ -121,36 +125,52 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	}
 
 	// 5. Déploiement de la plateforme (Phase 2).
-	if err := platform.Deploy(ctx); err != nil {
+	//
+	// Parallélisation : on ne sérialise QUE les dépendances réelles.
+	//   platform (namespaces, cert-manager, issuers) et data (PostgreSQL, Redis)
+	//   ne dépendent pas l'un de l'autre → menés en parallèle.
+	//   identity dépend de data (Keycloak a besoin de sa base) → après.
+	fmt.Println("\n∙ phases 2-3 en parallèle (plateforme ‖ données)")
+	if err := runParallel(ctx,
+		namedTask{"plateforme (Phase 2)", func(ctx context.Context) error { return platform.Deploy(ctx) }},
+		namedTask{"données (Phase 3)", func(ctx context.Context) error { return data.Deploy(ctx) }},
+	); err != nil {
 		return err
 	}
 
-	// 6. Couche données (Phase 3).
-	if err := data.Deploy(ctx); err != nil {
-		return err
-	}
-
-	// 7. Identité / SSO (Phase 4).
+	// 7. Identité / SSO (Phase 4) — dépend de la base PostgreSQL.
 	if err := identity.Deploy(ctx); err != nil {
 		return err
 	}
 
-	// 8. Fichiers (Phase 5).
-	if err := files.Deploy(ctx); err != nil {
+	// 8-10. Couches applicatives : fichiers, chat et visio sont INDÉPENDANTES
+	// les unes des autres — elles ne dépendent que de la plateforme (namespaces,
+	// ingress) et de l'identité (hostAliases → Traefik, CA). On les déploie donc
+	// en parallèle, ce qui divise le temps de cette étape par ~3.
+	// Sont EXCLUES du parallèle (dépendances réelles, vérifiées dans le code) :
+	//   - office : s'active via « occ » DANS Nextcloud → exige Nextcloud Ready ;
+	//   - sso/AdoptURLs : écrivent dans Keycloak, Nextcloud et Synapse → après tous.
+	fmt.Println("\n∙ phases 5/7/10 en parallèle (fichiers ‖ chat ‖ visio)")
+	appTasks := []namedTask{
+		{"fichiers (Phase 5)", func(ctx context.Context) error { return files.Deploy(ctx) }},
+		{"chat (Phase 7)", func(ctx context.Context) error { return chat.Deploy(ctx) }},
+	}
+	if o.video {
+		appTasks = append(appTasks, namedTask{"visio (Phase 10)", func(ctx context.Context) error {
+			return media.Deploy(ctx, o.domain)
+		}})
+	}
+	if err := runParallel(ctx, appTasks...); err != nil {
 		return err
 	}
 
-	// 9. Office (Phase 6).
+	// 11. Office (Phase 6) — APRÈS fichiers : le connecteur ONLYOFFICE est
+	// configuré via « occ » dans le pod Nextcloud (il doit être Ready).
 	if err := office.Deploy(ctx); err != nil {
 		return err
 	}
 
-	// 10. Chat (Phase 7).
-	if err := chat.Deploy(ctx); err != nil {
-		return err
-	}
-
-	// 11. SSO (login unique du MVB) : clients OIDC Keycloak + Nextcloud + Synapse.
+	// 12. SSO (login unique du MVB) : clients OIDC Keycloak + Nextcloud + Synapse.
 	if err := sso.EnsureOIDCClients(ctx); err != nil {
 		return err
 	}
@@ -163,17 +183,17 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 
 	fmt.Println("\n✓ SSO OIDC configuré (login unique Keycloak sur Nextcloud + Element).")
 
-	// 12. Ingress / TLS réel (Phase 9).
+	// 13. Ingress / TLS réel (Phase 9).
 	if err := ingress.Deploy(ctx, o.domain); err != nil {
 		return err
 	}
 
-	// 13. Adoption des URLs publiques dans les apps (homeserver, redirects SSO, https).
+	// 14. Adoption des URLs publiques dans les apps (homeserver, redirects SSO, https).
 	if err := ingress.AdoptURLs(ctx, o.domain); err != nil {
 		return err
 	}
 
-	// 11. Console d'administration (dashboard + utilisateurs SSO).
+	// 15. Console d'administration (dashboard + utilisateurs SSO).
 	if err := console.Deploy(ctx, o.domain); err != nil {
 		return err
 	}

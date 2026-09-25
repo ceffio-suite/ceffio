@@ -13,8 +13,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"os"
-	"os/exec"
 	"regexp"
 	"strings"
 )
@@ -141,17 +141,17 @@ func runKcadm(ctx context.Context, args ...string) (string, error) {
 		}
 	}
 	cmd := `/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user "$KC_BOOTSTRAP_ADMIN_USERNAME" --password "$KC_BOOTSTRAP_ADMIN_PASSWORD" >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh ` + strings.Join(quoted, " ")
-	out, err := exec.CommandContext(ctx, "kubectl", "exec", "-n", ns, keycloakDepl, "--", "sh", "-c", cmd).CombinedOutput()
+	out, err := k8s.Command(ctx, "kubectl", "exec", "-n", ns, keycloakDepl, "--", "sh", "-c", cmd).CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }
 
 func secretExists(ctx context.Context, name string) bool {
-	err := exec.CommandContext(ctx, "kubectl", "get", "secret", name, "-n", ns).Run()
+	err := k8s.Command(ctx, "kubectl", "get", "secret", name, "-n", ns).Run()
 	return err == nil
 }
 
 func readSecretVal(ctx context.Context, name, key string) (string, bool) {
-	out, err := exec.CommandContext(ctx, "kubectl", "get", "secret", name, "-n", ns, "-o", "jsonpath={.data."+key+"}").Output()
+	out, err := k8s.Command(ctx, "kubectl", "get", "secret", name, "-n", ns, "-o", "jsonpath={.data."+key+"}").Output()
 	if err != nil {
 		return "", false
 	}
@@ -168,7 +168,7 @@ func createSecretS(ctx context.Context, name string, data map[string]string) err
 		args = append(args, "--from-literal="+k+"="+v)
 	}
 	args = append(args, "|", "kubectl", "apply", "-f", "-")
-	cmd := exec.CommandContext(ctx, "sh", "-c", strings.Join(args, " "))
+	cmd := k8s.Command(ctx, "sh", "-c", strings.Join(args, " "))
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

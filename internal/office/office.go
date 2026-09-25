@@ -10,8 +10,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 )
@@ -141,7 +141,7 @@ spec:
 
 func waitOfficeReady(ctx context.Context) error {
 	fmt.Println("∙ attente ONLYOFFICE Ready...")
-	cmd := exec.CommandContext(ctx, "kubectl", "rollout", "status",
+	cmd := k8s.Command(ctx, "kubectl", "rollout", "status",
 		"deployment/onlyoffice", "-n", ns, "--timeout=420s")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -155,7 +155,7 @@ func waitOfficeReady(ctx context.Context) error {
 func waitHealthcheck(ctx context.Context) error {
 	deadline := time.Now().Add(180 * time.Second)
 	for time.Now().Before(deadline) {
-		out, err := exec.CommandContext(ctx, "kubectl", "exec", "-n", ns, "deploy/onlyoffice", "--",
+		out, err := k8s.Command(ctx, "kubectl", "exec", "-n", ns, "deploy/onlyoffice", "--",
 			"sh", "-c", `curl -s http://localhost/healthcheck`).CombinedOutput()
 		if err == nil && strings.Contains(string(out), "true") {
 			return nil
@@ -206,7 +206,7 @@ func connectNextcloud(ctx context.Context) error {
 
 func runOcc(ctx context.Context, args ...string) error {
 	occArgs := append([]string{"exec", "-n", nextcloudNS, "deploy/nextcloud", "--", "php", "occ"}, args...)
-	cmd := exec.CommandContext(ctx, "kubectl", occArgs...)
+	cmd := k8s.Command(ctx, "kubectl", occArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -227,12 +227,12 @@ func ensureOccApp(ctx context.Context, app string) error {
 
 func runOccOutput(ctx context.Context, args ...string) (string, error) {
 	occArgs := append([]string{"exec", "-n", nextcloudNS, "deploy/nextcloud", "--", "php", "occ"}, args...)
-	out, err := exec.CommandContext(ctx, "kubectl", occArgs...).CombinedOutput()
+	out, err := k8s.Command(ctx, "kubectl", occArgs...).CombinedOutput()
 	return string(out), err
 }
 
 func readSecretJWT(ctx context.Context) (string, error) {
-	out, err := exec.CommandContext(ctx, "kubectl", "get", "secret", "onlyoffice-secret", "-n", ns,
+	out, err := k8s.Command(ctx, "kubectl", "get", "secret", "onlyoffice-secret", "-n", ns,
 		"-o", "jsonpath={.data.jwt}").Output()
 	if err != nil {
 		return "", fmt.Errorf("lecture du secret jwt: %w", err)
@@ -245,7 +245,7 @@ func readSecretJWT(ctx context.Context) (string, error) {
 }
 
 func secretExists(ctx context.Context, name string) bool {
-	out, err := exec.CommandContext(ctx, "kubectl", "get", "secret", name, "-n", ns).CombinedOutput()
+	out, err := k8s.Command(ctx, "kubectl", "get", "secret", name, "-n", ns).CombinedOutput()
 	return err == nil && strings.Contains(string(out), name)
 }
 
@@ -254,7 +254,7 @@ func createSecret(ctx context.Context, name string, kv map[string]string) error 
 	for k, v := range kv {
 		args = append(args, "--from-literal="+k+"="+v)
 	}
-	out, err := exec.CommandContext(ctx, "kubectl", args...).Output()
+	out, err := k8s.Command(ctx, "kubectl", args...).Output()
 	if err != nil {
 		return fmt.Errorf("secret dry-run: %w", err)
 	}
@@ -270,7 +270,7 @@ func genSecret(n int) (string, error) {
 }
 
 func apply(ctx context.Context, manifest string) error {
-	cmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-")
+	cmd := k8s.Command(ctx, "kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(manifest)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

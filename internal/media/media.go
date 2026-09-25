@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"os"
 	"os/exec"
 	"strings"
@@ -274,26 +275,26 @@ spec:
 // waitWebReady attend que le frontend Jitsi réponde (200 sur /).
 func waitWebReady(ctx context.Context) error {
 	fmt.Println("∙ attente du frontend Jitsi (web) Ready...")
-	err := exec.CommandContext(ctx, "kubectl", "rollout", "status", "deploy/web", "-n", ns, "--timeout=240s").Run()
+	err := k8s.Command(ctx, "kubectl", "rollout", "status", "deploy/web", "-n", ns, "--timeout=240s").Run()
 	if err != nil {
 		return err
 	}
 	// Vérification fonctionnelle : le frontend sert le HTML de Jitsi Meet.
 	for i := 0; i < 30; i++ {
-		o, _ := exec.CommandContext(ctx, "kubectl", "exec", "deploy/web", "-n", ns, "--",
+		o, _ := k8s.Command(ctx, "kubectl", "exec", "deploy/web", "-n", ns, "--",
 			"sh", "-c", "curl -fs -o /dev/null -w '%{http_code}' http://localhost:8000/").Output()
 		if strings.TrimSpace(string(o)) == "200" {
 			fmt.Println("  ✓ frontend Jitsi répond (HTTP 200)")
 			return nil
 		}
-		exec.CommandContext(ctx, "kubectl", "wait", "--for=condition=ready", "pod", "-n", ns, "-l", "app=web", "--timeout=5s").Run()
+		k8s.Command(ctx, "kubectl", "wait", "--for=condition=ready", "pod", "-n", ns, "-l", "app=web", "--timeout=5s").Run()
 		time.Sleep(5 * time.Second)
 	}
 	return fmt.Errorf("frontend Jitsi web injoignable après retries")
 }
 
 func nodeInternalIP(ctx context.Context) (string, error) {
-	out, err := exec.CommandContext(ctx, "kubectl", "get", "node", "-o",
+	out, err := k8s.Command(ctx, "kubectl", "get", "node", "-o",
 		`jsonpath={.items[0].status.addresses[?(@.type=="InternalIP")].address}`).Output()
 	if err != nil {
 		return "", err
@@ -310,7 +311,7 @@ func nodeInternalIP(ctx context.Context) (string, error) {
 // ---------------- helpers (répliqués des autres couches) ----------------
 
 func apply(ctx context.Context, manifest string) error {
-	cmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-")
+	cmd := k8s.Command(ctx, "kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(manifest)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -318,7 +319,7 @@ func apply(ctx context.Context, manifest string) error {
 }
 
 func secretExists(ctx context.Context, name string) bool {
-	err := exec.CommandContext(ctx, "kubectl", "get", "secret", name, "-n", ns).Run()
+	err := k8s.Command(ctx, "kubectl", "get", "secret", name, "-n", ns).Run()
 	return err == nil
 }
 
@@ -329,6 +330,7 @@ func createSecret(ctx context.Context, name string, data map[string]string) erro
 	}
 	args = append(args, "|", "kubectl", "apply", "-f", "-")
 	cmd := exec.CommandContext(ctx, "sh", "-c", strings.Join(args, " "))
+	cmd.Env = k8s.Env()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

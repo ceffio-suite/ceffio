@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/ceffio-suite/ceffio/internal/charts"
+	"github.com/ceffio-suite/ceffio/internal/k8s"
 )
 
 const (
@@ -50,7 +50,7 @@ func installUmbrella(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, "helm", "upgrade", "--install", "ceffio",
+	cmd := k8s.Command(ctx, "helm", "upgrade", "--install", "ceffio",
 		chart,
 		"--namespace", "ceffio-system", "--create-namespace")
 	cmd.Stdout = os.Stdout
@@ -90,7 +90,7 @@ func installCertManager(ctx context.Context) error {
 	if err := ensureRepo(ctx, "jetstack", "https://charts.jetstack.io"); err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, "helm", "upgrade", "--install", "cert-manager",
+	cmd := k8s.Command(ctx, "helm", "upgrade", "--install", "cert-manager",
 		"jetstack/cert-manager",
 		"--namespace", "cert-manager", "--create-namespace",
 		"--set", "crds.enabled=true",
@@ -104,7 +104,7 @@ func installCertManager(ctx context.Context) error {
 func waitCertManagerReady(ctx context.Context) error {
 	fmt.Println("∙ attente cert-manager Ready...")
 	for _, d := range []string{"cert-manager", "cert-manager-cainjector", "cert-manager-webhook"} {
-		cmd := exec.CommandContext(ctx, "kubectl", "rollout", "status",
+		cmd := k8s.Command(ctx, "kubectl", "rollout", "status",
 			"deployment/"+d, "-n", "cert-manager", "--timeout=180s")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -128,7 +128,7 @@ spec:
 }
 
 func ensureRepo(ctx context.Context, name, url string) error {
-	cmd := exec.CommandContext(ctx, "helm", "repo", "add", name, url)
+	cmd := k8s.Command(ctx, "helm", "repo", "add", name, url)
 	out, err := cmd.CombinedOutput()
 	if err != nil && !strings.Contains(string(out), "already exists") {
 		return fmt.Errorf("helm repo add %s: %w: %s", name, err, out)
@@ -137,7 +137,7 @@ func ensureRepo(ctx context.Context, name, url string) error {
 }
 
 func apply(ctx context.Context, manifest string) error {
-	cmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-")
+	cmd := k8s.Command(ctx, "kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(manifest)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

@@ -5,6 +5,7 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -90,16 +91,58 @@ func provisionK3s(ctx context.Context) error {
 			return fmt.Errorf("install helm: %w", err)
 		}
 	}
-	// kubeconfig par défaut (kubectl/helm héritent de $HOME) depuis k3s.yaml.
-	// TOUJOURS réécrit : un ~/.kube/config périmé d'un précédent k3s (autre CA) ferait
-	// échouer helm/kubectl en « x509: certificate signed by unknown authority ».
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		kc := filepath.Join(home, ".kube")
-		os.MkdirAll(kc, 0o700)
-		cfg := filepath.Join(kc, "config")
-		if data, err := os.ReadFile("/etc/rancher/k3s/k3s.yaml"); err == nil {
-			_ = os.WriteFile(cfg, data, 0o600)
+	// Kubeconfig : le script K3s démarre le service en arrière-plan et écrit
+	// /etc/rancher/k3s/k3s.yaml seulement quelques secondes APRÈS le retour du
+	// script (K3s génère sa CA/certificats au premier boot). On l'attend donc
+	// activement : une lecture immédiate échoue et, comme elle est non bloquante,
+	// laisse la machine sans kubeconfig → kubectl/helm échouent ensuite en
+	// « permission denied » sur k3s.yaml, et le cluster paraît non-Ready.
+	// TOUJOURS réécrit : un ~/.kube/config périmé d'un précédent k3s (autre CA)
+	// ferait échouer helm/kubectl en « x509: certificate signed by unknown
+	// authority ». Les erreurs ne sont JAMAIS avalées.
+	const k3sCfg = "/etc/rancher/k3s/k3s.yaml"
+	// Le CLI tourne en root (installer.sh → sudo) : lecture directe. En mode
+	// « sudo sans root » (ex. binaire lancé par un user), on retombe sur sudo cat.
+	readCfg := func() ([]byte, error) {
+		if data, err := os.ReadFile(k3sCfg); err == nil {
+			return data, nil
 		}
+		out, err := exec.CommandContext(ctx, "sudo", "cat", k3sCfg).Output()
+		if err != nil {
+			return nil, err
+		}
+		if len(out) == 0 {
+			return nil, fmt.Errorf("%s vide", k3sCfg)
+		}
+		return out, nil
+	}
+	var data []byte
+	deadline := time.Now().Add(90 * time.Second)
+	for {
+		var err error
+		if data, err = readCfg(); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("kubeconfig %s indisponible après 90s: %w "+
+				"(k3s a-t-il démarré ? vérifier: systemctl status k3s)", k3sCfg, err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return fmt.Errorf("HOME introuvable pour écrire ~/.kube/config: %w", err)
+	}
+	kc := filepath.Join(home, ".kube")
+	if err := os.MkdirAll(kc, 0o700); err != nil {
+		return fmt.Errorf("création %s: %w", kc, err)
+	}
+	if err := os.WriteFile(filepath.Join(kc, "config"), data, 0o600); err != nil {
+		return fmt.Errorf("écriture ~/.kube/config: %w", err)
 	}
 	return nil
 }
@@ -152,7 +195,7 @@ func cleanupLocal(ctx context.Context, rt Runtime, name string) error {
 
 // Health liste les nœuds du cluster courant (via kubectl).
 func Health(ctx context.Context) ([]string, error) {
-	out, err := exec.CommandContext(ctx, "kubectl", "get", "nodes", "-o", "name").CombinedOutput()
+	out, err := k8s.Command(ctx, "kubectl", "get", "nodes", "-o", "name").CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("kubectl get nodes: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
@@ -182,7 +225,7 @@ func WaitReady(ctx context.Context, timeout time.Duration) error {
 }
 
 func allNodesReady(ctx context.Context) bool {
-	out, err := exec.CommandContext(ctx, "kubectl", "get", "nodes", "-o",
+	out, err := k8s.Command(ctx, "kubectl", "get", "nodes", "-o",
 		`jsonpath={range .items[*]}{.status.conditions[?(@.type=='Ready')].status}{" "}{end}`).Output()
 	if err != nil {
 		return false

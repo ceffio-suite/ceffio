@@ -11,8 +11,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 )
@@ -194,7 +194,7 @@ spec:
 
 func waitNextcloudReady(ctx context.Context) error {
 	fmt.Println("∙ attente Nextcloud Ready + installation...")
-	cmd := exec.CommandContext(ctx, "kubectl", "rollout", "status",
+	cmd := k8s.Command(ctx, "kubectl", "rollout", "status",
 		"deployment/nextcloud", "-n", ns, "--timeout=300s")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -223,7 +223,7 @@ func waitNextcloudInstalled(ctx context.Context) error {
 }
 
 func psqlExec(ctx context.Context, sql string) error {
-	cmd := exec.CommandContext(ctx, "kubectl", "exec", "-i", "-c", "postgres",
+	cmd := k8s.Command(ctx, "kubectl", "exec", "-i", "-c", "postgres",
 		"-n", pgNSPod, pgPod, "--", "psql", "-U", "postgres", "-v", "ON_ERROR_STOP=1")
 	cmd.Stdin = strings.NewReader(sql)
 	out, err := cmd.CombinedOutput()
@@ -234,7 +234,7 @@ func psqlExec(ctx context.Context, sql string) error {
 }
 
 func queryNextcloudDB(ctx context.Context, sql string) (string, error) {
-	cmd := exec.CommandContext(ctx, "kubectl", "exec", "-c", "postgres",
+	cmd := k8s.Command(ctx, "kubectl", "exec", "-c", "postgres",
 		"-n", pgNSPod, pgPod, "--", "psql", "-U", "postgres", "-d", dbName, "-tAc", sql)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -244,7 +244,7 @@ func queryNextcloudDB(ctx context.Context, sql string) (string, error) {
 }
 
 func secretExists(ctx context.Context, name string) bool {
-	out, err := exec.CommandContext(ctx, "kubectl", "get", "secret", name, "-n", ns).CombinedOutput()
+	out, err := k8s.Command(ctx, "kubectl", "get", "secret", name, "-n", ns).CombinedOutput()
 	return err == nil && strings.Contains(string(out), name)
 }
 
@@ -253,7 +253,7 @@ func createSecret(ctx context.Context, name string, kv map[string]string) error 
 	for k, v := range kv {
 		args = append(args, "--from-literal="+k+"="+v)
 	}
-	out, err := exec.CommandContext(ctx, "kubectl", args...).Output()
+	out, err := k8s.Command(ctx, "kubectl", args...).Output()
 	if err != nil {
 		return fmt.Errorf("secret dry-run: %w", err)
 	}
@@ -269,7 +269,7 @@ func genSecret(n int) (string, error) {
 }
 
 func apply(ctx context.Context, manifest string) error {
-	cmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-")
+	cmd := k8s.Command(ctx, "kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(manifest)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -310,12 +310,12 @@ func ensureOccApp(ctx context.Context, app string) error {
 
 func runOccOutput(ctx context.Context, args ...string) (string, error) {
 	occArgs := append([]string{"exec", "-n", ns, "deploy/nextcloud", "--", "php", "occ"}, args...)
-	out, err := exec.CommandContext(ctx, "kubectl", occArgs...).CombinedOutput()
+	out, err := k8s.Command(ctx, "kubectl", occArgs...).CombinedOutput()
 	return string(out), err
 }
 
 func readSecretValue(ctx context.Context, sNs, name, key string) (string, error) {
-	out, err := exec.CommandContext(ctx, "kubectl", "get", "secret", name, "-n", sNs, "-o", "jsonpath={.data."+key+"}").Output()
+	out, err := k8s.Command(ctx, "kubectl", "get", "secret", name, "-n", sNs, "-o", "jsonpath={.data."+key+"}").Output()
 	if err != nil {
 		return "", err
 	}

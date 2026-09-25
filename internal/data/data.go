@@ -8,8 +8,8 @@ package data
 import (
 	"context"
 	"fmt"
+	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 )
@@ -49,7 +49,7 @@ func installCloudNativePG(ctx context.Context) error {
 	if err := ensureRepo(ctx, "cnpg", "https://cloudnative-pg.github.io/charts"); err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, "helm", "upgrade", "--install", "cnpg", "cnpg/cloudnative-pg",
+	cmd := k8s.Command(ctx, "helm", "upgrade", "--install", "cnpg", "cnpg/cloudnative-pg",
 		"--namespace", cnpgNamespace, "--create-namespace",
 		"--version", cnpgChartVersion)
 	cmd.Stdout = os.Stdout
@@ -60,7 +60,7 @@ func installCloudNativePG(ctx context.Context) error {
 func deployPostgres(ctx context.Context) error {
 	// Attente de l'opérateur (deployment "cnpg-cloudnative-pg").
 	for _, d := range []string{"cnpg-cloudnative-pg"} {
-		cmd := exec.CommandContext(ctx, "kubectl", "rollout", "status",
+		cmd := k8s.Command(ctx, "kubectl", "rollout", "status",
 			"deployment/"+d, "-n", cnpgNamespace, "--timeout=300s")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -99,7 +99,7 @@ func waitPostgresReady(ctx context.Context) error {
 	fmt.Println("∙ attente PostgreSQL Ready...")
 	deadline := time.Now().Add(300 * time.Second)
 	for time.Now().Before(deadline) {
-		out, err := exec.CommandContext(ctx, "kubectl", "get", "cluster", pgClusterName,
+		out, err := k8s.Command(ctx, "kubectl", "get", "cluster", pgClusterName,
 			"-n", pgNamespace, "-o", `jsonpath={.status.phase}`).Output()
 		if err == nil && strings.Contains(string(out), "Cluster in healthy state") {
 			return nil
@@ -158,7 +158,7 @@ spec:
 }
 
 func ensureRepo(ctx context.Context, name, url string) error {
-	cmd := exec.CommandContext(ctx, "helm", "repo", "add", name, url)
+	cmd := k8s.Command(ctx, "helm", "repo", "add", name, url)
 	out, err := cmd.CombinedOutput()
 	if err != nil && !strings.Contains(string(out), "already exists") {
 		return fmt.Errorf("helm repo add %s: %w: %s", name, err, out)
@@ -167,7 +167,7 @@ func ensureRepo(ctx context.Context, name, url string) error {
 }
 
 func apply(ctx context.Context, manifest string) error {
-	cmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-")
+	cmd := k8s.Command(ctx, "kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(manifest)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

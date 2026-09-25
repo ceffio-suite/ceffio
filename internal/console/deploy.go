@@ -1,11 +1,21 @@
 package console
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+
+	"github.com/ceffio-suite/ceffio/internal/k8s"
 )
 
 const (
@@ -43,61 +53,266 @@ func Deploy(ctx context.Context, domain string) error {
 	return nil
 }
 
-// buildAndImportImage compile le binaire linux, construit l'image OCI et l'importe
-// dans containerd (crictl / ctr). Idempotent : saute si l'image est déjà présente.
+// buildAndImportImage construit l'image OCI de la console et l'importe dans
+// containerd k3s. Idempotent : saute si l'image est déjà présente.
+//
+// Contraintes de conception (apprises en from-scratch) — la machine cible est un
+// serveur de PRODUCTION, pas un poste de dev :
+//   - pas de toolchain Go : on ne compile PAS sur place. On réutilise le binaire
+//     en cours d'exécution (os.Executable), qui est par construction un binaire
+//     Ceffio pour la bonne plateforme. Exiger `go` faisait échouer la Phase 11
+//     sur toute machine vierge (« exec: "go": executable file not found").
+//   - pas de démon Docker : l'image est assemblée directement en OCI (tar) puis
+//     importée dans le containerd de k3s via ctr. Exiger `docker build`/`save`
+//     est injustifiable sur un hôte K3s.
 func buildAndImportImage(ctx context.Context) error {
 	if imagePresent(ctx) {
 		fmt.Println("∙ image console déjà présente (" + imageRef + ")")
 		return nil
 	}
-	fmt.Println("∙ build + import image console " + imageRef)
+	fmt.Println("∙ construction + import de l'image console " + imageRef)
 
-	// 1. Cross-compile linux/amd64 du binaire (console embarque sa page web).
-	tmp, err := os.MkdirTemp("", "ceffio-console-build-*")
+	// 1. Binaire à embarquer : celui qui tourne (déjà un exécutable Ceffio).
+	self, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("binaire courant introuvable: %w", err)
+	}
+	if resolved, err := filepath.EvalSymlinks(self); err == nil {
+		self = resolved
+	}
+	if fi, err := os.Stat(self); err != nil || fi.Size() == 0 {
+		return fmt.Errorf("binaire courant illisible (%s): %v", self, err)
+	}
+
+	// 2. Assemblage OCI minimal (Dockerfile FROM scratch équivalent), SANS Docker :
+	//    config + layer tar.gz contenant /usr/local/bin/ceffio et les CA.
+	tmp, err := os.MkdirTemp("", "ceffio-console-oci-*")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(tmp)
-	bin := tmp + "/ceffio"
-	cmd := exec.CommandContext(ctx, "go", "build", "-o", bin, "github.com/ceffio-suite/ceffio/cmd/ceffio")
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH=amd64")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("build console: %w", err)
-	}
 
-	// 2. Dockerfile minimal (binaire + CA certs) → image.
-	dockerfile := `FROM scratch
-COPY ceffio /usr/local/bin/ceffio
-COPY --from=alpine:3.20 /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-EXPOSE 8088
-ENTRYPOINT ["/usr/local/bin/ceffio"]
-`
-	if err := os.WriteFile(tmp+"/Dockerfile", []byte(dockerfile), 0o644); err != nil {
+	layer, diffID, err := buildLayerFromBinary(tmp, self)
+	if err != nil {
 		return err
 	}
-	tar := tmp + "/image.tar"
-	build := exec.CommandContext(ctx, "docker", "build", "-t", imageRef, "-f", tmp+"/Dockerfile", tmp)
-	build.Stdout = os.Stdout
-	build.Stderr = os.Stderr
-	if err := build.Run(); err != nil {
-		return fmt.Errorf("docker build: %w", err)
-	}
-	save := exec.CommandContext(ctx, "docker", "save", "-o", tar, imageRef)
-	if err := save.Run(); err != nil {
-		return fmt.Errorf("docker save: %w", err)
+	ociTar, err := buildOCIImage(tmp, layer, diffID)
+	if err != nil {
+		return err
 	}
 
-	// 3. Import dans containerd (k3s : socket /run/k3s/containerd/containerd.sock).
-	imp := exec.CommandContext(ctx, "sh", "-c",
-		"sudo ctr -n k8s.io -a /run/k3s/containerd/containerd.sock images import "+tar+" || sudo crictl -r unix:///run/k3s/containerd/containerd.sock --image-endpoint unix:///run/k3s/containerd/containerd.sock load "+tar)
+	// 3. Import dans containerd k3s. Deux mécanismes, dans l'ordre :
+	//    a) `k3s ctr images import` (voie supportée : gère l'index OCI complet
+	//       et enregistre la référence dans le namespace k8s.io) ;
+	//    b) repli sur l'import brut containerd.
+	//    On passe par `k3s ctr` quand disponible : c'est le client aligné sur le
+	//    runtime du cluster, qui résout le namespace correctement.
+	imp := k8s.Command(ctx, "sh", "-c", strings.Join([]string{
+		"(command -v k3s >/dev/null && sudo k3s ctr images import " + ociTar + ") ||",
+		"(command -v ctr >/dev/null && sudo ctr -n k8s.io -a /run/k3s/containerd/containerd.sock images import " + ociTar + ") ||",
+		"(sudo crictl -r unix:///run/k3s/containerd/containerd.sock --image-endpoint unix:///run/k3s/containerd/containerd.sock load " + ociTar + ")",
+	}, " "))
 	imp.Stdout = os.Stdout
 	imp.Stderr = os.Stderr
 	if err := imp.Run(); err != nil {
 		return fmt.Errorf("import containerd: %w", err)
 	}
+
+	// 4. Vérification : l'image doit être VISIBLE par le CRI, sinon le pod
+	//    restera en ImagePullBackOff (le bug « resolver » historique).
+	if !imagePresent(ctx) {
+		return fmt.Errorf("image %s importée mais non résolue par le CRI — "+
+			"le pod resterait en ImagePullBackOff (référence non trouvée dans le namespace k8s.io)", imageRef)
+	}
 	return nil
+}
+
+// buildLayerFromBinary crée la couche tar.gz minimale : le binaire + les CA.
+// Retourne (chemin de la couche compressée, diffID = sha256 du tar décompressé).
+//
+// Attention : pour une couche `tar+gzip`, `rootfs.diff_ids` doit contenir le
+// SHA256 du tar NON compressé (identifiant de la couche décompressée), tandis
+// que le manifest référence le digest du .tar.gz. Confondre les deux fait
+// échouer l'import containerd.
+//
+// Le tar brut est monté en mémoire (binaire ~40 Mo : acceptable, et cela évite
+// une seconde passe de lecture), puis compressé vers le fichier final.
+func buildLayerFromBinary(tmp, bin string) (layerPath, diffID string, err error) {
+	var raw bytes.Buffer
+	tw := tar.NewWriter(&raw)
+
+	if err := addFileToTar(tw, bin, "usr/local/bin/ceffio"); err != nil {
+		return "", "", err
+	}
+	for _, ca := range []string{"/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"} {
+		if data, rerr := os.ReadFile(ca); rerr == nil {
+			if err := tw.WriteHeader(&tar.Header{Name: "etc/ssl/certs/ca-certificates.crt", Mode: 0o644, Size: int64(len(data))}); err != nil {
+				return "", "", err
+			}
+			if _, err := tw.Write(data); err != nil {
+				return "", "", err
+			}
+			break
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return "", "", err
+	}
+
+	// diff_id = sha256 du tar décompressé.
+	sum := sha256.Sum256(raw.Bytes())
+	diffID = hex.EncodeToString(sum[:])
+
+	layerPath = filepath.Join(tmp, "layer.tar.gz")
+	f, err := os.Create(layerPath)
+	if err != nil {
+		return "", "", err
+	}
+	defer f.Close()
+	gz := gzip.NewWriter(f)
+	if _, err := gz.Write(raw.Bytes()); err != nil {
+		return "", "", err
+	}
+	if err := gz.Close(); err != nil {
+		return "", "", err
+	}
+	return layerPath, diffID, nil
+}
+
+func addFileToTar(tw *tar.Writer, src, name string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("lecture %s: %w", src, err)
+	}
+	if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o755, Size: int64(len(data))}); err != nil {
+		return err
+	}
+	_, err = tw.Write(data)
+	return err
+}
+
+// buildOCIImage assemble un tar OCI (oci-layout + index) importable par ctr.
+//
+// layerPath : la couche .tar.gz ; diffID : sha256 du tar DÉCOMPRESSÉ
+// (rootfs.diff_ids). Le manifest, lui, référence le digest du .tar.gz.
+func buildOCIImage(tmp, layerPath, diffID string) (string, error) {
+	layerSHA, layerSize, err := fileSHA256(layerPath)
+	if err != nil {
+		return "", err
+	}
+
+	config := map[string]any{
+		"architecture": "amd64",
+		"os":           "linux",
+		"config": map[string]any{
+			"Entrypoint": []string{"/usr/local/bin/ceffio"},
+			"ExposedPorts": map[string]any{
+				"8088/tcp": map[string]any{},
+			},
+		},
+		"rootfs": map[string]any{
+			"type":     "layers",
+			"diff_ids": []string{"sha256:" + diffID},
+		},
+	}
+	configBytes, err := json.Marshal(config)
+	if err != nil {
+		return "", err
+	}
+	configSHA := sha256Hex(configBytes)
+
+	manifest := map[string]any{
+		"schemaVersion": 2,
+		"mediaType":     "application/vnd.oci.image.manifest.v1+json",
+		"config": map[string]any{
+			"mediaType": "application/vnd.oci.image.config.v1+json",
+			"digest":    "sha256:" + configSHA,
+			"size":      len(configBytes),
+		},
+		"layers": []map[string]any{{
+			"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+			"digest":    "sha256:" + layerSHA,
+			"size":      layerSize,
+		}},
+	}
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		return "", err
+	}
+	manifestSHA := sha256Hex(manifestBytes)
+
+	index := map[string]any{
+		"schemaVersion": 2,
+		"mediaType":     "application/vnd.oci.image.index.v1+json",
+		"manifests": []map[string]any{{
+			"mediaType": "application/vnd.oci.image.manifest.v1+json",
+			"digest":    "sha256:" + manifestSHA,
+			"size":      len(manifestBytes),
+			"annotations": map[string]string{
+				"org.opencontainers.image.ref.name": imageRef,
+			},
+			"platform": map[string]string{"architecture": "amd64", "os": "linux"},
+		}},
+	}
+	indexBytes, err := json.Marshal(index)
+	if err != nil {
+		return "", err
+	}
+
+	out := filepath.Join(tmp, "image.tar")
+	f, err := os.Create(out)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	tw := tar.NewWriter(f)
+
+	writeEntry := func(name string, data []byte) error {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(data))}); err != nil {
+			return err
+		}
+		_, err := tw.Write(data)
+		return err
+	}
+	if err := writeEntry("oci-layout", []byte(`{"imageLayoutVersion":"1.0.0"}`)); err != nil {
+		return "", err
+	}
+	if err := writeEntry("index.json", indexBytes); err != nil {
+		return "", err
+	}
+	if err := writeEntry("blobs/sha256/"+manifestSHA, manifestBytes); err != nil {
+		return "", err
+	}
+	if err := writeEntry("blobs/sha256/"+configSHA, configBytes); err != nil {
+		return "", err
+	}
+	// La couche est copiée telle quelle (streaming, pas de chargement en RAM).
+	if err := addFileToTar(tw, layerPath, "blobs/sha256/"+layerSHA); err != nil {
+		return "", err
+	}
+	if err := tw.Close(); err != nil {
+		return "", err
+	}
+	return out, nil
+}
+
+func fileSHA256(path string) (string, int64, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", 0, err
+	}
+	defer f.Close()
+	h := sha256.New()
+	n, err := io.Copy(h, f)
+	if err != nil {
+		return "", 0, err
+	}
+	return hex.EncodeToString(h.Sum(nil)), n, nil
+}
+
+func sha256Hex(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 func imagePresent(ctx context.Context) bool {
@@ -117,6 +332,7 @@ func ensureConsoleKey(ctx context.Context) error {
 	}
 	cmd := exec.CommandContext(ctx, "sh", "-c", "kubectl create secret generic ceffio-console-key -n "+deployNS+
 		" --from-literal=key='"+key+"' --dry-run=client -o yaml | kubectl apply -f -")
+	cmd.Env = k8s.Env()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -223,7 +439,7 @@ spec:
             port:
               number: 8088
 `
-	cmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-")
+	cmd := k8s.Command(ctx, "kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(manifest)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -232,10 +448,10 @@ spec:
 
 func waitConsoleReady(ctx context.Context) error {
 	fmt.Println("∙ attente du pod console Ready...")
-	return exec.CommandContext(ctx, "kubectl", "rollout", "status", "deploy/ceffio-admin", "-n", deployNS, "--timeout=180s").Run()
+	return k8s.Command(ctx, "kubectl", "rollout", "status", "deploy/ceffio-admin", "-n", deployNS, "--timeout=180s").Run()
 }
 
 // genSecret est réutilisé (même convention que les autres couches).
 func secretExists(ctx context.Context, name string) bool {
-	return exec.CommandContext(ctx, "kubectl", "get", "secret", name, "-n", deployNS).Run() == nil
+	return k8s.Command(ctx, "kubectl", "get", "secret", name, "-n", deployNS).Run() == nil
 }

@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"os"
 	"os/exec"
 	"strings"
@@ -305,7 +306,7 @@ spec:
 
 func waitSynapseReady(ctx context.Context) error {
 	fmt.Println("∙ attente Synapse Ready (migrations DB)...")
-	cmd := exec.CommandContext(ctx, "kubectl", "rollout", "status",
+	cmd := k8s.Command(ctx, "kubectl", "rollout", "status",
 		"deployment/synapse", "-n", ns, "--timeout=420s")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -318,7 +319,7 @@ func waitSynapseReady(ctx context.Context) error {
 func waitMatrixAPI(ctx context.Context) error {
 	deadline := time.Now().Add(180 * time.Second)
 	for time.Now().Before(deadline) {
-		out, err := exec.CommandContext(ctx, "kubectl", "exec", "-n", ns, "deploy/synapse", "--",
+		out, err := k8s.Command(ctx, "kubectl", "exec", "-n", ns, "deploy/synapse", "--",
 			"sh", "-c", `curl -s -o /dev/null -w "%{http_code}" http://localhost:8008/_matrix/client/versions`).CombinedOutput()
 		if err == nil && strings.Contains(string(out), "200") {
 			return nil
@@ -333,7 +334,7 @@ func waitMatrixAPI(ctx context.Context) error {
 }
 
 func psqlExec(ctx context.Context, sql string) error {
-	cmd := exec.CommandContext(ctx, "kubectl", "exec", "-i", "-c", "postgres",
+	cmd := k8s.Command(ctx, "kubectl", "exec", "-i", "-c", "postgres",
 		"-n", pgNSPod, pgPod, "--", "psql", "-U", "postgres", "-v", "ON_ERROR_STOP=1")
 	cmd.Stdin = strings.NewReader(sql)
 	out, err := cmd.CombinedOutput()
@@ -344,7 +345,7 @@ func psqlExec(ctx context.Context, sql string) error {
 }
 
 func secretExists(ctx context.Context, name string) bool {
-	out, err := exec.CommandContext(ctx, "kubectl", "get", "secret", name, "-n", ns).CombinedOutput()
+	out, err := k8s.Command(ctx, "kubectl", "get", "secret", name, "-n", ns).CombinedOutput()
 	return err == nil && strings.Contains(string(out), name)
 }
 
@@ -353,7 +354,7 @@ func createSecretS(ctx context.Context, name string, kv map[string]string) error
 	for k, v := range kv {
 		args = append(args, "--from-literal="+k+"="+v)
 	}
-	out, err := exec.CommandContext(ctx, "kubectl", args...).Output()
+	out, err := k8s.Command(ctx, "kubectl", args...).Output()
 	if err != nil {
 		return fmt.Errorf("secret dry-run: %w", err)
 	}
@@ -369,7 +370,7 @@ func genSecret(n int) (string, error) {
 }
 
 func readSecretValue(ctx context.Context, name, key string) (string, error) {
-	out, err := exec.CommandContext(ctx, "kubectl", "get", "secret", name, "-n", ns,
+	out, err := k8s.Command(ctx, "kubectl", "get", "secret", name, "-n", ns,
 		"-o", "jsonpath={.data."+key+"}").Output()
 	if err != nil {
 		return "", err
@@ -382,7 +383,7 @@ func readSecretValue(ctx context.Context, name, key string) (string, error) {
 }
 
 func apply(ctx context.Context, manifest string) error {
-	cmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-")
+	cmd := k8s.Command(ctx, "kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(manifest)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -439,7 +440,7 @@ func readOIDCSecret(ctx context.Context, key string) (string, error) {
 }
 
 func readSecretValueNS(ctx context.Context, sNs, name, key string) (string, error) {
-	out, err := exec.CommandContext(ctx, "kubectl", "get", "secret", name, "-n", sNs, "-o", "jsonpath={.data."+key+"}").Output()
+	out, err := k8s.Command(ctx, "kubectl", "get", "secret", name, "-n", sNs, "-o", "jsonpath={.data."+key+"}").Output()
 	if err != nil {
 		return "", err
 	}
@@ -452,7 +453,7 @@ func readSecretValueNS(ctx context.Context, sNs, name, key string) (string, erro
 
 func configMapData(ctx context.Context, name, key string) (string, error) {
 	tpl := "{.data." + strings.ReplaceAll(key, ".", "\\.") + "}"
-	out, err := exec.CommandContext(ctx, "kubectl", "get", "cm", name, "-n", ns, "-o", "jsonpath="+tpl).Output()
+	out, err := k8s.Command(ctx, "kubectl", "get", "cm", name, "-n", ns, "-o", "jsonpath="+tpl).Output()
 	if err != nil {
 		return "", err
 	}
@@ -474,13 +475,14 @@ func applyConfigMapData(ctx context.Context, name string, data map[string]string
 	}
 	cmd := exec.CommandContext(ctx, "sh", "-c",
 		"kubectl create configmap "+name+" -n "+ns+" --from-file="+key+"="+tmp.Name()+" --dry-run=client -o yaml | kubectl apply -f -")
+	cmd.Env = k8s.Env()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
 
 func rolloutRestart(ctx context.Context, target string) error {
-	cmd := exec.CommandContext(ctx, "kubectl", "rollout", "restart", target, "-n", ns)
+	cmd := k8s.Command(ctx, "kubectl", "rollout", "restart", target, "-n", ns)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

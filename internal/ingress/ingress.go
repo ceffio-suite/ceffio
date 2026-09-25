@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"os"
 	"os/exec"
 	"strings"
@@ -122,7 +123,7 @@ func AdoptURLs(ctx context.Context, domain string) error {
 func adoptKeycloakHost(ctx context.Context, domain string) error {
 	host := "keycloak." + domain
 	url := "https://" + host
-	cmd := exec.CommandContext(ctx, "kubectl", "set", "env", "-n", "ceffio-identity", "deploy/keycloak",
+	cmd := k8s.Command(ctx, "kubectl", "set", "env", "-n", "ceffio-identity", "deploy/keycloak",
 		"KC_HOSTNAME="+host, "KC_HOSTNAME_URL="+url,
 		"KC_HOSTNAME_STRICT=false", "KC_PROXY_HEADERS=xforwarded")
 	cmd.Stdout = os.Stdout
@@ -130,7 +131,7 @@ func adoptKeycloakHost(ctx context.Context, domain string) error {
 	if err := cmd.Run(); err != nil {
 		return err
 	}
-	rcmd := exec.CommandContext(ctx, "kubectl", "rollout", "status", "deploy/keycloak", "-n", "ceffio-identity", "--timeout=240s")
+	rcmd := k8s.Command(ctx, "kubectl", "rollout", "status", "deploy/keycloak", "-n", "ceffio-identity", "--timeout=240s")
 	rcmd.Stdout = os.Stdout
 	rcmd.Stderr = os.Stderr
 	return rcmd.Run()
@@ -219,7 +220,7 @@ type envKV struct{ name, value string }
 
 // svcIP lit le ClusterIP d'un Service.
 func svcIP(ctx context.Context, name, ns string) (string, error) {
-	out, err := exec.CommandContext(ctx, "kubectl", "get", "svc", name, "-n", ns, "-o", "jsonpath={.spec.clusterIP}").Output()
+	out, err := k8s.Command(ctx, "kubectl", "get", "svc", name, "-n", ns, "-o", "jsonpath={.spec.clusterIP}").Output()
 	if err != nil {
 		return "", err
 	}
@@ -228,7 +229,7 @@ func svcIP(ctx context.Context, name, ns string) (string, error) {
 
 // caCert lit le certificat CA de la chaîne signée par cert-manager (ceffio-ca-tls).
 func caCert(ctx context.Context) (string, error) {
-	out, err := exec.CommandContext(ctx, "kubectl", "get", "secret", "ceffio-ca-tls", "-n", "cert-manager", "-o", "jsonpath={.data.ca\\.crt}").Output()
+	out, err := k8s.Command(ctx, "kubectl", "get", "secret", "ceffio-ca-tls", "-n", "cert-manager", "-o", "jsonpath={.data.ca\\.crt}").Output()
 	if err != nil {
 		return "", err
 	}
@@ -244,6 +245,7 @@ func createCAConfigs(ctx context.Context, ns, ca string) error {
 	cmd := exec.CommandContext(ctx, "sh", "-c",
 		"kubectl create configmap ceffio-ca-cm -n "+ns+" --from-file=ceffio-ca.crt=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -")
 	cmd.Stdin = strings.NewReader(ca)
+	cmd.Env = k8s.Env()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -253,6 +255,7 @@ func createCAConfigs(ctx context.Context, ns, ca string) error {
 	cmd2 := exec.CommandContext(ctx, "sh", "-c",
 		"kubectl create configmap ceffio-phpini -n "+ns+" --from-file=zz-ceffio.ini=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -")
 	cmd2.Stdin = strings.NewReader(ini)
+	cmd2.Env = k8s.Env()
 	cmd2.Stdout = os.Stdout
 	cmd2.Stderr = os.Stderr
 	return cmd2.Run()
@@ -292,13 +295,13 @@ func patchApp(ctx context.Context, ns, deploy, container, traefikIP string, host
 		},
 	}
 	b, _ := json.Marshal(patch)
-	cmd := exec.CommandContext(ctx, "kubectl", "patch", "deploy", deploy, "-n", ns, "--type=strategic", "-p", string(b))
+	cmd := k8s.Command(ctx, "kubectl", "patch", "deploy", deploy, "-n", ns, "--type=strategic", "-p", string(b))
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return err
 	}
-	r := exec.CommandContext(ctx, "kubectl", "rollout", "status", "deploy/"+deploy, "-n", ns, "--timeout=200s")
+	r := k8s.Command(ctx, "kubectl", "rollout", "status", "deploy/"+deploy, "-n", ns, "--timeout=200s")
 	r.Stdout = os.Stdout
 	r.Stderr = os.Stderr
 	return r.Run()
@@ -355,7 +358,7 @@ func ssoRedirect(ctx context.Context, domain string) error {
 
 func occSet(ctx context.Context, args ...string) error {
 	full := append([]string{"exec", "-n", "ceffio-files", "deploy/nextcloud", "--", "php", "occ"}, args...)
-	cmd := exec.CommandContext(ctx, "kubectl", full...)
+	cmd := k8s.Command(ctx, "kubectl", full...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -363,7 +366,7 @@ func occSet(ctx context.Context, args ...string) error {
 
 func cmData(ctx context.Context, ns, name, key string) (string, error) {
 	tpl := "{.data." + strings.ReplaceAll(key, ".", "\\.") + "}"
-	out, err := exec.CommandContext(ctx, "kubectl", "get", "cm", name, "-n", ns, "-o", "jsonpath="+tpl).Output()
+	out, err := k8s.Command(ctx, "kubectl", "get", "cm", name, "-n", ns, "-o", "jsonpath="+tpl).Output()
 	if err != nil {
 		return "", err
 	}
@@ -381,6 +384,7 @@ func applyCMData(ctx context.Context, ns, name, key, data string) error {
 	}
 	cmd := exec.CommandContext(ctx, "sh", "-c",
 		"kubectl create configmap "+name+" -n "+ns+" --from-file="+key+"="+tmp.Name()+" --dry-run=client -o yaml | kubectl apply -f -")
+	cmd.Env = k8s.Env()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -396,7 +400,7 @@ func rolloutRestart(ctx context.Context, target string) error {
 	if ns == "" {
 		return fmt.Errorf("namespace inconnu pour %q", target)
 	}
-	cmd := exec.CommandContext(ctx, "kubectl", "rollout", "restart", "deploy/"+deploy, "-n", ns)
+	cmd := k8s.Command(ctx, "kubectl", "rollout", "restart", "deploy/"+deploy, "-n", ns)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -413,7 +417,7 @@ func runKcadm(ctx context.Context, args ...string) (string, error) {
 	}
 	cmdStr := `/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user "$KC_BOOTSTRAP_ADMIN_USERNAME" --password "$KC_BOOTSTRAP_ADMIN_PASSWORD" >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh ` + strings.Join(quoted, " ")
 	full := []string{"exec", "-n", "ceffio-identity", "deploy/keycloak", "--", "sh", "-c", cmdStr}
-	out, err := exec.CommandContext(ctx, "kubectl", full...).CombinedOutput()
+	out, err := k8s.Command(ctx, "kubectl", full...).CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }
 
@@ -448,7 +452,7 @@ func kcadmRedirect(ctx context.Context, clientID, uri string) error {
 }
 
 func apply(ctx context.Context, manifest string) error {
-	cmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-")
+	cmd := k8s.Command(ctx, "kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(manifest)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

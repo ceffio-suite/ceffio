@@ -11,8 +11,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 )
@@ -197,7 +197,7 @@ spec:
 
 func waitKeycloakReady(ctx context.Context) error {
 	fmt.Println("∙ attente Keycloak Ready...")
-	cmd := exec.CommandContext(ctx, "kubectl", "rollout", "status",
+	cmd := k8s.Command(ctx, "kubectl", "rollout", "status",
 		"deployment/keycloak", "-n", ns, "--timeout=300s")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -217,7 +217,7 @@ func ensureRealm(ctx context.Context) error {
 		return nil
 	}
 	fmt.Println("∙ création du realm ceffio (kcadm)")
-	cmd := exec.CommandContext(ctx, "kubectl", "exec", "-n", ns, "deploy/keycloak", "--",
+	cmd := k8s.Command(ctx, "kubectl", "exec", "-n", ns, "deploy/keycloak", "--",
 		"sh", "-c",
 		`/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user "$KC_BOOTSTRAP_ADMIN_USERNAME" --password "$KC_BOOTSTRAP_ADMIN_PASSWORD" >/dev/null && /opt/keycloak/bin/kcadm.sh create realms -s "realm=ceffio" -s enabled=true -s registrationAllowed=false -s loginWithEmailAllowed=true -s duplicateEmailsAllowed=false -s resetPasswordAllowed=true -s editUsernameAllowed=false -s sslRequired=external`)
 	cmd.Stdout = os.Stdout
@@ -247,7 +247,7 @@ func verifyRealm(ctx context.Context) error {
 }
 
 func psqlExec(ctx context.Context, sql string) error {
-	cmd := exec.CommandContext(ctx, "kubectl", "exec", "-i", "-c", "postgres",
+	cmd := k8s.Command(ctx, "kubectl", "exec", "-i", "-c", "postgres",
 		"-n", pgNSPod, pgPod, "--", "psql", "-U", "postgres", "-v", "ON_ERROR_STOP=1")
 	cmd.Stdin = strings.NewReader(sql)
 	out, err := cmd.CombinedOutput()
@@ -258,7 +258,7 @@ func psqlExec(ctx context.Context, sql string) error {
 }
 
 func queryKeycloakDB(ctx context.Context, sql string) (string, error) {
-	cmd := exec.CommandContext(ctx, "kubectl", "exec", "-c", "postgres",
+	cmd := k8s.Command(ctx, "kubectl", "exec", "-c", "postgres",
 		"-n", pgNSPod, pgPod, "--", "psql", "-U", "postgres", "-d", dbName, "-tAc", sql)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -268,7 +268,7 @@ func queryKeycloakDB(ctx context.Context, sql string) (string, error) {
 }
 
 func secretExists(ctx context.Context, name string) bool {
-	out, err := exec.CommandContext(ctx, "kubectl", "get", "secret", name, "-n", ns).CombinedOutput()
+	out, err := k8s.Command(ctx, "kubectl", "get", "secret", name, "-n", ns).CombinedOutput()
 	return err == nil && strings.Contains(string(out), name)
 }
 
@@ -277,7 +277,7 @@ func createSecret(ctx context.Context, name string, kv map[string]string) error 
 	for k, v := range kv {
 		args = append(args, "--from-literal="+k+"="+v)
 	}
-	out, err := exec.CommandContext(ctx, "kubectl", args...).Output()
+	out, err := k8s.Command(ctx, "kubectl", args...).Output()
 	if err != nil {
 		return fmt.Errorf("secret dry-run: %w", err)
 	}
@@ -293,7 +293,7 @@ func genSecret(n int) (string, error) {
 }
 
 func apply(ctx context.Context, manifest string) error {
-	cmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-")
+	cmd := k8s.Command(ctx, "kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(manifest)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
