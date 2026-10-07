@@ -241,3 +241,31 @@ func allNodesReady(ctx context.Context) bool {
 	}
 	return true
 }
+
+// podsApplicatifsPrets indique si tous les pods des namespaces ceffio-* sont
+// prêts. Les pods terminés (Succeeded) sont ignorés : ce sont des jobs finis.
+func podsApplicatifsPrets(ctx context.Context) bool {
+	out, err := k8s.Command(ctx, "kubectl", "get", "pods", "-A", "--no-headers").Output()
+	if err != nil {
+		return false
+	}
+	for _, l := range strings.Split(string(out), "\n") {
+		f := strings.Fields(l)
+		if len(f) < 4 || !strings.HasPrefix(f[0], "ceffio-") {
+			continue
+		}
+		// colonnes : NAMESPACE NAME READY STATUS RESTARTS AGE
+		statut := f[3]
+		if statut == "Succeeded" || statut == "Completed" {
+			continue
+		}
+		if !strings.Contains(f[2], "/") {
+			continue
+		}
+		parts := strings.SplitN(f[2], "/", 2)
+		if parts[0] != parts[1] {
+			return false
+		}
+	}
+	return true
+}
