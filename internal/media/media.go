@@ -50,6 +50,15 @@ func Deploy(ctx context.Context, domain string) error {
 		return err
 	}
 
+	// Le SSO n'est PAS branché ici.
+	//
+	// Il dépend du client OIDC « jitsi » créé par la phase SSO, qui s'exécute
+	// APRÈS ce lot. L'appeler depuis ici échouait donc systématiquement
+	// (secret jitsi-oidc absent) — et comme la visio est dans le lot PARALLÈLE,
+	// son échec faisait tomber tout le lot avec elle.
+	//
+	// C'est `install` qui appelle ConfigureSSO après sso.EnsureOIDCClients.
+
 	fmt.Println("✓ Couche visioconférence déployée (Jitsi Meet sur https://" + meet + ")")
 	return nil
 }
@@ -79,6 +88,11 @@ func ensureSecrets(ctx context.Context) error {
 }
 
 func applyManifest(ctx context.Context, meet, nodeIP string) error {
+	// L'autorité interne doit exister dans le namespace AVANT l'adaptateur SSO,
+	// qui la monte pour joindre Keycloak.
+	if err := creerConfigMapCA(ctx); err != nil {
+		return err
+	}
 	fmt.Println("∙ Jitsi web/prosody/jicofo/jvb (stable-11146-2) + Service UDP 10000")
 	manifest := fmt.Sprintf(`apiVersion: v1
 kind: PersistentVolumeClaim
@@ -370,4 +384,34 @@ func genSecret(n int) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// creerConfigMapCA garantit la présence de l'autorité interne dans le namespace
+// de la visio : l'adaptateur SSO la monte pour joindre Keycloak en interne.
+//
+// Le ConfigMap est posé par la phase ingress ; on le recrée ici au cas où la
+// visio serait déployée seule, sans quoi l'adaptateur resterait en attente d'un
+// volume inexistant.
+func creerConfigMapCA(ctx context.Context) error {
+	ca, err := k8s.Command(ctx, "kubectl", "get", "configmap", "ceffio-ca-cm", "-n", ns).Output()
+	if err == nil && len(ca) > 0 {
+		return nil
+	}
+	// Absent : on le reconstruit depuis la source de vérité (le secret CA).
+	out, err := k8s.Command(ctx, "kubectl", "get", "secret", "ceffio-ca-tls", "-n", "cert-manager",
+		"-o", `jsonpath={.data.ca\.crt}`).Output()
+	if err != nil {
+		return fmt.Errorf("lecture de l'autorité interne: %w", err)
+	}
+	b, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(out)))
+	if err != nil {
+		return err
+	}
+	cmd := k8s.Command(ctx, "sh", "-c",
+		"kubectl create configmap ceffio-ca-cm -n "+ns+" --from-file=ceffio-ca.crt=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -")
+	cmd.Stdin = strings.NewReader(string(b))
+	cmd.Env = k8s.Env()
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }

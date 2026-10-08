@@ -23,7 +23,11 @@ const (
 	synapseImage = "docker.io/matrixdotorg/synapse:v1.160.0"
 	elementImage = "docker.io/vectorim/element-web:v1.12.27"
 	ns           = "ceffio-chat"
-	serverName   = "matrix.ceffio.local"
+	// serverName n'est PAS une constante : il dépend du domaine de déploiement.
+	// Une valeur figée sur matrix.ceffio.local réécrivait le ConfigMap à chaque
+	// déploiement, annulant tout alignement fait à la main — et Synapse refuse
+	// alors de démarrer (« Found users in database not native to matrix.ceffio.local »).
+	// Voir serverNamePour(domain).
 	// PostgreSQL.
 	pgPod     = "ceffio-pg-1"
 	pgNSPod   = "ceffio-data"
@@ -38,7 +42,20 @@ const (
 //  1. rôle + secret PostgreSQL dédié à Synapse + secret registration
 //  2. Synapse (postgres, media PVC) + Service
 //  3. Element Web (config homeserver) + Service
-func Deploy(ctx context.Context) error {
+//
+// serverNamePour donne le server_name Synapse pour un domaine donné.
+//
+// Synapse lie son identité à ce nom dans sa base : le changer après coup est
+// refusé par le serveur lui-même. Il doit donc venir du déploiement, jamais
+// d'une constante — sinon le moindre redéploiement casse l'instance.
+func serverNamePour(domain string) string {
+	if domain == "" {
+		domain = "ceffio.local"
+	}
+	return "matrix." + domain
+}
+
+func Deploy(ctx context.Context, domain string) error {
 	fmt.Println("\nDéploiement de la couche chat (Phase 7)...")
 
 	if err := ensureSynapseDB(ctx); err != nil {
@@ -47,7 +64,7 @@ func Deploy(ctx context.Context) error {
 	if err := ensureSecrets(ctx); err != nil {
 		return err
 	}
-	if err := applyWorkload(ctx); err != nil {
+	if err := applyWorkload(ctx, domain); err != nil {
 		return err
 	}
 	if err := waitSynapseReady(ctx); err != nil {
@@ -92,7 +109,7 @@ func ensureSecrets(ctx context.Context) error {
 	return createSecretS(ctx, "synapse-secrets", vals)
 }
 
-func applyWorkload(ctx context.Context) error {
+func applyWorkload(ctx context.Context, domain string) error {
 	fmt.Println("∙ Synapse " + synapseImage)
 	dbPassword, err := readSecretValue(ctx, "synapse-db", "password")
 	if err != nil {
@@ -142,7 +159,7 @@ data:
     registration_shared_secret: "%s"
     macaroon_secret_key: "%s"
     form_secret: "%s"
-    signing_key_path: /data/matrix.ceffio.local.signing.key
+    signing_key_path: /data/%s.signing.key
     trusted_key_servers:
       - server_name: "matrix.org"
     report_stats: false
@@ -298,9 +315,9 @@ spec:
     - name: http
       port: 8080
       targetPort: 80
-`, ns, serverName, dbUser, dbPassword, dbName, dbService,
-		registration, macaroon, form,
-		ns, ns, synapseImage, serverName, ns, ns, ns, elementImage, ns)
+`, ns, serverNamePour(domain), dbUser, dbPassword, dbName, dbService,
+		registration, macaroon, form, serverNamePour(domain),
+		ns, ns, synapseImage, serverNamePour(domain), ns, ns, ns, elementImage, ns)
 	return apply(ctx, manifest)
 }
 
@@ -392,7 +409,7 @@ func apply(ctx context.Context, manifest string) error {
 
 // ConfigureOIDC ajoute le SSO Synapse ← Keycloak (provider OIDC) au homeserver.yaml
 // puis redémarre Synapse. Idempotent.
-func ConfigureOIDC(ctx context.Context) error {
+func ConfigureOIDC(ctx context.Context, domain string) error {
 	fmt.Println("SSO Synapse ← Keycloak...")
 	clientID, err := readOIDCSecret(ctx, "client-id")
 	if err != nil {
@@ -411,9 +428,9 @@ func ConfigureOIDC(ctx context.Context) error {
 		return nil
 	}
 	block := fmt.Sprintf(`oidc_providers:
-  - idp_id: keycloak
+  - idp_id: ceffio
     idp_name: Ceffio
-    issuer: "http://keycloak.ceffio-identity.svc:8080/realms/ceffio"
+    issuer: "https://keycloak.%s/realms/ceffio"
     client_id: "%s"
     client_secret: "%s"
     scopes: ["openid", "profile", "email"]
@@ -421,7 +438,7 @@ func ConfigureOIDC(ctx context.Context) error {
       config:
         localpart_template: "{{ user.preferred_username }}"
         display_name_template: "{{ user.name }}"
-`, clientID, clientSecret)
+`, domain, clientID, clientSecret)
 	if err := applyConfigMapData(ctx, "synapse-config", map[string]string{"homeserver.yaml": yamlData + "\n" + block}); err != nil {
 		return err
 	}

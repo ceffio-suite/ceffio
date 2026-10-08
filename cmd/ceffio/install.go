@@ -157,7 +157,7 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	fmt.Println("\n∙ phases 5/7/10 en parallèle (fichiers ‖ chat ‖ visio)")
 	appTasks := []namedTask{
 		{"fichiers (Phase 5)", func(ctx context.Context) error { return files.Deploy(ctx) }},
-		{"chat (Phase 7)", func(ctx context.Context) error { return chat.Deploy(ctx) }},
+		{"chat (Phase 7)", func(ctx context.Context) error { return chat.Deploy(ctx, o.domain) }},
 	}
 	if o.video {
 		appTasks = append(appTasks, namedTask{"visio (Phase 10)", func(ctx context.Context) error {
@@ -175,13 +175,21 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	}
 
 	// 12. SSO (login unique du MVB) : clients OIDC Keycloak + Nextcloud + Synapse.
-	if err := sso.EnsureOIDCClients(ctx); err != nil {
+	if err := sso.EnsureOIDCClients(ctx, o.domain); err != nil {
 		return err
 	}
-	if err := files.ConfigureOIDC(ctx); err != nil {
+	// Le SSO Jitsi vient ICI, après la création du client OIDC « jitsi » dont il
+	// dépend. Le brancher depuis la phase visio le faisait échouer : le client
+	// n'existait pas encore.
+	if o.video {
+		if err := media.ConfigureSSO(ctx, o.domain); err != nil {
+			return err
+		}
+	}
+	if err := files.ConfigureOIDC(ctx, o.domain); err != nil {
 		return err
 	}
-	if err := chat.ConfigureOIDC(ctx); err != nil {
+	if err := chat.ConfigureOIDC(ctx, o.domain); err != nil {
 		return err
 	}
 

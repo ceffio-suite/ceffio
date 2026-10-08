@@ -278,7 +278,7 @@ func apply(ctx context.Context, manifest string) error {
 
 // ConfigureOIDC branche Nextcloud sur le SSO Keycloak : app user_oidc + provider.
 // Idempotent (l'app et le provider tolèrent "déjà présent").
-func ConfigureOIDC(ctx context.Context) error {
+func ConfigureOIDC(ctx context.Context, domain string) error {
 	fmt.Println("SSO Nextcloud ← Keycloak...")
 	if err := ensureOccApp(ctx, "user_oidc"); err != nil {
 		return err
@@ -291,10 +291,34 @@ func ConfigureOIDC(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("secret nextcloud-oidc: %w", err)
 	}
-	const discovery = "http://keycloak.ceffio-identity.svc:8080/realms/ceffio/.well-known/openid-configuration"
+	// Le point de découverte doit être le nom PUBLIC, pas l'adresse interne du
+	// cluster. Nextcloud reprend les endpoints annoncés par Keycloak : interrogé
+	// en interne, il recevait « http://keycloak.ceffio-identity.svc:8080 » et
+	// redirigeait le navigateur vers une adresse injoignable de l'extérieur
+	// (constaté : « keycloak...:8080 » dans l'URL d'autorisation).
+	//
+	// Keycloak porte KC_HOSTNAME_URL : interrogé par son nom public, il annonce
+	// des endpoints publics — ceux que le navigateur peut réellement joindre.
+	// Le domaine n'est donc plus figé ici : il vient du déploiement.
+	if domain == "" {
+		return fmt.Errorf("domaine requis pour construire le point de découverte OIDC")
+	}
+	discovery := "https://keycloak." + domain + "/realms/ceffio/.well-known/openid-configuration"
 	out, err := runOccOutput(ctx, "user_oidc:provider", "Ceffio", "-c", clientID, "-s", clientSecret, "-d", discovery)
 	if err != nil && !strings.Contains(out, "already") {
 		return fmt.Errorf("user_oidc:provider: %w: %s", err, out)
+	}
+	// Le provider existant peut avoir été créé avec l'ancienne URL interne : on
+	// le met à jour pour que la correction s'applique sans reinstaller.
+	runOccOutput(ctx, "user_oidc:provider", "Ceffio", "-d", discovery)
+	runOccOutput(ctx, "user_oidc:provider", "Ceffio", "--update")
+
+	// PURGER le cache de découverte. Nextcloud mémorise les endpoints obtenus lors
+	// de la découverte et les réutilise : sans purge, il continuait de rediriger
+	// vers l'ancien domaine (constaté : auth.ceffio.local) alors que Keycloak
+	// annonçait déjà la bonne adresse. Le cache doit suivre la configuration.
+	for _, cle := range []string{"provider-1-jwksCache", "provider-1-jwksCacheTimestamp"} {
+		runOccOutput(ctx, "config:app:delete", "user_oidc", cle)
 	}
 	fmt.Println("✓ SSO Nextcloud configuré (user_oidc + provider Ceffio)")
 	return nil

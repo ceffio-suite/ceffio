@@ -150,8 +150,12 @@ spec:
               value: "true"
             - name: KC_METRICS_ENABLED
               value: "true"
-            - name: KC_HOSTNAME
-              value: auth.ceffio.local
+            # KC_HOSTNAME n'est PAS défini ici : sa valeur était figée sur
+            # l'ancien domaine (auth.ceffio.local), et Keycloak s'en sert pour
+            # construire les endpoints qu'il ANNONCE — la redirection SSO partait
+            # donc vers un domaine inexistant. C'est la phase ingress
+            # (adoptKeycloakHost) qui pose KC_HOSTNAME / KC_HOSTNAME_URL avec le
+            # domaine courant. Un doublon figé ici ne ferait que la contredire.
             - name: KC_HOSTNAME_STRICT
               value: "false"
           ports:

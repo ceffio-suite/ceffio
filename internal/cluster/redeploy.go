@@ -45,7 +45,7 @@ func Redeployer(ctx context.Context, domain string, video bool) error {
 	if err := files.Deploy(ctx); err != nil {
 		return err
 	}
-	if err := chat.Deploy(ctx); err != nil {
+	if err := chat.Deploy(ctx, domain); err != nil {
 		return err
 	}
 	if video {
@@ -61,13 +61,18 @@ func Redeployer(ctx context.Context, domain string, video bool) error {
 
 	// 5. SSO puis ingress : ces étapes écrivent dans les applications, elles
 	//    passent donc en dernier.
-	if err := sso.EnsureOIDCClients(ctx); err != nil {
+	if err := sso.EnsureOIDCClients(ctx, domain); err != nil {
 		return err
 	}
-	if err := files.ConfigureOIDC(ctx); err != nil {
+	if video {
+		if err := media.ConfigureSSO(ctx, domain); err != nil {
+			return err
+		}
+	}
+	if err := files.ConfigureOIDC(ctx, domain); err != nil {
 		return err
 	}
-	if err := chat.ConfigureOIDC(ctx); err != nil {
+	if err := chat.ConfigureOIDC(ctx, domain); err != nil {
 		return err
 	}
 	if domain != "" {

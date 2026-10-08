@@ -20,11 +20,9 @@ import (
 )
 
 const (
-	ns             = "ceffio-identity"
-	realm          = "ceffio"
-	keycloakDepl   = "deploy/keycloak"
-	redirNextcloud = `http://cloud.demo.local/*,http://localhost/*`
-	redirSynapse   = `http://synapse.ceffio-chat.svc:8008/*,http://chat.demo.local/*,http://localhost/*`
+	ns           = "ceffio-identity"
+	realm        = "ceffio"
+	keycloakDepl = "deploy/keycloak"
 )
 
 type client struct {
@@ -33,18 +31,47 @@ type client struct {
 	redirects string
 }
 
-var clients = []client{
-	{app: "nextcloud", id: "nextcloud", redirects: redirNextcloud},
-	{app: "synapse", id: "synapse", redirects: redirSynapse},
+// clientsOIDC construit la liste des clients avec le domaine COURANT.
+//
+// Une redirect_uri doit être joignable par le NAVIGATEUR : les adresses
+// internes du cluster (svc.cluster.local) et les anciens domaines de démo
+// (demo.local) n'ont rien à y faire. Elles traînaient pourtant ici, figées —
+// un vestige de l'installation d'origine.
+//
+// Chaque application reçoit son adresse publique, plus localhost pour le
+// développement local.
+func clientsOIDC(domain string) []client {
+	return []client{
+		{
+			app:       "nextcloud",
+			id:        "nextcloud",
+			redirects: fmt.Sprintf("https://cloud.%s/apps/user_oidc/code,http://localhost/*", domain),
+		},
+		{
+			app:       "synapse",
+			id:        "synapse",
+			redirects: fmt.Sprintf("https://matrix.%s/_synapse/client/oidc/callback,http://localhost/*", domain),
+		},
+		{
+			// Jitsi ne fait pas d'OIDC lui-même : c'est l'adaptateur qui s'en
+			// charge, et sa redirection revient sur le frontend Jitsi.
+			app:       "jitsi",
+			id:        "jitsi",
+			redirects: fmt.Sprintf("https://meet.%s/*,http://localhost/*", domain),
+		},
+	}
 }
 
 // EnsureOIDCClients garantit l'existence des clients OIDC Keycloak (nextcloud,
 // synapse) avec un secret généré stocké en secret Kubernetes. Idempotent et
 // auto-réparant : recrée un client absent (en réutilisant le secret stocké),
 // et (re)pose le secret si manquant.
-func EnsureOIDCClients(ctx context.Context) error {
+func EnsureOIDCClients(ctx context.Context, domain string) error {
 	fmt.Println("Déploiement du SSO Keycloak (Phase 8)...")
-	for _, c := range clients {
+	if domain == "" {
+		return fmt.Errorf("domaine requis pour construire les redirect_uri OIDC")
+	}
+	for _, c := range clientsOIDC(domain) {
 		sec := c.app + "-oidc"
 		uuid, err := ensureClient(ctx, c.id, c.redirects)
 		if err != nil {
@@ -73,7 +100,7 @@ func EnsureOIDCClients(ctx context.Context) error {
 			fmt.Printf("∙ client OIDC %s réconcilié (secret → %s)\n", c.id, sec)
 		}
 	}
-	fmt.Println("✓ Clients OIDC Keycloak prêts (nextcloud, synapse)")
+	fmt.Println("✓ Clients OIDC Keycloak prêts (nextcloud, synapse, jitsi)")
 	return nil
 }
 
