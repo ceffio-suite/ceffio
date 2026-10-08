@@ -294,7 +294,16 @@ func waitWebReady(ctx context.Context) error {
 		return err
 	}
 	// Vérification fonctionnelle : le frontend sert le HTML de Jitsi Meet.
+	//
+	// Le contexte est RESPECTÉ à chaque tour : sans cela, un cancel() du lot
+	// parallèle (erreur d'une tâche sœur) n'interrompait ni la boucle ni les
+	// kubectl en vol. Le processus continuait bien après que le lot eut rendu
+	// la main — kubectl orphelins, et des lignes « visio » qui arrivent
+	// décalées de plusieurs minutes, faisant croire à un appel dupliqué.
 	for i := 0; i < 30; i++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		o, _ := k8s.Command(ctx, "kubectl", "exec", "deploy/web", "-n", ns, "--",
 			"sh", "-c", "curl -fs -o /dev/null -w '%{http_code}' http://localhost:8000/").Output()
 		if strings.TrimSpace(string(o)) == "200" {
@@ -302,7 +311,12 @@ func waitWebReady(ctx context.Context) error {
 			return nil
 		}
 		k8s.Command(ctx, "kubectl", "wait", "--for=condition=ready", "pod", "-n", ns, "-l", "app=web", "--timeout=5s").Run()
-		time.Sleep(5 * time.Second)
+		// Attente interruptible : un time.Sleep ne rend pas la main au cancel.
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
 	}
 	return fmt.Errorf("frontend Jitsi web injoignable après retries")
 }

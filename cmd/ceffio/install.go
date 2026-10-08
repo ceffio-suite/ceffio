@@ -202,12 +202,11 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 		return err
 	}
 
-	// 12. Visioconférence (Phase 10) : Jitsi Meet sur meet.<domain> — optionnel (--video).
-	if o.video {
-		if err := media.Deploy(ctx, o.domain); err != nil {
-			return err
-		}
-	}
+	// La visioconférence a déjà été déployée dans le lot parallèle ci-dessus
+	// (Phase 10, avec fichiers ‖ chat). Ne PAS la rejouer ici : l'appel
+	// dupliqué ne faisait que reconfirmer ce qui était fait, en payant une
+	// seconde fois l'attente `kubectl rollout status` (240 s au pire) pour un
+	// résultat identique. Un déploiement deux fois plus long sans bénéfice.
 	return nil
 }
 
