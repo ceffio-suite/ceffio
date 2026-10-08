@@ -153,8 +153,14 @@ spec:
 			"secretKeyRef": map[string]string{"name": "jitsi-jwt", "key": "app-secret"}}},
 		{"name": "JWT_ACCEPTED_ISSUERS", "value": "jitsi"},
 		{"name": "JWT_ACCEPTED_AUDIENCES", "value": "jitsi"},
-		{"name": "ENABLE_GUESTS", "value": "1"},
-		{"name": "ENABLE_AUTO_LOGIN", "value": "0"},
+		// ENABLE_GUESTS=0 est INDISPENSABLE pour un SSO obligatoire :
+		// à 1, le frontend injecte `anonymousdomain` dans config.js et tout
+		// visiteur entre en invité SANS jeton — la boîte « login » que
+		// body.html intercepte n'apparaît jamais, le SSO ne se déclenche
+		// donc jamais. Conséquence : seules les personnes authentifiées via
+		// Keycloak peuvent créer ET rejoindre une salle.
+		{"name": "ENABLE_GUESTS", "value": "0"},
+		{"name": "ENABLE_AUTO_LOGIN", "value": "1"},
 	}
 	if err := patcherWebOIDC(ctx, envWeb); err != nil {
 		return fmt.Errorf("patch frontend Jitsi: %w", err)
