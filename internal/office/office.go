@@ -187,7 +187,11 @@ func connectNextcloud(ctx context.Context) error {
 	if err := runOcc(ctx, "config:app:set", "onlyoffice", "DocumentServerInternalUrl", "--value="+officeService); err != nil {
 		return fmt.Errorf("DocumentServerInternalUrl: %w", err)
 	}
-	if err := runOcc(ctx, "config:app:set", "onlyoffice", "secret", "--value="+jwt); err != nil {
+	// Le connecteur ONLYOFFICE lit la clé « jwt_secret » (AppConfig::$_jwtSecret),
+	// PAS « secret ». Écrire « secret » laissait le connecteur signer les requêtes
+	// avec un secret vide → le Document Server répondait error -8 « Invalid token »
+	// et Nextcloud affichait « le jeton de sécurité n'était pas formé correctement ».
+	if err := runOcc(ctx, "config:app:set", "onlyoffice", "jwt_secret", "--value="+jwt); err != nil {
 		return fmt.Errorf("secret (JWT): %w", err)
 	}
 	// Ouvre PAR DÉFAUT tous les formats supportés (OOXML + ODF) au clic simple.
