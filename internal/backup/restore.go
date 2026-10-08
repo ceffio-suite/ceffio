@@ -204,6 +204,26 @@ func execSQL(ctx context.Context, pod, db, sql string) error {
 	return nil
 }
 
+// itoa convertit un entier en chaîne (évite d'importer strconv pour si peu).
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	var b []byte
+	for n > 0 {
+		b = append([]byte{byte('0' + n%10)}, b...)
+		n /= 10
+	}
+	if neg {
+		return "-" + string(b)
+	}
+	return string(b)
+}
+
 // quoteIdent protège un nom d'identifiant SQL (les noms de bases sont fixes
 // dans ce programme, mais la fonction est réutilisable sans piège).
 func quoteIdent(s string) string {
@@ -230,12 +250,22 @@ func restoreVolume(ctx context.Context, v Volume, pod, tarPath string) error {
 	}
 	defer f.Close()
 
+	// --no-same-owner : le tar a été pris en root, l'extraction se fait avec
+	// l'utilisateur du conteneur ; sans cette option tar tente de restaurer la
+	// propriété et échoue sur le point de montage.
+	// Puis l'ownership est REMIS explicitement à l'UID/GID attendu par
+	// l'application : sans ce chown, tout appartient à root et l'application
+	// (www-data pour Nextcloud) perd le droit d'écrire — panne silencieuse
+	// constatée en test (Nextcloud 503 après restauration).
+	// cp -R sans --preserve : préserver les horodatages de la cible échoue sur
+	// un point de montage.
 	const staging = ".ceffio-restore"
 	script := "set -e; " +
 		"rm -rf " + v.Path + "/" + staging + "; " +
 		"mkdir -p " + v.Path + "/" + staging + "; " +
 		"tar xzf - --no-same-owner -C " + v.Path + "/" + staging + "; " +
 		"cp -R " + v.Path + "/" + staging + "/. " + v.Path + "/; " +
+		"chown -R " + itoa(v.UID) + ":" + itoa(v.GID) + " " + v.Path + " 2>/dev/null || true; " +
 		"rm -rf " + v.Path + "/" + staging
 
 	cmd := k8s.Command(ctx, "kubectl", "exec", "-i", "-n", v.Namespace, pod, "--", "sh", "-c", script)

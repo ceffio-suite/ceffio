@@ -54,7 +54,11 @@ Exemples :
 	}
 
 	f := c.Flags()
-	f.StringVar(&o.domain, "domain", "", "Domaine de base (ex. company.fr)")
+	// DÉFAUT DE PRODUCTION : *.ceffio.mandem-it.com est le domaine de reference
+	// de l'installation en service (DNS wildcard + certificat + OPNsense câblés).
+	// Consigne utilisateur : tout deploiement passe par ce domaine jusqu'a
+	// nouvel ordre. Surchargeable avec --domain pour un autre environnement.
+	f.StringVar(&o.domain, "domain", "ceffio.mandem-it.com", "Domaine de base (ex. company.fr)")
 	f.StringVar(&o.profile, "profile", "small", "Profil de déploiement (small, business-50, business-100, enterprise-ha)")
 	f.StringVar(&o.runtime, "runtime", "k3s", "Runtime Kubernetes (k3s, rke2)")
 	f.BoolVar(&o.existingCluster, "existing-cluster", false, "Utiliser un cluster Kubernetes existant")

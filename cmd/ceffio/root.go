@@ -35,6 +35,7 @@ Stalwart) derrière une expérience unifiée d'installation et de gestion.`,
 		newUpgradeCmd(),
 		newUsersCmd(),
 		newDNSCmd(),
+		newExposeCmd(),
 	)
 
 	return c

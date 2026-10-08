@@ -105,6 +105,23 @@ func AdoptURLs(ctx context.Context, domain string) error {
 		return err
 	}
 
+	// 6b) Traefik derrière un proxy amont. Sans cela, un pare-feu qui termine le
+	// TLS (OPNsense, Caddy, nginx) transmet en HTTP et Traefik annonce
+	// X-Forwarded-Proto: http → les applications redirigent en http:// depuis un
+	// client https. Constaté en production sur Keycloak.
+	if err := ProxyAmont(ctx, "192.168.1.0/24"); err != nil {
+		return err
+	}
+
+	// 6c) Retirer les anciens domaines des configurations. Une installation migrée
+	// garde sinon l'ancien nom codé en dur (constaté : demo.local dans Keycloak,
+	// Element, Synapse) et redirige vers un domaine qui n'existe plus.
+	for _, ancien := range DomainesConnus(domain) {
+		if err := NettoyerAncienDomaine(ctx, ancien, domain); err != nil {
+			return err
+		}
+	}
+
 	// 7) Durcissement DEMO uniquement (domaine privé `.local`, TLS auto-signé) :
 	// hostAliases→Traefik + injection CA dans les pods. Un vrai domaine public n'en
 	// a pas besoin (DNS réel + CA Let's Encrypt).

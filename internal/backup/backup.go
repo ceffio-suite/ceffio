@@ -48,10 +48,14 @@ var Bases = []string{"mysuite", "keycloak", "nextcloud", "synapse"}
 // Volumes à sauvegarder : namespace, nom du PVC, et le sous-chemin utile
 // (certains volumes contiennent à côté des données un état sans intérêt).
 var Volumes = []Volume{
-	{Namespace: "ceffio-files", PVC: "nextcloud-data", PodLabel: "app=nextcloud", Path: "/var/www/html/data"},
-	{Namespace: "ceffio-chat", PVC: "synapse-media", PodLabel: "app=synapse", Path: "/data/media_store"},
-	{Namespace: "ceffio-office", PVC: "onlyoffice-data", PodLabel: "app=onlyoffice", Path: "/var/lib/onlyoffice"},
-	{Namespace: "ceffio-video", PVC: "jitsi-config", PodLabel: "app=prosody", Path: "/config"},
+	{Namespace: "ceffio-files", PVC: "nextcloud-data", PodLabel: "app=nextcloud",
+		Path: "/var/www/html/data", UID: 33, GID: 33}, // www-data
+	{Namespace: "ceffio-chat", PVC: "synapse-media", PodLabel: "app=synapse",
+		Path: "/data/media_store", UID: 991, GID: 991},
+	{Namespace: "ceffio-office", PVC: "onlyoffice-data", PodLabel: "app=onlyoffice",
+		Path: "/var/lib/onlyoffice", UID: 0, GID: 0},
+	{Namespace: "ceffio-video", PVC: "jitsi-config", PodLabel: "app=prosody",
+		Path: "/config", UID: 0, GID: 0},
 }
 
 // Secrets applicatifs : sans eux, les données restaurées sont orphelines.
@@ -89,6 +93,12 @@ type Volume struct {
 	PVC       string `json:"pvc"`
 	PodLabel  string `json:"-"`
 	Path      string `json:"path"`
+	// UID/GID que l'application attend sur ce volume. Indispensable à la
+	// restauration : sans ce rétablissement, les fichiers extraits restent
+	// propriété de root et l'application — qui tourne sous un autre compte —
+	// perd le droit d'écrire (cas vécu : Nextcloud en 503 après restauration).
+	UID int `json:"uid"`
+	GID int `json:"gid"`
 }
 
 // Entry décrit un élément sauvegardé : c'est ce qui permet de vérifier
