@@ -183,7 +183,21 @@ spec:
         - {name: XMPP_INTERNAL_MUC_DOMAIN, value: "internal-muc.%[11]s"}
         - {name: JVB_AUTH_USER, value: videobridge}
         - {name: JVB_AUTH_PASSWORD, valueFrom: {secretKeyRef: {name: jitsi-secrets, key: jvb-auth}}}
+        # JVB_PORT DOIT etre defini explicitement. Sinon le template de l'image
+        # ({{ .Env.JVB_PORT | default 10000 }}) trouve une AUTRE variable :
+        # Kubernetes cree automatiquement <SERVICE>_PORT_<PORT>_<PROTO> pour
+        # chaque port de Service expose, donc le Service jvb (4443/TCP) fait
+        # naitre « JVB_PORT_4443_TCP=tcp://IP:4443 ». Le nom se prefixe et le
+        # template lit cette URL comme numero de port -> jvb.conf contient
+        # « port = tcp://10.43.61.6:4443 », ligne invalide, JVB refuse de
+        # demarrer (ConfigException$Parse). Consequence : visio entierement HS.
+        - {name: JVB_PORT, value: "10000"}
         - {name: JVB_ADVERTISE_IPS, value: %[10]s}
+        # Annonce l'IP publique ET l'IP interne : le navigateur choisit celle
+        # qui est joignable (distant vs local). Sans l'IP publique, le media
+        # est injoignable depuis Internet (l'image arrive, pas le son).
+        - {name: JVB_TCP_HARVESTER_DISABLED, value: "false"}
+        - {name: JVB_DISABLE_STUN, value: "false"}
         - {name: PUBLIC_URL, value: "https://%[11]s"}
         - {name: TZ, value: Europe/Paris}
         ports:
