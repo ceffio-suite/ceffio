@@ -122,13 +122,21 @@ func AdoptURLs(ctx context.Context, domain string) error {
 		}
 	}
 
-	// 7) Durcissement DEMO uniquement (domaine privé `.local`, TLS auto-signé) :
-	// hostAliases→Traefik + injection CA dans les pods. Un vrai domaine public n'en
-	// a pas besoin (DNS réel + CA Let's Encrypt).
-	if isDemo(domain) {
-		if err := HardenDemo(ctx, domain); err != nil {
-			return err
-		}
+	// 7) Confiance TLS interne — TOUJOURS, pas seulement en demo.
+	//
+	// Le durcissement était enfermé dans `if isDemo(domain)` : sur un domaine
+	// public il était donc sauté, et l'injection de CA de l'installation
+	// d'origine (faite sur demo.local) restait en place — avec son SSL_CERT_FILE
+	// amputé des autorités publiques. Conséquence : le callback OIDC de Synapse
+	// vers Keycloak échouait sur « certificate verify failed » alors que le
+	// certificat présenté était un Let's Encrypt valide.
+	//
+	// Les services s'appellent entre eux par leur nom PUBLIC en https (derrière
+	// Traefik), donc l'autorité interne doit être reconnue dans les deux cas.
+	// Seuls les hostAliases sont propres à la demo : sur un domaine public le DNS
+	// résout réellement, et les écraser enverrait le trafic au mauvais endroit.
+	if err := InjecterConfianceTLS(ctx, domain, isDemo(domain)); err != nil {
+		return err
 	}
 
 	fmt.Println("✓ URLs publiques adoptées dans Element, Synapse, Nextcloud, ONLYOFFICE, Keycloak + redirects SSO")
@@ -187,10 +195,22 @@ func rewriteSynapseOidc(ctx context.Context, domain string) error {
 	return rolloutRestart(ctx, "deploy/synapse")
 }
 
-// HardenDemo (déploiements DEMO uniquement) : hostAliases → Traefik + CA ceffio injectée
-// pour que les calls serveur→serveur en https public fonctionnent.
-func HardenDemo(ctx context.Context, domain string) error {
-	fmt.Println("Durcissement DEMO : hostAliases→Traefik + CA ceffio injectée...")
+// InjecterConfianceTLS rend l'autorité interne reconnaissable par les services,
+// pour que leurs appels serveur→serveur en https public aboutissent.
+//
+// S'applique TOUJOURS (domaine public comme demo) : les applications s'appellent
+// par leur nom public, et ce certificat est signé par notre autorité.
+//
+// avecHostAliases est réservé à la demo : là seulement, le DNS ne résout pas les
+// noms publics et il faut les router de force vers Traefik. Sur un domaine
+// public, poser des hostAliases serait nuisible — le trafic doit passer par le
+// vrai DNS, pas être détourné vers le cluster.
+func InjecterConfianceTLS(ctx context.Context, domain string, avecHostAliases bool) error {
+	if avecHostAliases == false {
+		fmt.Println("Confiance TLS interne (CA ceffio injectée, sans hostAliases — domaine public)...")
+	} else {
+		fmt.Println("Confiance TLS interne + hostAliases→Traefik (demo)...")
+	}
 	tip, err := svcIP(ctx, "traefik", "kube-system")
 	if err != nil {
 		return fmt.Errorf("IP Traefik: %w", err)
@@ -203,37 +223,69 @@ func HardenDemo(ctx context.Context, domain string) error {
 	cloud := "cloud." + domain
 	office := "office." + domain
 
+	// En domaine public, hosts reste VIDE : cela purge les hostAliases posés du
+	// temps de demo.local (un « hostAliases: null » les retire) et laisse le vrai
+	// DNS faire son travail.
+	hostsKeycloak, hostsAutres := []string{kc}, []string{kc, office}
+	hostsOffice := []string{cloud, office, kc}
+	if !avecHostAliases {
+		hostsKeycloak, hostsAutres, hostsOffice = nil, nil, nil
+	}
+
 	// Nextcloud (PHP) : CA via php.ini pointant sur la CA montée (persistant pour PHP).
 	if err := createCAConfigs(ctx, "ceffio-files", ca); err != nil {
 		return err
 	}
+	// SSL_CERT_FILE REMPLACE la liste par défaut (voir la note Synapse plus bas) :
+	// on pointe sur le paquet COMBINÉ, sinon Nextcloud perd toute confiance dans
+	// les certificats publics et ses appels sortants échouent.
 	if err := patchApp(ctx, "ceffio-files", "nextcloud", "nextcloud", tip,
-		[]string{kc, office}, []envKV{{"SSL_CERT_FILE", "/etc/ceffio-ca/ceffio-ca.crt"}}, true); err != nil {
+		hostsAutres, []envKV{{"SSL_CERT_FILE", cheminPaquetCombine}}, true); err != nil {
 		return err
 	}
 
-	// Synapse (Python) : SSL_CERT_FILE.
+	// Synapse (Python) : le paquet COMBINÉ, pas notre seule autorité.
+	//
+	// SSL_CERT_FILE n'est pas une liste d'appoint : c'est LA liste des autorités
+	// que Python utilise. Y mettre seulement notre autorité interne AMPUTE la
+	// confiance — Synapse refuse alors tout certificat public. C'est ce qui
+	// cassait le callback OIDC : Keycloak présente un certificat Let's Encrypt
+	// valide, et Synapse le rejetait sur « certificate verify failed ».
+	// On enrichit donc : autorités système + la nôtre.
 	if err := createCAConfigs(ctx, "ceffio-chat", ca); err != nil {
 		return err
 	}
 	if err := patchApp(ctx, "ceffio-chat", "synapse", "synapse", tip,
-		[]string{kc}, []envKV{{"SSL_CERT_FILE", "/etc/ceffio-ca/ceffio-ca.crt"}}, false); err != nil {
+		hostsKeycloak, []envKV{{"SSL_CERT_FILE", cheminPaquetCombine}}, false); err != nil {
 		return err
 	}
 
 	// ONLYOFFICE (Node.js) : NODE_EXTRA_CA_CERTS.
+	// Celui-ci AJOUTE à la liste des autorités, il ne la remplace pas — on peut
+	// donc pointer sur notre seule autorité sans perdre les certificats publics.
+	// NE PAS « uniformiser » avec le paquet combiné : ce serait correct aussi,
+	// mais inutilement plus lourd.
 	if err := createCAConfigs(ctx, "ceffio-office", ca); err != nil {
 		return err
 	}
 	if err := patchApp(ctx, "ceffio-office", "onlyoffice", "onlyoffice", tip,
-		[]string{cloud, office, kc}, []envKV{{"NODE_EXTRA_CA_CERTS", "/etc/ceffio-ca/ceffio-ca.crt"}}, false); err != nil {
+		hostsOffice, []envKV{{"NODE_EXTRA_CA_CERTS", "/etc/ceffio-ca/ceffio-ca.crt"}}, false); err != nil {
 		return err
 	}
-	fmt.Println("✓ Durcissement DEMO appliqué (hostAliases→" + tip + ")")
+	if avecHostAliases {
+		fmt.Println("✓ Confiance TLS interne appliquée (hostAliases→" + tip + ")")
+	} else {
+		fmt.Println("✓ Confiance TLS interne appliquée (domain public, pas de hostAliases)")
+	}
 	return nil
 }
 
 type envKV struct{ name, value string }
+
+// cheminPaquetCombine : fichier contenant les autorités du SYSTÈME plus notre
+// autorité interne. À utiliser partout où l'on pose SSL_CERT_FILE, qui REMPLACE
+// la liste par défaut au lieu de s'y ajouter.
+const cheminPaquetCombine = "/etc/ceffio-ca/paquet-combine.crt"
 
 // svcIP lit le ClusterIP d'un Service.
 func svcIP(ctx context.Context, name, ns string) (string, error) {
@@ -242,6 +294,42 @@ func svcIP(ctx context.Context, name, ns string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// paquetCombine assemble les autorités du SYSTÈME et notre autorité interne en
+// un seul fichier PEM.
+//
+// Pourquoi : SSL_CERT_FILE (Python, OpenSSL) désigne LA liste des autorités de
+// confiance, il ne s'y ajoute pas. Y mettre notre seule autorité interne rend
+// tout certificat public invalide — c'est exactement ce qui cassait le callback
+// OIDC (Keycloak présente un Let's Encrypt valide, Synapse le refusait).
+//
+// Le paquet combine donc les deux : rien n'est perdu, notre autorité est
+// reconnue.
+func paquetCombine() (string, error) {
+	systeme := ""
+	for _, f := range []string{
+		"/etc/ssl/certs/ca-certificates.crt",
+		"/etc/pki/tls/certs/ca-bundle.crt",
+		"/etc/ssl/cert.pem",
+	} {
+		if b, err := os.ReadFile(f); err == nil && len(b) > 0 {
+			systeme = string(b)
+			break
+		}
+	}
+	if systeme == "" {
+		return "", fmt.Errorf("aucun paquet d'autorités système trouvé")
+	}
+	if !strings.HasSuffix(systeme, "\n") {
+		systeme += "\n"
+	}
+	// Notre autorité est ajoutée APRÈS le paquet système.
+	out, err := caCert(context.Background())
+	if err != nil {
+		return "", err
+	}
+	return systeme + out, nil
 }
 
 // caCert lit le certificat CA de la chaîne signée par cert-manager (ceffio-ca-tls).
@@ -259,8 +347,25 @@ func caCert(ctx context.Context) (string, error) {
 
 // createCAConfigs crée les ConfigMaps ceffio-ca-cm (CA) + ceffio-phpini (php.ini) dans le ns.
 func createCAConfigs(ctx context.Context, ns, ca string) error {
+	// Deux fichiers dans le ConfigMap :
+	//   ceffio-ca.crt — notre seule autorité. Pour les mécanismes qui AJOUTENT
+	//     (NODE_EXTRA_CA_CERTS de Node, openssl.cafile de PHP, curl.cainfo).
+	//   paquet-combine.crt — autorités système + la nôtre. Obligatoire pour
+	//     SSL_CERT_FILE, qui REMPLACE la liste par défaut : pointer sur notre
+	//     seule autorité ferait refuser tout certificat public (cause du
+	//     « certificate verify failed » sur le callback OIDC de Synapse).
+	paquet, err := paquetCombine()
+	if err != nil {
+		return err
+	}
 	cmd := exec.CommandContext(ctx, "sh", "-c",
-		"kubectl create configmap ceffio-ca-cm -n "+ns+" --from-file=ceffio-ca.crt=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -")
+		"kubectl create configmap ceffio-ca-cm -n "+ns+
+			" --from-file=ceffio-ca.crt=/dev/stdin"+
+			" --from-file=paquet-combine.crt=/tmp/paquet-combine.crt"+
+			" --dry-run=client -o yaml | kubectl apply -f -")
+	if err := os.WriteFile("/tmp/paquet-combine.crt", []byte(paquet), 0o644); err != nil {
+		return err
+	}
 	cmd.Stdin = strings.NewReader(ca)
 	cmd.Env = k8s.Env()
 	cmd.Stdout = os.Stdout
@@ -268,7 +373,11 @@ func createCAConfigs(ctx context.Context, ns, ca string) error {
 	if err := cmd.Run(); err != nil {
 		return err
 	}
-	ini := "openssl.cafile=/etc/ceffio-ca/ceffio-ca.crt\ncurl.cainfo=/etc/ceffio-ca/ceffio-ca.crt\n"
+	os.Remove("/tmp/paquet-combine.crt")
+	// openssl.cafile et curl.cainfo REMPLACENT la liste par défaut (même piège
+	// que SSL_CERT_FILE) : le paquet combiné, pour ne pas perdre les autorités
+	// publiques dont PHP a besoin pour ses appels sortants.
+	ini := "openssl.cafile=" + cheminPaquetCombine + "\ncurl.cainfo=" + cheminPaquetCombine + "\n"
 	cmd2 := exec.CommandContext(ctx, "sh", "-c",
 		"kubectl create configmap ceffio-phpini -n "+ns+" --from-file=zz-ceffio.ini=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -")
 	cmd2.Stdin = strings.NewReader(ini)
@@ -280,7 +389,13 @@ func createCAConfigs(ctx context.Context, ns, ca string) error {
 
 // patchApp applique hostAliases + volume CA + env (+ php.ini) via merge patch (idempotent).
 func patchApp(ctx context.Context, ns, deploy, container, traefikIP string, hosts []string, envs []envKV, withPHPIni bool) error {
-	ha := []map[string]any{{"ip": traefikIP, "hostnames": hosts}}
+	// hosts vide = pas de hostAliases. On en pose SEULEMENT en demo : sur un
+	// domaine public, forcer la résolution vers le cluster court-circuiterait le
+	// vrai DNS et enverrait le trafic au mauvais endroit.
+	var ha []map[string]any
+	if len(hosts) > 0 {
+		ha = []map[string]any{{"ip": traefikIP, "hostnames": hosts}}
+	}
 	vols := []map[string]any{{"name": "ceffio-ca", "configMap": map[string]string{"name": "ceffio-ca-cm"}}}
 	env := []map[string]string{}
 	for _, e := range envs {
