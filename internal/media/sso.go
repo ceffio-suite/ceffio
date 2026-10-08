@@ -236,15 +236,24 @@ func creerConfigMapDepuisDonnees(ctx context.Context, nom string, donnees map[st
 }
 
 // patcherWebOIDC pose les variables ET les montages des fichiers OIDC sur le
-// conteneur web. Contrairement à patcherEnvConteneur, il préserve mounts et
-// volumes existants et ajoute ceux de l'adaptateur :
-//   - body.html / oidc-adapter.html / oidc-redirect.html en subPath (fichier par
-//     fichier : le reste de /usr/share/jitsi-meet vient toujours de l'image) ;
-//   - nginx-custom monté dans le PVC (/config/nginx-custom) : le script s6 le
-//     copie vers /run/web/config/nginx-custom, que meet.conf inclut. Monter
-//     directement sous /run casserait le script (répertoires pré-créés par
-//     kubelet en root, script non-root → Permission denied → nginx sans conf).
+// conteneur web, en PRÉSERVANT l'existant (env non-auth, mounts, volumes).
+//
+// JSON Patch (RFC 6902) — PAS strategic merge : le strategic fusionne les
+// listes par clé et ne supprime jamais une variable absente du patch
+// (TOKEN_AUTH_URL survivait et cassait le SSO).
+//
+// Montages ajoutés :
+//   - body.html / oidc-adapter.html / oidc-redirect.html en subPath (l'image
+//     livre body.html vide, index.html l'inclut en SSI) ;
+//   - nginx-custom monté dans le PVC /config : le script s6 de l'image fait
+//     « cp -r /config/. /run/web/config », et meet.conf inclut
+//     /run/web/config/nginx-custom/*.conf. Monter directement sous /run
+//     casserait le conteneur (kubelet pré-crée en root, script non-root).
 func patcherWebOIDC(ctx context.Context, env []map[string]any) error {
+	indice, existantes, err := lireEnvConteneur(ctx, "web", "web")
+	if err != nil {
+		return err
+	}
 	out, err := k8s.Command(ctx, "kubectl", "get", "deploy", "web", "-n", ns, "-o", "json").Output()
 	if err != nil {
 		return err
@@ -254,42 +263,38 @@ func patcherWebOIDC(ctx context.Context, env []map[string]any) error {
 		return err
 	}
 	spec := d["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	conteneurs := spec["containers"].([]any)
+	web := conteneurs[indice].(map[string]any)
 
-	var web map[string]any
-	for _, c := range spec["containers"].([]any) {
-		if cm, ok := c.(map[string]any); ok && cm["name"] == "web" {
-			web = cm
-		}
-	}
-	if web == nil {
-		return fmt.Errorf("conteneur « web » introuvable dans deploy/web")
-	}
+	ops := []map[string]any{}
 
-	// Volume du ConfigMap OIDC (ajouté s'il manque).
+	// 1. Volume du ConfigMap OIDC (ajouté s'il manque).
 	volumes, _ := spec["volumes"].([]any)
-	aDeja := false
+	aVolume := false
 	for _, v := range volumes {
 		if vm, ok := v.(map[string]any); ok && vm["name"] == "jitsi-oidc-static" {
-			aDeja = true
+			aVolume = true
 		}
 	}
-	if !aDeja {
-		volumes = append(volumes, map[string]any{
-			"name":      "jitsi-oidc-static",
-			"configMap": map[string]any{"name": "jitsi-oidc-static"},
+	if !aVolume {
+		ops = append(ops, map[string]any{
+			"op": "add", "path": "/spec/template/spec/volumes/-",
+			"value": map[string]any{
+				"name":      "jitsi-oidc-static",
+				"configMap": map[string]any{"name": "jitsi-oidc-static"},
+			},
 		})
-		spec["volumes"] = volumes
 	}
 
-	// Mounts : mêmes règles (idempotent par mountPath). On PURGE aussi
-	// l'ancien montage fautif sous /run (voir la note sur nginxCustomMount).
+	// 2. Mounts : purger l'ancien /run fautif, compléter par mountPath.
 	mountsBruts, _ := web["volumeMounts"].([]any)
-	var mounts []any
+	var mounts []map[string]any
 	for _, m := range mountsBruts {
-		if mm, ok := m.(map[string]any); ok && mm["mountPath"] == "/run/web/config/nginx-custom" {
+		mm, _ := m.(map[string]any)
+		if mm["mountPath"] == "/run/web/config/nginx-custom" {
 			continue
 		}
-		mounts = append(mounts, m)
+		mounts = append(mounts, mm)
 	}
 	mountsVoulus := []map[string]any{
 		{"name": "jitsi-oidc-static", "mountPath": "/usr/share/jitsi-meet/body.html", "subPath": "body.html"},
@@ -300,7 +305,7 @@ func patcherWebOIDC(ctx context.Context, env []map[string]any) error {
 	for _, voulu := range mountsVoulus {
 		present := false
 		for _, m := range mounts {
-			if mm, ok := m.(map[string]any); ok && mm["mountPath"] == voulu["mountPath"] {
+			if m["mountPath"] == voulu["mountPath"] {
 				present = true
 			}
 		}
@@ -308,86 +313,105 @@ func patcherWebOIDC(ctx context.Context, env []map[string]any) error {
 			mounts = append(mounts, voulu)
 		}
 	}
-	web["volumeMounts"] = mounts
+	ops = append(ops, map[string]any{
+		"op":    "replace",
+		"path":  fmt.Sprintf("/spec/template/spec/containers/%d/volumeMounts", indice),
+		"value": mounts,
+	})
 
-	// Env : remplacer les variables d'auth, conserver les autres, et PURGER
-	// TOKEN_AUTH_URL (posé par une première version erronée de ce code).
-	envExistantes, _ := web["env"].([]any)
-	remplaces := map[string]bool{}
-	for _, e := range env {
-		remplaces[e["name"].(string)] = true
-	}
-	var gardees []map[string]any
-	for _, e := range envExistantes {
-		em, _ := e.(map[string]any)
-		if nom, _ := em["name"].(string); !remplaces[nom] && nom != "TOKEN_AUTH_URL" {
-			gardees = append(gardees, em)
-		}
-	}
-	web["env"] = append(gardees, env...)
+	// 3. Env : liste complète fusionnée (purge TOKEN_AUTH_URL incluse).
+	ops = append(ops, map[string]any{
+		"op":    "replace",
+		"path":  fmt.Sprintf("/spec/template/spec/containers/%d/env", indice),
+		"value": fusionnerEnv(existantes, env),
+	})
 
-	patch := map[string]any{"spec": map[string]any{"template": map[string]any{"spec": spec}}}
-	b, err := json.Marshal(patch)
+	b, err := json.Marshal(ops)
 	if err != nil {
 		return err
 	}
-	cmd := k8s.Command(ctx, "kubectl", "patch", "deploy", "web", "-n", ns, "--type=strategic", "-p", string(b))
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return appliquerJSONPatch(ctx, "web", b)
 }
 
 // patcherEnvConteneur remplace les variables d'un conteneur en préservant les
-// autres. Patch ASSEMBLÉ par json.Marshal : un littéral JSON écrit à la main se
-// déséquilibre facilement (« unexpected end of JSON input ») sans dire où.
+// autres.
+//
+// IMPÉRATIF : JSON Patch (RFC 6902, op=replace), PAS strategic merge. Le
+// strategic merge FUSIONNE les listes par clé (« name » pour env) : une
+// variable absente du patch n'est jamais supprimée de l'objet vivant. C'est
+// ainsi que TOKEN_AUTH_URL survivait indéfiniment et cassait le SSO (le
+// frontend redirigeait vers /auth/{room} — route inexistante — au lieu
+// d'afficher la boîte « login » que body.html intercepte).
 func patcherEnvConteneur(ctx context.Context, deploiement, conteneur string, env []map[string]any) error {
-	existantes := []map[string]any{}
-	out, err := k8s.Command(ctx, "kubectl", "get", "deploy", deploiement, "-n", ns, "-o", "json").Output()
-	if err == nil {
-		var d map[string]any
-		if json.Unmarshal(out, &d) == nil {
-			spec, _ := d["spec"].(map[string]any)
-			tpl, _ := spec["template"].(map[string]any)
-			pspec, _ := tpl["spec"].(map[string]any)
-			conteneurs, _ := pspec["containers"].([]any)
-			for _, c := range conteneurs {
-				cm, _ := c.(map[string]any)
-				if cm["name"] == conteneur {
-					if e, ok := cm["env"].([]any); ok {
-						remplaces := map[string]bool{}
-						for _, nv := range env {
-							remplaces[nv["name"].(string)] = true
-						}
-						for _, item := range e {
-							im, _ := item.(map[string]any)
-							if nom, _ := im["name"].(string); !remplaces[nom] && nom != "TOKEN_AUTH_URL" {
-								existantes = append(existantes, im)
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-	env = append(existantes, env...)
-
-	patch := map[string]any{
-		"spec": map[string]any{
-			"template": map[string]any{
-				"spec": map[string]any{
-					"containers": []any{
-						map[string]any{"name": conteneur, "env": env},
-					},
-				},
-			},
-		},
-	}
-	b, err := json.Marshal(patch)
+	indice, existantes, err := lireEnvConteneur(ctx, deploiement, conteneur)
 	if err != nil {
 		return err
 	}
+	env = fusionnerEnv(existantes, env)
+	b, err := json.Marshal([]map[string]any{{
+		"op":    "replace",
+		"path":  fmt.Sprintf("/spec/template/spec/containers/%d/env", indice),
+		"value": env,
+	}})
+	if err != nil {
+		return err
+	}
+	return appliquerJSONPatch(ctx, deploiement, b)
+}
+
+// lireEnvConteneur renvoie l'index du conteneur et ses variables actuelles.
+func lireEnvConteneur(ctx context.Context, deploiement, conteneur string) (int, []map[string]any, error) {
+	out, err := k8s.Command(ctx, "kubectl", "get", "deploy", deploiement, "-n", ns, "-o", "json").Output()
+	if err != nil {
+		return 0, nil, err
+	}
+	var d map[string]any
+	if err := json.Unmarshal(out, &d); err != nil {
+		return 0, nil, err
+	}
+	spec, _ := d["spec"].(map[string]any)
+	tpl, _ := spec["template"].(map[string]any)
+	pspec, _ := tpl["spec"].(map[string]any)
+	conteneurs, _ := pspec["containers"].([]any)
+	for i, c := range conteneurs {
+		cm, _ := c.(map[string]any)
+		if cm["name"] == conteneur {
+			var existantes []map[string]any
+			if e, ok := cm["env"].([]any); ok {
+				for _, item := range e {
+					if im, ok := item.(map[string]any); ok {
+						existantes = append(existantes, im)
+					}
+				}
+			}
+			return i, existantes, nil
+		}
+	}
+	return 0, nil, fmt.Errorf("conteneur %q introuvable dans deploy/%s", conteneur, deploiement)
+}
+
+// fusionnerEnv garde les variables existantes non concernées, en PURGEANT
+// TOKEN_AUTH_URL (posé par une première version erronée : l'adaptateur nordeck
+// v1 ne l'utilise pas et sa présence détourne le flux de login).
+func fusionnerEnv(existantes []map[string]any, nouvelles []map[string]any) []map[string]any {
+	remplaces := map[string]bool{}
+	for _, nv := range nouvelles {
+		remplaces[nv["name"].(string)] = true
+	}
+	fusion := []map[string]any{}
+	for _, em := range existantes {
+		nom, _ := em["name"].(string)
+		if !remplaces[nom] && nom != "TOKEN_AUTH_URL" {
+			fusion = append(fusion, em)
+		}
+	}
+	return append(fusion, nouvelles...)
+}
+
+// appliquerJSONPatch applique un patch RFC 6902 à un Deployment.
+func appliquerJSONPatch(ctx context.Context, deploiement string, patch []byte) error {
 	cmd := k8s.Command(ctx, "kubectl", "patch", "deploy", deploiement, "-n", ns,
-		"--type=strategic", "-p", string(b))
+		"--type=json", "-p", string(patch))
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

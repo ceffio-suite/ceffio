@@ -265,6 +265,9 @@ data:
         "m.homeserver": {
           "base_url": "http://synapse.ceffio-chat.svc:8008"
         }
+      },
+      "jitsi": {
+        "preferred_domain": "meet.ceffio.local"
       }
     }
 ---

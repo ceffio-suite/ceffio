@@ -100,7 +100,63 @@ func EnsureOIDCClients(ctx context.Context, domain string) error {
 			fmt.Printf("∙ client OIDC %s réconcilié (secret → %s)\n", c.id, sec)
 		}
 	}
+	// Le widget Jitsi d'Element s'ouvre dans une IFRAME (chat.<domaine>) qui
+	// charge meet.<domaine>, qui redirige vers Keycloak — dans la même iframe.
+	// Par défaut Keycloak envoie X-Frame-Options SAMEORIGIN et un CSP
+	// frame-ancestors 'self' : la page de login serait BLOQUÉE dans le widget.
+	// On autorise explicitement nos deux origines dans le CSP du realm.
+	if err := autoriserFrames(ctx, domain); err != nil {
+		return fmt.Errorf("frame-ancestors realm: %w", err)
+	}
+	// CORS du client jitsi : l'adaptateur échange des requêtes depuis
+	// meet.<domaine> (et le wrapper d'Element depuis chat.<domaine>).
+	if err := setWebOrigins(ctx, "jitsi", []string{
+		"https://meet." + domain, "https://chat." + domain,
+	}); err != nil {
+		return fmt.Errorf("webOrigins jitsi: %w", err)
+	}
 	fmt.Println("✓ Clients OIDC Keycloak prêts (nextcloud, synapse, jitsi)")
+	return nil
+}
+
+// autoriserFrames ajuste les en-têtes de sécurité du realm pour que Keycloak
+// puisse s'afficher dans une iframe servie par chat.<domaine> (widget Jitsi
+// d'Element) sans rien ouvrir d'autre.
+//
+// frame-ancestors (CSP) prime sur X-Frame-Options dans les navigateurs
+// modernes : on pose la liste exacte des origines autorisées.
+func autoriserFrames(ctx context.Context, domain string) error {
+	csp := fmt.Sprintf(
+		"frame-src 'self'; frame-ancestors 'self' https://chat.%s https://meet.%s; object-src 'none';",
+		domain, domain)
+	out, err := runKcadm(ctx, "update", "realms/"+realm,
+		"-s", "browserSecurityHeaders.contentSecurityPolicy="+csp)
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, out)
+	}
+	fmt.Println("∙ frame-ancestors Keycloak : chat + meet autorisés (widget Element)")
+	return nil
+}
+
+// setWebOrigins pose les origines CORS d'un client OIDC.
+func setWebOrigins(ctx context.Context, clientID string, origins []string) error {
+	uuid, err := clientUUID(ctx, clientID)
+	if err != nil || uuid == "" {
+		return fmt.Errorf("client %s introuvable", clientID)
+	}
+	// JSON array as string for kcadm -s
+	val := "["
+	for i, o := range origins {
+		if i > 0 {
+			val += ","
+		}
+		val += `"` + o + `"`
+	}
+	val += "]"
+	out, err := runKcadm(ctx, "update", "clients/"+uuid, "-s", "webOrigins="+val)
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, out)
+	}
 	return nil
 }
 
