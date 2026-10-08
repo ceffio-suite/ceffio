@@ -6,66 +6,82 @@
 <title>Ceffio — Console d'administration</title>
 <style>
   :root{
-    --bg:#0b0f1a; --bg2:#0f1526; --panel:#131b30; --panel2:#182238;
-    --line:#24304d; --line2:#2f3e63;
-    --txt:#e8edf7; --muted:#8b98b8; --faint:#5b6a8c;
+    --bg:#0a0e18; --bg2:#0e1424; --panel:#121a2e; --panel2:#182238;
+    --line:#212c48; --line2:#2d3c60;
+    --txt:#e9eef8; --muted:#8c99b9; --faint:#59688a;
     --acc:#5b8cff; --acc2:#38bdf8;
-    --ok:#34d399; --okbg:rgba(52,211,153,.12);
-    --ko:#f87171; --kobg:rgba(248,113,113,.12);
-    --warn:#fbbf24; --warnbg:rgba(251,191,36,.12);
+    --ok:#34d399; --okbg:rgba(52,211,153,.10);
+    --ko:#f87171; --kobg:rgba(248,113,113,.10);
+    --warn:#fbbf24; --warnbg:rgba(251,191,36,.10);
     --radius:14px;
   }
   *{box-sizing:border-box}
   html,body{height:100%}
-  body{margin:0;font:14px/1.55 "Inter",system-ui,-apple-system,"Segoe UI",sans-serif;background:radial-gradient(1200px 800px at 80% -10%, #16203c 0%, var(--bg) 55%);color:var(--txt)}
+  body{margin:0;font:14px/1.55 "Inter",system-ui,-apple-system,"Segoe UI",sans-serif;background:radial-gradient(1100px 700px at 85% -10%, #14203c 0%, var(--bg) 55%);color:var(--txt)}
   a{color:var(--acc2);text-decoration:none}
-  button,input{ font:inherit }
+  button,input{font:inherit}
   ::-webkit-scrollbar{width:10px;height:10px}
   ::-webkit-scrollbar-thumb{background:#263252;border-radius:8px}
   ::-webkit-scrollbar-track{background:transparent}
 
-  /* ── Layout ─────────────────────────────────────────── */
   .app{display:flex;min-height:100vh}
-  .side{width:230px;flex:0 0 230px;background:var(--bg2);border-right:1px solid var(--line);padding:20px 14px;display:flex;flex-direction:column;gap:4px;position:sticky;top:0;height:100vh}
+  .side{width:234px;flex:0 0 234px;background:var(--bg2);border-right:1px solid var(--line);padding:20px 14px;display:flex;flex-direction:column;gap:4px;position:sticky;top:0;height:100vh}
   .brand{display:flex;align-items:center;gap:10px;padding:6px 10px 18px;border-bottom:1px solid var(--line);margin-bottom:12px}
-  .brand .logo{width:32px;height:32px;border-radius:9px;background:linear-gradient(135deg,var(--acc),var(--acc2));display:grid;place-items:center;font-weight:800;color:#06121d}
+  .brand .logo{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,var(--acc),var(--acc2));display:grid;place-items:center;font-weight:800;color:#06121d;font-size:16px}
   .brand b{font-size:15px;letter-spacing:.3px}
   .brand small{display:block;color:var(--muted);font-size:11px;font-weight:500}
-  .nav-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:9px;color:var(--muted);cursor:pointer;border:1px solid transparent;user-select:none}
+  .nav-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:9px;color:var(--muted);cursor:pointer;border:1px solid transparent;user-select:none;font-weight:500}
   .nav-item:hover{background:var(--panel);color:var(--txt)}
   .nav-item.active{background:linear-gradient(90deg,rgba(91,140,255,.16),rgba(56,189,248,.08));border-color:var(--line2);color:#fff}
   .nav-item svg{width:16px;height:16px;flex:0 0 16px}
-  .side .foot{margin-top:auto;color:var(--faint);font-size:11px;padding:8px 12px;border-top:1px solid var(--line)}
+  .side .foot{margin-top:auto;color:var(--faint);font-size:11px;padding:8px 12px;border-top:1px solid var(--line);line-height:1.6}
   .main{flex:1;min-width:0;display:flex;flex-direction:column}
-  .topbar{display:flex;align-items:center;gap:14px;padding:14px 26px;border-bottom:1px solid var(--line);background:rgba(11,15,26,.7);backdrop-filter:blur(8px);position:sticky;top:0;z-index:5}
+  .topbar{display:flex;align-items:center;gap:14px;padding:14px 26px;border-bottom:1px solid var(--line);background:rgba(10,14,24,.75);backdrop-filter:blur(8px);position:sticky;top:0;z-index:5}
   .topbar h1{font-size:17px;margin:0;font-weight:700}
   .topbar .crumb{color:var(--muted);font-size:12.5px}
   .topbar .spacer{flex:1}
-  .content{padding:26px;max-width:1220px;width:100%;margin:0 auto}
+  .content{padding:26px;max-width:1240px;width:100%;margin:0 auto}
 
-  /* ── Composants ─────────────────────────────────────── */
   .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px}
-  .card h3{margin:0 0 10px;font-size:12.5px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
-  .grid-stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px}
-  .stat{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;position:relative;overflow:hidden}
-  .stat .ico{position:absolute;right:12px;top:12px;width:26px;height:26px;border-radius:8px;display:grid;place-items:center;background:var(--panel2);color:var(--muted)}
-  .stat .lbl{font-size:12px;color:var(--muted);text-transform:capitalize}
-  .stat .val{font-size:22px;font-weight:800;margin:2px 0}
-  .stat .sub{font-size:11.5px;color:var(--faint)}
-  .stat .bar{height:4px;border-radius:99px;background:var(--panel2);margin-top:10px;overflow:hidden}
-  .stat .bar i{display:block;height:100%;border-radius:99px;background:var(--ok)}
-  .stat.bad .bar i{background:var(--ko)}
+  .card h3{margin:0 0 12px;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.7px;color:var(--muted)}
+  .grid-kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:20px}
+  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:15px 17px;position:relative}
+  .kpi .lbl{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .kpi .val{font-size:26px;font-weight:800;margin-top:3px}
+  .kpi .sub{font-size:11.5px;color:var(--faint);margin-top:1px}
+  .kpi.good .val{color:var(--ok)}
+  .kpi.bad .val{color:var(--ko)}
+  .kpi.warn .val{color:var(--warn)}
 
-  .badge{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:600;border:1px solid transparent}
-  .badge .dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+  /* cartes de services */
+  .grid-services{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+  .svc{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;display:flex;flex-direction:column;gap:8px;transition:border-color .15s}
+  .svc:hover{border-color:var(--line2)}
+  .svc.ko{border-color:rgba(248,113,113,.4)}
+  .svc .head{display:flex;align-items:center;gap:10px}
+  .svc .dot{width:9px;height:9px;border-radius:50%;flex:0 0 9px}
+  .svc .dot.ok{background:var(--ok);box-shadow:0 0 8px rgba(52,211,153,.6)}
+  .svc .dot.ko{background:var(--ko);box-shadow:0 0 8px rgba(248,113,113,.6)}
+  .svc .dot.inconnue{background:var(--faint)}
+  .svc b{font-size:15px}
+  .svc .spacer{flex:1}
+  .svc .role{color:var(--muted);font-size:12.5px;line-height:1.5;min-height:38px}
+  .svc .meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .svc .open{margin-top:2px;display:inline-flex;align-items:center;gap:5px;font-size:12.5px;font-weight:600;color:var(--acc2)}
+  .svc .open:hover{text-decoration:underline}
+  .svc .pods{font-size:11.5px;color:var(--faint)}
+
+  .badge{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600;border:1px solid transparent;white-space:nowrap}
+  .badge .bdot{width:6px;height:6px;border-radius:50%;background:currentColor}
   .badge.ok{color:var(--ok);background:var(--okbg);border-color:rgba(52,211,153,.25)}
   .badge.ko{color:var(--ko);background:var(--kobg);border-color:rgba(248,113,113,.25)}
   .badge.warn{color:var(--warn);background:var(--warnbg);border-color:rgba(251,191,36,.25)}
   .badge.mut{color:var(--muted);background:var(--panel2);border-color:var(--line)}
+  .badge.info{color:var(--acc2);background:rgba(56,189,248,.10);border-color:rgba(56,189,248,.25)}
 
   .table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
-  .table th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:600;padding:10px 14px;background:var(--bg2);border-bottom:1px solid var(--line)}
-  .table td{padding:11px 14px;border-bottom:1px solid var(--line);font-size:13.5px;vertical-align:middle}
+  .table th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:600;padding:10px 14px;background:var(--bg2);border-bottom:1px solid var(--line)}
+  .table td{padding:10px 14px;border-bottom:1px solid var(--line);font-size:13px;vertical-align:middle}
   .table tr:last-child td{border-bottom:0}
   .table tr:hover td{background:rgba(91,140,255,.04)}
 
@@ -84,22 +100,28 @@
   .section{display:none;animation:fade .18s ease}
   .section.active{display:block}
   @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1}}
-  .section-title{margin:0 0 16px;font-size:15px;font-weight:700}
-
+  .section-title{margin:0 0 4px;font-size:15px;font-weight:700}
+  .section-sub{margin:0 0 16px;color:var(--muted);font-size:12.5px}
   .form-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
   .form-row input{flex:1;min-width:150px}
-
   .mono{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:12px}
   .muted{color:var(--muted);font-size:12.5px}
   .empty{padding:26px;text-align:center;color:var(--faint);border:1px dashed var(--line);border-radius:var(--radius)}
+  .note{background:rgba(91,140,255,.06);border:1px solid var(--line2);border-radius:10px;padding:11px 14px;font-size:12.5px;color:var(--muted);margin-bottom:16px}
+  .note b{color:var(--txt)}
 
-  /* toast */
+  details.pods{margin-top:4px}
+  details.pods summary{cursor:pointer;color:var(--faint);font-size:11.5px;list-style:none}
+  details.pods summary::-webkit-details-marker{display:none}
+  details.pods summary:hover{color:var(--muted)}
+  details.pods .podlist{margin-top:6px;display:flex;flex-direction:column;gap:3px}
+  details.pods .pod{display:flex;gap:8px;align-items:center;font-size:11.5px;color:var(--muted);font-family:ui-monospace,Menlo,monospace}
+
   #toasts{position:fixed;right:20px;bottom:20px;display:flex;flex-direction:column;gap:8px;z-index:99}
   .toast{background:var(--panel2);border:1px solid var(--line2);border-left:3px solid var(--acc);border-radius:10px;padding:10px 16px;font-size:13px;box-shadow:0 8px 24px rgba(0,0,0,.4);animation:fade .2s ease;max-width:340px}
   .toast.ok{border-left-color:var(--ok)}
   .toast.ko{border-left-color:var(--ko)}
 
-  /* modal clé */
   .overlay{position:fixed;inset:0;background:rgba(4,7,14,.7);backdrop-filter:blur(3px);display:none;place-items:center;z-index:50}
   .overlay.show{display:grid}
   .modal{width:400px;background:var(--panel);border:1px solid var(--line2);border-radius:16px;padding:22px}
@@ -107,7 +129,7 @@
   .modal p{color:var(--muted);font-size:13px;margin:0 0 14px}
   .modal input{width:100%;margin-bottom:12px}
 
-  @media (max-width:900px){ .side{display:none} }
+  @media (max-width:900px){ .side{display:none} .content{padding:16px} }
 </style>
 </head>
 <body>
@@ -115,26 +137,34 @@
   <aside class="side">
     <div class="brand">
       <div class="logo">C</div>
-      <div><b>Ceffio</b><small>Console d'admin</small></div>
+      <div><b>Ceffio</b><small>Console d'administration</small></div>
     </div>
     <div class="nav-item active" data-tab="dashboard">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
-      Tableau de bord
+      Vue d'ensemble
+    </div>
+    <div class="nav-item" data-tab="services">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9S14.5 18.5 12 21c-2.5-2.5-3.5-5.5-3.5-9S9.5 5.5 12 3z"/></svg>
+      Applications
     </div>
     <div class="nav-item" data-tab="users">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17.5" cy="8.5" r="2.5"/><path d="M21 20c0-2.5-1.5-4.5-3.5-5.5"/></svg>
       Utilisateurs
     </div>
-    <div class="nav-item" data-tab="net">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9S14.5 18.5 12 21c-2.5-2.5-3.5-5.5-3.5-9S9.5 5.5 12 3z"/></svg>
-      URLs &amp; TLS
+    <div class="nav-item" data-tab="certs">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><circle cx="12" cy="15" r="1.5"/></svg>
+      Certificats TLS
+    </div>
+    <div class="nav-item" data-tab="infra">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><circle cx="7" cy="7" r="0.5" fill="currentColor"/><circle cx="7" cy="17" r="0.5" fill="currentColor"/></svg>
+      Infrastructure
     </div>
     <div class="foot" id="sideFoot">—</div>
   </aside>
 
   <div class="main">
     <div class="topbar">
-      <h1 id="pageTitle">Tableau de bord</h1>
+      <h1 id="pageTitle">Vue d'ensemble</h1>
       <span class="crumb" id="crumb">état de la plateforme</span>
       <div class="spacer"></div>
       <span class="badge mut" id="clock"></span>
@@ -143,22 +173,34 @@
     </div>
 
     <div class="content">
-      <!-- DASHBOARD -->
+      <!-- VUE D'ENSEMBLE -->
       <section class="section active" id="tab-dashboard">
-        <div class="grid-stats" id="stats"></div>
-        <div style="height:18px"></div>
+        <div class="grid-kpi" id="kpis"></div>
         <div class="card">
-          <h3>Détail des couches</h3>
-          <table class="table" id="stackTable">
-            <thead><tr><th>Couche</th><th>Pods prêts</th><th>Redémarrages</th><th>Pods</th></tr></thead>
-            <tbody></tbody>
-          </table>
+          <h3>Applications utilisateurs</h3>
+          <div class="grid-services" id="svcMain"></div>
         </div>
+        <div style="height:16px"></div>
+        <div class="card">
+          <h3>Composants techniques</h3>
+          <div class="note">Ces services ne s'utilisent pas directement : ils sont appelés par les autres
+          applications ou par votre navigateur pendant leur fonctionnement. Ils doivent rester exposés
+          pour que la suite fonctionne — ils ne sont pas des « pages en trop ».</div>
+          <div class="grid-services" id="svcTech"></div>
+        </div>
+      </section>
+
+      <!-- APPLICATIONS -->
+      <section class="section" id="tab-services">
+        <h2 class="section-title">Applications &amp; expositions publiques</h2>
+        <p class="section-sub">Tout ce qui est joignable sur Internet, avec son rôle réel et son état.</p>
+        <div class="grid-services" id="svcAll"></div>
       </section>
 
       <!-- USERS -->
       <section class="section" id="tab-users">
-        <h2 class="section-title">Comptes du SSO (realm Keycloak « ceffio »)</h2>
+        <h2 class="section-title">Comptes du SSO</h2>
+        <p class="section-sub">Realm Keycloak « ceffio » — un compte créé ici fonctionne sur Nextcloud, Element et Jitsi.</p>
         <div class="card">
           <div class="form-row">
             <input id="u_name" placeholder="Identifiant">
@@ -166,7 +208,6 @@
             <input id="u_pwd" type="password" placeholder="Mot de passe">
             <button class="btn" id="btnCreate" onclick="createUser()">Créer le compte</button>
           </div>
-          <div class="muted">Un compte créé ici peut se connecter à Nextcloud et Element via le login unique.</div>
         </div>
         <div style="height:14px"></div>
         <table class="table" id="usersTable">
@@ -175,13 +216,22 @@
         </table>
       </section>
 
-      <!-- NET -->
-      <section class="section" id="tab-net">
-        <h2 class="section-title">Endpoints publics &amp; certificats</h2>
-        <div class="card"><h3>Routes d'accès</h3><div id="routes" class="form-row"></div></div>
-        <div style="height:14px"></div>
+      <!-- CERTIFICATS -->
+      <section class="section" id="tab-certs">
+        <h2 class="section-title">Certificats TLS</h2>
+        <p class="section-sub">Émis par cert-manager (autorité « ceffio-ca »). L'expiration est surveillée : un certificat expiré casse le HTTPS du service correspondant.</p>
         <table class="table" id="certTable">
-          <thead><tr><th>Certificat</th><th>Namespace</th><th>État</th></tr></thead>
+          <thead><tr><th>Domaine</th><th>Certificat</th><th>État</th><th>Expire</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <!-- INFRA -->
+      <section class="section" id="tab-infra">
+        <h2 class="section-title">Infrastructure interne</h2>
+        <p class="section-sub">Vue diagnostic : pods par couche Kubernetes. Les couches sont internes à la plateforme — elles ne correspondent pas à des sites accessibles.</p>
+        <table class="table" id="stackTable">
+          <thead><tr><th>Couche</th><th>Pods prêts</th><th>Redémarrages</th><th>Détail</th></tr></thead>
           <tbody></tbody>
         </table>
       </section>
@@ -189,11 +239,10 @@
   </div>
 </div>
 
-<!-- Modal clé API -->
 <div class="overlay" id="keyOverlay">
   <div class="modal">
     <h2>Clé d'administration</h2>
-    <p>La clé se trouve dans <span class="mono">/etc/ceffio/console.key</span> sur le serveur. Elle n'est stockée que dans votre navigateur.</p>
+    <p>La clé se trouve dans le Secret Kubernetes <span class="mono">ceffio-console-key</span>. Elle n'est stockée que dans votre navigateur.</p>
     <input id="keyInput" type="password" placeholder="Clé admin" autocomplete="off">
     <div class="form-row">
       <button class="btn" onclick="saveKey()" style="flex:1">Connexion</button>
@@ -211,12 +260,13 @@
   const esc = s => String(s ?? '').replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
 
   const TITLES = {
-    dashboard: ['Tableau de bord', 'état de la plateforme'],
+    dashboard: ["Vue d'ensemble", 'état de la plateforme'],
+    services:  ['Applications', 'expositions publiques et rôles'],
     users:     ['Utilisateurs', 'comptes du login unique'],
-    net:       ['URLs & TLS', 'endpoints et certificats'],
+    certs:     ['Certificats TLS', 'validité et expiration'],
+    infra:     ['Infrastructure', 'couches internes et pods'],
   };
 
-  // ── Navigation ──
   document.querySelectorAll('.nav-item').forEach(el => el.onclick = () => {
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
     el.classList.add('active');
@@ -227,10 +277,8 @@
     $('crumb').textContent = TITLES[tab][1];
   });
 
-  // ── Horloge ──
   setInterval(() => { $('clock').textContent = new Date().toLocaleTimeString('fr-FR'); }, 1000);
 
-  // ── Toasts ──
   function toast(msg, kind = 'ok') {
     const t = document.createElement('div');
     t.className = 'toast ' + kind;
@@ -239,7 +287,6 @@
     setTimeout(() => t.remove(), 3500);
   }
 
-  // ── Clé API ──
   window.openKeyModal = () => { $('keyInput').value = key; $('keyOverlay').classList.add('show'); $('keyInput').focus(); };
   window.saveKey = () => {
     key = $('keyInput').value.trim();
@@ -250,7 +297,6 @@
   window.clearKey = () => { key = ''; localStorage.removeItem('ceffio_key'); $('keyOverlay').classList.remove('show'); toast('Clé oubliée', 'ko'); };
   $('keyInput').addEventListener('keydown', e => { if (e.key === 'Enter') saveKey(); });
 
-  // ── API ──
   async function api(path, opt = {}) {
     const r = await fetch(path, { ...opt, headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key } });
     if (r.status === 401) { openKeyModal(); throw new Error('auth'); }
@@ -259,39 +305,88 @@
     return d;
   }
 
-  // ── Dashboard ──
+  // ── carte de service ──
+  function svcCard(s) {
+    const dot = s.sante;
+    const badges = [];
+    if (s.sso) badges.push('<span class="badge info">SSO Keycloak</span>');
+    if (s.technique) badges.push('<span class="badge mut">technique</span>');
+    badges.push(`<span class="badge ${s.sante==='ok'?'ok':s.sante==='ko'?'ko':'mut'}"><span class="bdot"></span>${s.sante==='ok'?'en ligne':s.sante==='ko'?'dégradé':'inconnu'}</span>`);
+    const pods = (s.pods||[]).map(p =>
+      `<div class="pod"><span class="dot ${p.ready?'ok':'ko'}" style="width:6px;height:6px;border-radius:50%;background:${p.ready?'var(--ok)':'var(--ko)'};display:inline-block"></span>${esc(p.name)} · ${esc(p.age||'')}${p.restarts?` · ${p.restarts} restart(s)`:''}</div>`).join('');
+    return `<div class="svc ${s.sante==='ko'?'ko':''}">
+      <div class="head">
+        <span class="dot ${dot}"></span>
+        <b>${esc(s.nom)}</b>
+        <span class="spacer"></span>
+      </div>
+      <div class="role">${esc(s.role)}</div>
+      <div class="meta">${badges.join('')}</div>
+      <a class="open" href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.hote)} ↗</a>
+      <details class="pods">
+        <summary>${s.podsReady}/${s.podsTotal} pod(s) — détail</summary>
+        <div class="podlist">${pods || '<div class="pod">aucun pod</div>'}</div>
+      </details>
+    </div>`;
+  }
+
   function renderDashboard(st) {
-    const layers = st.stack || [];
-    $('stats').innerHTML = layers.map(l => {
+    const svcs = st.services || [];
+    const enLigne = svcs.filter(s => s.sante === 'ok').length;
+    const certMin = (st.certs||[]).reduce((m,c) => (c.jours >= 0 && (m < 0 || c.jours < m)) ? c.jours : m, -1);
+    const certAlert = certMin >= 0 && certMin < 30;
+    const kpis = [
+      { lbl: 'Applications', val: `${enLigne}/${svcs.length}`, sub: 'en ligne', cls: enLigne === svcs.length ? 'good' : 'bad' },
+      { lbl: 'Pods', val: `${st.podsReady}/${st.podsTotal}`, sub: 'prêts', cls: st.podsReady === st.podsTotal ? 'good' : 'bad' },
+      { lbl: 'Certificats TLS', val: `${st.certsOK}/${st.certsN}`, sub: certMin >= 0 ? `prochaine expiration : ${certMin} j` : 'valides', cls: certAlert ? 'warn' : 'good' },
+      { lbl: 'Domaine', val: '✓', sub: esc(st.domain || ''), cls: 'good' },
+    ];
+    $('kpis').innerHTML = kpis.map(k => `<div class="kpi ${k.cls}"><div class="lbl">${k.lbl}</div><div class="val">${k.val}</div><div class="sub">${k.sub}</div></div>`).join('');
+
+    $('svcMain').innerHTML = svcs.filter(s => !s.technique).map(svcCard).join('');
+    $('svcTech').innerHTML = svcs.filter(s => s.technique).map(svcCard).join('');
+    $('svcAll').innerHTML = svcs.map(svcCard).join('');
+  }
+
+  function renderInfra(st) {
+    $('stackTable').querySelector('tbody').innerHTML = (st.stack || []).map(l => {
       const good = l.total > 0 && l.ready === l.total;
-      const pct = l.total ? Math.round(100 * l.ready / l.total) : 0;
       const restarts = (l.pods || []).reduce((a, p) => a + (p.restarts || 0), 0);
-      return `<div class="stat ${good ? '' : 'bad'}">
-        <div class="lbl">${esc(l.name)}</div>
-        <div class="val" style="color:${good ? 'var(--ok)' : 'var(--ko)'}">${l.ready}<span class="muted" style="font-size:14px">/${l.total}</span></div>
-        <div class="sub">${restarts ? restarts + ' restart(s)' : 'stable'}</div>
-        <div class="bar"><i style="width:${pct}%"></i></div>
-      </div>`;
-    }).join('');
-    $('stackTable').querySelector('tbody').innerHTML = layers.map(l => {
-      const good = l.total > 0 && l.ready === l.total;
-      const restarts = (l.pods || []).reduce((a, p) => a + (p.restarts || 0), 0);
+      const pods = (l.pods || []).map(p =>
+        `<div class="pod"><span style="width:6px;height:6px;border-radius:50%;background:${p.ready?'var(--ok)':'var(--ko)'};display:inline-block"></span>${esc(p.name)} · ${esc(p.age||'')}${p.restarts?` · ${p.restarts} restart(s)`:''}</div>`).join('');
       return `<tr>
         <td style="text-transform:capitalize;font-weight:600">${esc(l.name)}</td>
-        <td><span class="badge ${good ? 'ok' : 'ko'}"><span class="dot"></span>${l.ready}/${l.total}</span></td>
+        <td><span class="badge ${good ? 'ok' : 'ko'}"><span class="bdot"></span>${l.ready}/${l.total}</span></td>
         <td>${restarts ? `<span class="badge warn">${restarts}</span>` : '<span class="muted">0</span>'}</td>
-        <td>${(l.pods || []).map(p => `<span class="badge ${p.ready ? 'ok' : 'ko'}" title="${esc(p.name)}"><span class="dot"></span>${esc(p.name.split('-')[0])}</span>`).join(' ')}</td>
+        <td><details class="pods"><summary>voir</summary><div class="podlist">${pods}</div></details></td>
       </tr>`;
     }).join('');
   }
 
-  // ── Users ──
+  function renderCerts(st) {
+    $('certTable').querySelector('tbody').innerHTML = (st.certs || []).map(c => {
+      const ok = c.condition === 'True';
+      let exp = '<span class="muted">inconnue</span>';
+      if (c.jours >= 0) {
+        const cls = c.jours < 15 ? 'ko' : c.jours < 30 ? 'warn' : 'ok';
+        const d = new Date(c.notAfter).toLocaleDateString('fr-FR');
+        exp = `<span class="badge ${cls}">${c.jours} j · ${d}</span>`;
+      }
+      return `<tr>
+        <td class="mono">${esc(c.hote || '—')}</td>
+        <td class="muted mono">${esc(c.name)}</td>
+        <td>${ok ? '<span class="badge ok"><span class="bdot"></span>READY</span>' : '<span class="badge ko"><span class="bdot"></span>' + esc(c.condition) + '</span>'}</td>
+        <td>${exp}</td>
+      </tr>`;
+    }).join('');
+  }
+
   async function renderUsers() {
     const d = await api('/api/users');
     const rows = (d.users || []).map(u => `<tr>
       <td style="font-weight:600">${esc(u.username)}</td>
       <td class="muted">${esc(u.email || '—')}</td>
-      <td>${u.enabled ? '<span class="badge ok"><span class="dot"></span>actif</span>' : '<span class="badge ko"><span class="dot"></span>désactivé</span>'}</td>
+      <td>${u.enabled ? '<span class="badge ok"><span class="bdot"></span>actif</span>' : '<span class="badge ko"><span class="bdot"></span>désactivé</span>'}</td>
       <td style="text-align:right;white-space:nowrap">
         <button class="btn-ghost" onclick="resetPwd('${esc(u.id)}')">Réinit. mdp</button>
         ${u.enabled ? `<button class="btn-danger" onclick="deact('${esc(u.id)}','${esc(u.username)}')">Désactiver</button>` : ''}
@@ -320,36 +415,24 @@
   };
 
   window.resetPwd = async id => {
-    const p = prompt('Nouveau mot de passe (non temporaire) :');
+    const p = prompt('Nouveau mot de passe :');
     if (!p) return;
     try { await api('/api/users/' + id + '/password', { method: 'POST', body: JSON.stringify({ password: p }) }); toast('Mot de passe réinitialisé'); }
     catch (e) { toast('Erreur : ' + e.message, 'ko'); }
   };
 
-  // ── URLs & TLS ──
-  function renderNet(st) {
-    $('routes').innerHTML = (st.ingress || [])
-      .sort((a, b) => a.host.localeCompare(b.host))
-      .map(i => `<a class="badge mut" href="https://${esc(i.host)}" target="_blank" rel="noopener">${esc(i.host)} ↗</a>`).join('');
-    $('certTable').querySelector('tbody').innerHTML = (st.certs || []).map(c => `<tr>
-      <td class="mono">${esc(c.name)}</td><td class="muted">${esc(c.ns)}</td>
-      <td>${c.condition === 'True' ? '<span class="badge ok"><span class="dot"></span>READY</span>' : '<span class="badge ko"><span class="dot"></span>' + esc(c.condition) + '</span>'}</td>
-    </tr>`).join('');
-  }
-
-  // ── Refresh ──
   window.refresh = async () => {
     if (!key) { openKeyModal(); return; }
     try {
       const st = await api('/api/status');
-      renderDashboard(st); renderNet(st);
+      renderDashboard(st); renderInfra(st); renderCerts(st);
       await renderUsers();
-      $('sideFoot').textContent = st.domain || '';
+      $('sideFoot').innerHTML = esc(st.domain || '') + '<br>MAJ ' + new Date().toLocaleTimeString('fr-FR');
     } catch (e) { if (e.message !== 'auth') toast('Erreur : ' + e.message, 'ko'); }
   };
 
   refresh();
-  setInterval(() => { if (key) api('/api/status').then(s => { renderDashboard(s); renderNet(s); }).catch(() => {}); }, 30000);
+  setInterval(() => { if (key) api('/api/status').then(s => { renderDashboard(s); renderInfra(s); renderCerts(s); }).catch(() => {}); }, 30000);
 })();
 </script>
 </body>

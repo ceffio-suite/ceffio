@@ -22,8 +22,11 @@ const (
 	deployNS   = "ceffio-system"
 	deployName = "ceffio-admin"
 	imageName  = "localhost/ceffio-console"
-	imageTag   = "0.1.0"
-	imageRef   = imageName + ":" + imageTag
+	// Bump OBLIGATOIRE à chaque changement de la page ou du code console :
+	// buildAndImportImage saute la reconstruction si le tag existe déjà dans
+	// containerd. Sans bump, l'ancienne image continue de servir.
+	imageTag = "0.2.0"
+	imageRef = imageName + ":" + imageTag
 )
 
 // Deploy installe la console d'administration DANS le cluster (Phase 11) :
