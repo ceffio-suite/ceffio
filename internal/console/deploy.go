@@ -42,6 +42,13 @@ func Deploy(ctx context.Context, domain string) error {
 	if err := ensureConsoleKey(ctx); err != nil {
 		return err
 	}
+	// Les identifiants Keycloak vivent dans ceffio-identity ; la console tourne
+	// dans ceffio-system et un secretKeyRef ne traverse PAS les namespaces. On
+	// copie donc le secret chez la console : sans cette copie les variables
+	// seraient vides et la console repondrait « credentials absents ».
+	if err := copierSecret(ctx, "ceffio-identity", "keycloak-admin", deployNS); err != nil {
+		return err
+	}
 	if err := applyConsoleManifest(ctx, domain); err != nil {
 		return err
 	}
@@ -339,6 +346,13 @@ func ensureConsoleKey(ctx context.Context) error {
 }
 
 // applyConsoleManifest applique RBAC + Deployment + Service + Ingress.
+// NOTE sur les identifiants Keycloak : ils sont lus LOCALEMENT (secret copié
+// dans ce namespace avant ce manifeste). Un secretKeyRef ne peut pas traverser
+// les namespaces, et le secret vit dans ceffio-identity alors que la console
+// tourne dans ceffio-system — les variables restaient donc vides, et le
+// `optional: true` masquait l'echec : le pod démarrait puis répondait
+// « credentials absents » à chaque requête. On ne met PAS optional : un secret
+// absent doit faire échouer le pod, pas produire une console inutilisable.
 func applyConsoleManifest(ctx context.Context, domain string) error {
 	manifest := `apiVersion: v1
 kind: ServiceAccount
@@ -347,13 +361,12 @@ metadata:
   namespace: ` + deployNS + `
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: ClusterRole
 metadata:
   name: ceffio-admin
-  namespace: ` + deployNS + `
 rules:
 - apiGroups: [""]
-  resources: [pods]
+  resources: [pods, namespaces]
   verbs: [get, list, watch]
 - apiGroups: [networking.k8s.io]
   resources: [ingresses]
@@ -363,15 +376,15 @@ rules:
   verbs: [get, list, watch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+kind: ClusterRoleBinding
 metadata:
   name: ceffio-admin
-  namespace: ` + deployNS + `
 subjects:
 - kind: ServiceAccount
   name: ceffio-admin
+  namespace: ` + deployNS + `
 roleRef:
-  kind: Role
+  kind: ClusterRole
   name: ceffio-admin
   apiGroup: rbac.authorization.k8s.io
 ---
@@ -395,8 +408,8 @@ spec:
         args: ["console", "--domain", "` + domain + `", "--addr", ":8088"]
         env:
         - {name: CEFFIO_KEY, valueFrom: {secretKeyRef: {name: ceffio-console-key, key: key}}}
-        - {name: KC_ADMIN, valueFrom: {secretKeyRef: {name: keycloak-admin, key: username, optional: true}}}
-        - {name: KC_ADMIN_PASSWORD, valueFrom: {secretKeyRef: {name: keycloak-admin, key: password, optional: true}}}
+        - {name: KC_ADMIN, valueFrom: {secretKeyRef: {name: keycloak-admin, key: username}}}
+        - {name: KC_ADMIN_PASSWORD, valueFrom: {secretKeyRef: {name: keycloak-admin, key: password}}}
         ports:
         - {name: http, containerPort: 8088}
         readinessProbe:
@@ -454,4 +467,61 @@ func waitConsoleReady(ctx context.Context) error {
 // genSecret est réutilisé (même convention que les autres couches).
 func secretExists(ctx context.Context, name string) bool {
 	return k8s.Command(ctx, "kubectl", "get", "secret", name, "-n", deployNS).Run() == nil
+}
+
+// copierSecret recopie un secret d'un namespace a un autre.
+//
+// Pourquoi ce detour : Kubernetes ne permet PAS a un secretKeyRef de traverser
+// les namespaces. Le secret keycloak-admin vit dans ceffio-identity, la console
+// tourne dans ceffio-system — la reference restait donc introuvable et les
+// variables d'environnement étaient vides, en silence (d'autant plus que la
+// reference portait `optional: true`).
+//
+// La copie est idempotente : on lit la source et on (re)applique la copie.
+// Aucune valeur n'est affichee ni journalisee.
+func copierSecret(ctx context.Context, nsSource, nom, nsCible string) error {
+	if nsSource == nsCible {
+		return nil
+	}
+	out, err := k8s.Command(ctx, "kubectl", "get", "secret", nom, "-n", nsSource,
+		"-o", "json").Output()
+	if err != nil {
+		return fmt.Errorf("lecture du secret %s/%s : %w", nsSource, nom, err)
+	}
+
+	var doc map[string]any
+	if err := json.Unmarshal(out, &doc); err != nil {
+		return fmt.Errorf("secret illisible : %w", err)
+	}
+	// On nettoie les metadonnees propres a la source : les garder ferait porter
+	// a la copie l'uid, les timestamps et la resourceVersion d'origine, que
+	// l'API refuse a la creation.
+	delete(doc, "metadata")
+	doc["metadata"] = map[string]any{
+		"name":      nom,
+		"namespace": nsCible,
+	}
+
+	b, err := json.Marshal(doc)
+	if err != nil {
+		return err
+	}
+	cmd := k8s.Command(ctx, "kubectl", "apply", "-f", "-")
+	cmd.Stdin = strings.NewReader(string(b))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("copie du secret vers %s : %w : %s", nsCible, err, oneLine(string(out)))
+	}
+	fmt.Printf("✓ Secret %s copié dans %s (les références ne traversent pas les namespaces)\n", nom, nsCible)
+	return nil
+}
+
+func oneLine(s string) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	for strings.Contains(s, "  ") {
+		s = strings.ReplaceAll(s, "  ", " ")
+	}
+	if len(s) > 200 {
+		s = s[:200] + "…"
+	}
+	return strings.TrimSpace(s)
 }

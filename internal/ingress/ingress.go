@@ -407,15 +407,30 @@ func applyCMData(ctx context.Context, ns, name, key, data string) error {
 	return cmd.Run()
 }
 
+// rolloutRestart redemarre un deployment.
+//
+// Le namespace peut etre passe explicitement : « deploy/traefik » vit dans
+// kube-system, hors de la table ci-dessous, et la version anterieure ECHOUAIT
+// sur un target absent de la table — ce qui interrompait tout le deploiement
+// en cours (constate sur ProxyAmont, qui arretait la sequence avant la console).
 func rolloutRestart(ctx context.Context, target string) error {
+	explicite := ""
+	if strings.Contains(target, "@") {
+		parties := strings.SplitN(target, "@", 2)
+		target, explicite = parties[0], parties[1]
+	}
 	deploy := strings.TrimPrefix(target, "deploy/")
-	ns := map[string]string{
-		"element": "ceffio-chat", "synapse": "ceffio-chat",
-		"nextcloud": "ceffio-files", "onlyoffice": "ceffio-office",
-		"keycloak": "ceffio-identity",
-	}[deploy]
+	ns := explicite
 	if ns == "" {
-		return fmt.Errorf("namespace inconnu pour %q", target)
+		ns = map[string]string{
+			"element": "ceffio-chat", "synapse": "ceffio-chat",
+			"nextcloud": "ceffio-files", "onlyoffice": "ceffio-office",
+			"keycloak": "ceffio-identity",
+			"traefik":  "kube-system",
+		}[deploy]
+	}
+	if ns == "" {
+		return fmt.Errorf("namespace inconnu pour %q (utiliser « deploy/nom@namespace »)", target)
 	}
 	cmd := k8s.Command(ctx, "kubectl", "rollout", "restart", "deploy/"+deploy, "-n", ns)
 	cmd.Stdout = os.Stdout

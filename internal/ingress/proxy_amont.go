@@ -62,7 +62,7 @@ spec:
 	if err := apply(ctx, manifest); err != nil {
 		return err
 	}
-	if err := rolloutRestart(ctx, "deploy/traefik"); err != nil {
+	if err := rolloutRestart(ctx, "deploy/traefik@kube-system"); err != nil {
 		return err
 	}
 	fmt.Println("✓ Traefik configuré pour un proxy amont (X-Forwarded-Proto respecté)")
