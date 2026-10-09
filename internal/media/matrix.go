@@ -45,13 +45,24 @@ import (
 )
 
 const (
-	uvsImage    = "matrixdotorg/matrix-user-verification-service:v3.0.0"
-	uvsUser     = "uvs"
-	chatNS      = "ceffio-chat"
-	synapseSvc  = "http://synapse.ceffio-chat.svc:8008"
-	pluginsDir  = "/config/prosody-plugins-custom"
+	uvsImage   = "matrixdotorg/matrix-user-verification-service:v3.0.0"
+	uvsUser    = "uvs"
+	chatNS     = "ceffio-chat"
+	synapseSvc = "http://synapse.ceffio-chat.svc:8008"
+	pluginsDir = "/config/prosody-plugins-custom"
+	// CORS OBLIGATOIRE : c'est le navigateur d'Element (origine chat.<dom>) qui
+	// fetch() ce fichier cross-origin. Sans Access-Control-Allow-Origin, le
+	// fetch est bloqué, getJitsiAuth() retourne null en silence, le widget est
+	// créé SANS jeton Matrix et l'auth retombe sur tokenAuthUrl → boucle SSO.
+	// Vérifié en vrai navigateur : sans ces en-têtes, « TypeError: Failed to
+	// fetch » ; avec, Element lit {"auth":"openidtoken-jwt"}.
 	wellKnownJS = `location = /.well-known/element/jitsi {
     default_type application/json;
+    add_header Access-Control-Allow-Origin * always;
+    add_header Access-Control-Allow-Methods "GET, OPTIONS" always;
+    add_header Access-Control-Allow-Headers "Content-Type" always;
+    add_header Cache-Control "no-store" always;
+    if ($request_method = OPTIONS) { return 204; }
     return 200 '{"auth": "openidtoken-jwt"}';
 }
 `
