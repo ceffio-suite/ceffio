@@ -82,7 +82,7 @@ var catalogueServices = []struct {
 		[]string{"nextcloud"}},
 	{"chat", "Element", "Messagerie d'équipe (Matrix)", false, true,
 		[]string{"element"}},
-	{"meet", "Jitsi Meet", "Visioconférence — via Element ou lien direct", false, true,
+	{"meet", "Jitsi Meet", "Visioconférence — accès libre, via Element ou lien direct", false, false,
 		[]string{"web", "prosody", "jicofo", "jvb"}},
 	{"keycloak", "Keycloak", "Authentification unique (SSO) de toutes les apps", false, false,
 		[]string{"keycloak"}},

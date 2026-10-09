@@ -52,13 +52,9 @@ func clientsOIDC(domain string) []client {
 			id:        "synapse",
 			redirects: fmt.Sprintf("https://matrix.%s/_synapse/client/oidc/callback,http://localhost/*", domain),
 		},
-		{
-			// Jitsi ne fait pas d'OIDC lui-même : c'est l'adaptateur qui s'en
-			// charge, et sa redirection revient sur le frontend Jitsi.
-			app:       "jitsi",
-			id:        "jitsi",
-			redirects: fmt.Sprintf("https://meet.%s/*,http://localhost/*", domain),
-		},
+		// NB : pas de client « jitsi » — Jitsi est en accès libre (SSO retiré
+		// le 2026-10-09, voir internal/media/sans_sso.go). Les installations
+		// existantes le voient supprimé par SupprimerClientOIDC.
 	}
 }
 
@@ -100,63 +96,7 @@ func EnsureOIDCClients(ctx context.Context, domain string) error {
 			fmt.Printf("∙ client OIDC %s réconcilié (secret → %s)\n", c.id, sec)
 		}
 	}
-	// Le widget Jitsi d'Element s'ouvre dans une IFRAME (chat.<domaine>) qui
-	// charge meet.<domaine>, qui redirige vers Keycloak — dans la même iframe.
-	// Par défaut Keycloak envoie X-Frame-Options SAMEORIGIN et un CSP
-	// frame-ancestors 'self' : la page de login serait BLOQUÉE dans le widget.
-	// On autorise explicitement nos deux origines dans le CSP du realm.
-	if err := autoriserFrames(ctx, domain); err != nil {
-		return fmt.Errorf("frame-ancestors realm: %w", err)
-	}
-	// CORS du client jitsi : l'adaptateur échange des requêtes depuis
-	// meet.<domaine> (et le wrapper d'Element depuis chat.<domaine>).
-	if err := setWebOrigins(ctx, "jitsi", []string{
-		"https://meet." + domain, "https://chat." + domain,
-	}); err != nil {
-		return fmt.Errorf("webOrigins jitsi: %w", err)
-	}
-	fmt.Println("✓ Clients OIDC Keycloak prêts (nextcloud, synapse, jitsi)")
-	return nil
-}
-
-// autoriserFrames ajuste les en-têtes de sécurité du realm pour que Keycloak
-// puisse s'afficher dans une iframe servie par chat.<domaine> (widget Jitsi
-// d'Element) sans rien ouvrir d'autre.
-//
-// frame-ancestors (CSP) prime sur X-Frame-Options dans les navigateurs
-// modernes : on pose la liste exacte des origines autorisées.
-func autoriserFrames(ctx context.Context, domain string) error {
-	csp := fmt.Sprintf(
-		"frame-src 'self'; frame-ancestors 'self' https://chat.%s https://meet.%s; object-src 'none';",
-		domain, domain)
-	out, err := runKcadm(ctx, "update", "realms/"+realm,
-		"-s", "browserSecurityHeaders.contentSecurityPolicy="+csp)
-	if err != nil {
-		return fmt.Errorf("%w: %s", err, out)
-	}
-	fmt.Println("∙ frame-ancestors Keycloak : chat + meet autorisés (widget Element)")
-	return nil
-}
-
-// setWebOrigins pose les origines CORS d'un client OIDC.
-func setWebOrigins(ctx context.Context, clientID string, origins []string) error {
-	uuid, err := clientUUID(ctx, clientID)
-	if err != nil || uuid == "" {
-		return fmt.Errorf("client %s introuvable", clientID)
-	}
-	// JSON array as string for kcadm -s
-	val := "["
-	for i, o := range origins {
-		if i > 0 {
-			val += ","
-		}
-		val += `"` + o + `"`
-	}
-	val += "]"
-	out, err := runKcadm(ctx, "update", "clients/"+uuid, "-s", "webOrigins="+val)
-	if err != nil {
-		return fmt.Errorf("%w: %s", err, out)
-	}
+	fmt.Println("✓ Clients OIDC Keycloak prêts (nextcloud, synapse)")
 	return nil
 }
 
@@ -263,4 +203,33 @@ func genSecret(n int) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// SupprimerClientOIDC supprime un client OIDC du realm applicatif et son
+// secret Kubernetes associé. Idempotent : un client ou un secret absent
+// n'est pas une erreur.
+//
+// Utilisé par le retrait du SSO Jitsi : le client « jitsi » servait à
+// l'adaptateur OIDC, supprimé avec lui.
+func SupprimerClientOIDC(ctx context.Context, clientID string) error {
+	uuid, err := clientUUID(ctx, clientID)
+	if err != nil {
+		// clientUUID échoue aussi quand le client n'existe pas : dans ce cas
+		// il n'y a rien à supprimer.
+		return nil
+	}
+	if uuid != "" {
+		if out, err := runKcadm(ctx, "delete", "clients/"+uuid); err != nil {
+			return fmt.Errorf("suppression client %s: %w: %s", clientID, err, out)
+		}
+	}
+	// Secret Kubernetes du client (<app>-oidc), s'il existe.
+	sec := clientID + "-oidc"
+	if secretExists(ctx, sec) {
+		if err := k8s.Command(ctx, "kubectl", "delete", "secret", sec, "-n", ns,
+			"--ignore-not-found").Run(); err != nil {
+			return fmt.Errorf("suppression secret %s: %w", sec, err)
+		}
+	}
+	return nil
 }

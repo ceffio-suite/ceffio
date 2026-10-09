@@ -131,8 +131,7 @@ spec:
         - {name: JICOFO_AUTH_PASSWORD, valueFrom: {secretKeyRef: {name: jitsi-secrets, key: jicofo-auth}}}
         - {name: JVB_AUTH_USER, value: videobridge}
         - {name: JVB_AUTH_PASSWORD, valueFrom: {secretKeyRef: {name: jitsi-secrets, key: jvb-auth}}}
-        - {name: ENABLE_AUTH, value: "1"}
-        - {name: AUTH_TYPE, value: internal}
+        - {name: ENABLE_AUTH, value: "0"}
         - {name: TZ, value: Europe/Paris}
         ports:
         - {name: c2s, containerPort: 5222}
@@ -253,8 +252,7 @@ spec:
         - {name: JICOFO_AUTH_PASSWORD, valueFrom: {secretKeyRef: {name: jitsi-secrets, key: jicofo-auth}}}
         - {name: JVB_AUTH_USER, value: videobridge}
         - {name: JVB_AUTH_PASSWORD, valueFrom: {secretKeyRef: {name: jitsi-secrets, key: jvb-auth}}}
-        - {name: ENABLE_AUTH, value: "1"}
-        - {name: AUTH_TYPE, value: internal}
+        - {name: ENABLE_AUTH, value: "0"}
         - {name: TZ, value: Europe/Paris}
         ports:
         - {name: http, containerPort: 8000}

@@ -178,19 +178,19 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	if err := sso.EnsureOIDCClients(ctx, o.domain); err != nil {
 		return err
 	}
-	// Le SSO Jitsi vient ICI, après la création du client OIDC « jitsi » dont il
-	// dépend. Le brancher depuis la phase visio le faisait échouer : le client
-	// n'existait pas encore.
+	// Jitsi est en ACCÈS LIBRE : le SSO (adaptateur OIDC puis jeton Matrix/UVS)
+	// a été retiré le 2026-10-09 — le widget d'Element relançait le SSO en
+	// boucle dans son iframe. Ce bloc ne configure plus rien : il NETTOIE les
+	// vestiges laissés par les versions précédentes dans un cluster existant.
 	if o.video {
-		if err := media.ConfigureSSO(ctx, o.domain); err != nil {
+		if err := media.RetirerSSO(ctx, o.domain); err != nil {
 			return err
 		}
-		// Widget Jitsi d'Element : jeton Matrix OpenID vérifié via UVS, sans
-		// SSO interactif dans l'iframe (qui bouclerait). Après ConfigureSSO :
-		// il bascule PROSODY_AUTH_TYPE en hybrid_matrix_token, qui accepte à la
-		// fois le jeton Matrix (widget) et le JWT OIDC (accès direct).
-		if err := media.ConfigurerMatrixSSO(ctx, o.domain); err != nil {
-			return err
+		if err := sso.SupprimerClientOIDC(ctx, "jitsi"); err != nil {
+			fmt.Printf("  ! client OIDC « jitsi » non supprimé : %v\n", err)
+		}
+		if err := chat.DesactiverCompte(ctx, "uvs"); err != nil {
+			fmt.Printf("  ! compte Synapse « uvs » non désactivé : %v\n", err)
 		}
 	}
 	if err := files.ConfigureOIDC(ctx, o.domain); err != nil {

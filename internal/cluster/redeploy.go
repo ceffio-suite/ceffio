@@ -65,10 +65,8 @@ func Redeployer(ctx context.Context, domain string, video bool) error {
 		return err
 	}
 	if video {
-		if err := media.ConfigureSSO(ctx, domain); err != nil {
-			return err
-		}
-		if err := media.ConfigurerMatrixSSO(ctx, domain); err != nil {
+		// Jitsi en accès libre : nettoyage des vestiges du SSO retiré.
+		if err := media.RetirerSSO(ctx, domain); err != nil {
 			return err
 		}
 	}

@@ -364,6 +364,21 @@ func psqlExec(ctx context.Context, sql string) error {
 	return nil
 }
 
+// psqlExecSynapse exécute un SQL sur la BASE synapse. Toujours passer par ici
+// pour les tables applicatives : psqlExec sans -d vise la base par défaut, où
+// « users » n'existe pas → « relation "users" does not exist ».
+// (psqlExec reste pour les commandes cluster : CREATE ROLE/ALTER DATABASE.)
+func psqlExecSynapse(ctx context.Context, sql string) error {
+	cmd := k8s.Command(ctx, "kubectl", "exec", "-i", "-c", "postgres",
+		"-n", pgNSPod, pgPod, "--", "psql", "-U", "postgres", "-d", dbName, "-v", "ON_ERROR_STOP=1")
+	cmd.Stdin = strings.NewReader(sql)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("psql synapse: %w: %s", err, out)
+	}
+	return nil
+}
+
 func secretExists(ctx context.Context, name string) bool {
 	out, err := k8s.Command(ctx, "kubectl", "get", "secret", name, "-n", ns).CombinedOutput()
 	return err == nil && strings.Contains(string(out), name)
@@ -506,4 +521,49 @@ func rolloutRestart(ctx context.Context, target string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// DesactiverCompte désactive (et marque effacé) un compte Matrix local en
+// base. Idempotent : un compte inexistant n'est pas une erreur.
+//
+// Utilisé par le retrait du SSO Jitsi pour supprimer le compte technique
+// « uvs » (admin, créé pour le service de vérification Matrix). On passe par
+// la base plutôt que par l'API admin Synapse : cette dernière exige un token
+// d'admin valide, or c'est précisément le compte à supprimer qui le portait.
+func DesactiverCompte(ctx context.Context, nom string) error {
+	server := serverNamePour(domaineCourant(ctx))
+	full := "@" + nom + ":" + server
+	// deactivate + erase : Synapse refuse alors tout login et retire les
+	// données d'identité. Le compte reste en base (intégrité référentielle)
+	// mais est inutilisable.
+	// WHERE name = ... ne modifie rien si le compte est absent : l'UPDATE
+	// réussit quand même, donc c'est naturellement idempotent.
+	sql := fmt.Sprintf(
+		`UPDATE users SET deactivated = 1, password_hash = NULL WHERE name = '%s';`,
+		strings.ReplaceAll(full, "'", "''"))
+	if err := psqlExecSynapse(ctx, sql); err != nil {
+		return err
+	}
+	fmt.Printf("∙ compte Synapse « %s » désactivé\n", nom)
+	return nil
+}
+
+// domaineCourant lit le domaine effectif depuis le server_name Synapse.
+func domaineCourant(ctx context.Context) string {
+	out, err := k8s.Command(ctx, "kubectl", "get", "configmap", "synapse-config", "-n", ns,
+		`-o`, `jsonpath={.data.homeserver\.yaml}`).Output()
+	if err != nil {
+		return ""
+	}
+	for _, ligne := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(ligne), "server_name:") {
+			sn := strings.TrimSpace(strings.SplitN(ligne, ":", 2)[1])
+			// server_name = matrix.<domaine> -> rendre <domaine>
+			if i := strings.Index(sn, "."); i > 0 {
+				return sn[i+1:]
+			}
+			return sn
+		}
+	}
+	return ""
 }
