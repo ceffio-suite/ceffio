@@ -185,6 +185,13 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 		if err := media.ConfigureSSO(ctx, o.domain); err != nil {
 			return err
 		}
+		// Widget Jitsi d'Element : jeton Matrix OpenID vérifié via UVS, sans
+		// SSO interactif dans l'iframe (qui bouclerait). Après ConfigureSSO :
+		// il bascule PROSODY_AUTH_TYPE en hybrid_matrix_token, qui accepte à la
+		// fois le jeton Matrix (widget) et le JWT OIDC (accès direct).
+		if err := media.ConfigurerMatrixSSO(ctx, o.domain); err != nil {
+			return err
+		}
 	}
 	if err := files.ConfigureOIDC(ctx, o.domain); err != nil {
 		return err

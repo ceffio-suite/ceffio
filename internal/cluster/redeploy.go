@@ -68,6 +68,9 @@ func Redeployer(ctx context.Context, domain string, video bool) error {
 		if err := media.ConfigureSSO(ctx, domain); err != nil {
 			return err
 		}
+		if err := media.ConfigurerMatrixSSO(ctx, domain); err != nil {
+			return err
+		}
 	}
 	if err := files.ConfigureOIDC(ctx, domain); err != nil {
 		return err
