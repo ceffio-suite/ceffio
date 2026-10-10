@@ -42,7 +42,7 @@ type Config struct {
 	// CertificatRef : refId du certificat wildcard cote OPNsense. Si vide, il
 	// est cherche automatiquement par ses SAN.
 	CertificatRef string
-	SousDomaines  []string // ex. cloud, chat, matrix, keycloak, office, meet, admin
+	SousDomaines  []string // ex. cloud, keycloak, office, admin
 }
 
 // Resultat rend compte de ce qui a été fait — et de ce qui existait déjà.

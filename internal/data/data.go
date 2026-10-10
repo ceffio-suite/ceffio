@@ -87,7 +87,6 @@ spec:
       postInitSQL:
         - CREATE DATABASE keycloak;
         - CREATE DATABASE nextcloud;
-        - CREATE DATABASE synapse;
 `, pgClusterName, pgNamespace)
 	if err := apply(ctx, manifest); err != nil {
 		return err

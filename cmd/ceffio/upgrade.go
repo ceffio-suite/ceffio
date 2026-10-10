@@ -18,7 +18,6 @@ func newUpgradeCmd() *cobra.Command {
 	var planSeul bool
 	var dir string
 	var domaine string
-	var video bool
 
 	c := &cobra.Command{
 		Use:   "upgrade",
@@ -134,14 +133,13 @@ niveau est annulée — et non poursuivie sans filet.
 			res, err := upgrade.Executer(ctx, versionreg.Registry, upgrade.Options{
 				Domain:    domaine,
 				BackupDir: dir,
-				Video:     video,
 				Progress: func(e string) {
 					fmt.Printf("  · %s\n", e)
 				},
 				// L'application consiste à rejouer le déploiement : chaque module
 				// vise la version épinglée du registre et est idempotent.
 				Appliquer: func(ctx context.Context) error {
-					return cluster.Redeployer(ctx, domaine, video)
+					return cluster.Redeployer(ctx, domaine)
 				},
 			})
 			if res != nil && res.Sauvegarde != "" {
@@ -182,7 +180,6 @@ niveau est annulée — et non poursuivie sans filet.
 	c.Flags().BoolVar(&planSeul, "plan", false, "Afficher ce qui changerait, sans rien modifier")
 	c.Flags().StringVar(&dir, "dir", ".", "Répertoire de la sauvegarde préalable")
 	c.Flags().StringVar(&domaine, "domain", "", "Domaine de base (déduit si absent)")
-	c.Flags().BoolVar(&video, "video", false, "La visioconférence est installée (déployée aussi)")
 
 	return c
 }

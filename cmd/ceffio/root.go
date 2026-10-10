@@ -17,7 +17,7 @@ documents, chat, visioconférence, messagerie) sur Kubernetes (K3s par défaut)
 en une seule commande.
 
 Ceffio est une couche d'intégration, pas un fork : il orchestre des projets
-open source éprouvés (Keycloak, Nextcloud, ONLYOFFICE, Matrix, Element, Jitsi,
+open source éprouvés (Keycloak, Nextcloud, ONLYOFFICE, Talk,
 Stalwart) derrière une expérience unifiée d'installation et de gestion.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,

@@ -4,16 +4,15 @@ import (
 	"context"
 	"time"
 
-	"github.com/ceffio-suite/ceffio/internal/chat"
 	"github.com/ceffio-suite/ceffio/internal/console"
 	"github.com/ceffio-suite/ceffio/internal/data"
 	"github.com/ceffio-suite/ceffio/internal/files"
 	"github.com/ceffio-suite/ceffio/internal/identity"
 	"github.com/ceffio-suite/ceffio/internal/ingress"
-	"github.com/ceffio-suite/ceffio/internal/media"
 	"github.com/ceffio-suite/ceffio/internal/office"
 	"github.com/ceffio-suite/ceffio/internal/platform"
 	"github.com/ceffio-suite/ceffio/internal/sso"
+	"github.com/ceffio-suite/ceffio/internal/stacks"
 )
 
 // Redeployer rejoue le déploiement complet d'une installation existante.
@@ -27,7 +26,7 @@ import (
 // L'ordre respecte les dépendances réelles : plateforme et données d'abord,
 // identité ensuite (elle a besoin de sa base), puis les couches applicatives,
 // et enfin l'ingress et le SSO qui écrivent dans toutes les applications.
-func Redeployer(ctx context.Context, domain string, video bool) error {
+func Redeployer(ctx context.Context, domain string) error {
 	// 1. Plateforme et données : indépendantes l'une de l'autre.
 	if err := platform.Deploy(ctx); err != nil {
 		return err
@@ -45,14 +44,6 @@ func Redeployer(ctx context.Context, domain string, video bool) error {
 	if err := files.Deploy(ctx); err != nil {
 		return err
 	}
-	if err := chat.Deploy(ctx, domain); err != nil {
-		return err
-	}
-	if video {
-		if err := media.Deploy(ctx, domain); err != nil {
-			return err
-		}
-	}
 
 	// 4. Bureau : après les fichiers (le connecteur passe par occ).
 	if err := office.Deploy(ctx); err != nil {
@@ -64,16 +55,11 @@ func Redeployer(ctx context.Context, domain string, video bool) error {
 	if err := sso.EnsureOIDCClients(ctx, domain); err != nil {
 		return err
 	}
-	if video {
-		// Jitsi en accès libre : nettoyage des vestiges du SSO retiré.
-		if err := media.RetirerSSO(ctx, domain); err != nil {
-			return err
-		}
-	}
-	if err := files.ConfigureOIDC(ctx, domain); err != nil {
+	// Talk remplace chat ET visio : nettoyage de l'ancienne pile.
+	if err := stacks.RetirerMatrixEtJitsi(ctx, domain); err != nil {
 		return err
 	}
-	if err := chat.ConfigureOIDC(ctx, domain); err != nil {
+	if err := files.ConfigureOIDC(ctx, domain); err != nil {
 		return err
 	}
 	if domain != "" {

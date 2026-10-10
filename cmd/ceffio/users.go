@@ -18,7 +18,7 @@ func newUsersCmd() *cobra.Command {
 func newUsersAddCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "add EMAIL",
-		Short: "Créer un utilisateur (Keycloak, Nextcloud, Matrix, boîte mail)",
+		Short: "Créer un utilisateur (Keycloak, Nextcloud, boîte mail)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("provisioning de l'utilisateur %q : pas encore implémenté", args[0])

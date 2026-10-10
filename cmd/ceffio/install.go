@@ -6,17 +6,16 @@ import (
 	"time"
 
 	"github.com/ceffio-suite/ceffio/internal/bootstrap"
-	"github.com/ceffio-suite/ceffio/internal/chat"
 	"github.com/ceffio-suite/ceffio/internal/cluster"
 	"github.com/ceffio-suite/ceffio/internal/console"
 	"github.com/ceffio-suite/ceffio/internal/data"
 	"github.com/ceffio-suite/ceffio/internal/files"
 	"github.com/ceffio-suite/ceffio/internal/identity"
 	"github.com/ceffio-suite/ceffio/internal/ingress"
-	"github.com/ceffio-suite/ceffio/internal/media"
 	"github.com/ceffio-suite/ceffio/internal/office"
 	"github.com/ceffio-suite/ceffio/internal/platform"
 	"github.com/ceffio-suite/ceffio/internal/sso"
+	"github.com/ceffio-suite/ceffio/internal/stacks"
 	"github.com/spf13/cobra"
 )
 
@@ -27,7 +26,6 @@ type installOptions struct {
 	existingCluster bool
 	mail            bool
 	office          bool
-	video           bool
 	monitoring      bool
 }
 
@@ -64,7 +62,6 @@ Exemples :
 	f.BoolVar(&o.existingCluster, "existing-cluster", false, "Utiliser un cluster Kubernetes existant")
 	f.BoolVar(&o.mail, "mail", false, "Activer la messagerie")
 	f.BoolVar(&o.office, "office", true, "Activer ONLYOFFICE")
-	f.BoolVar(&o.video, "video", false, "Activer la visioconférence (Jitsi)")
 	f.BoolVar(&o.monitoring, "monitoring", true, "Activer l'observabilité")
 
 	return c
@@ -82,7 +79,6 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	fmt.Printf("Runtime:    %s\n", o.runtime)
 	fmt.Printf("Mail:       %s\n", yesNo(o.mail))
 	fmt.Printf("Office:     %s\n", yesNo(o.office))
-	fmt.Printf("Video:      %s\n", yesNo(o.video))
 	fmt.Printf("Monitoring: %s\n", yesNo(o.monitoring))
 	fmt.Println()
 
@@ -155,14 +151,10 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	//   - office : s'active via « occ » DANS Nextcloud → exige Nextcloud Ready ;
 	//   - sso/AdoptURLs : écrivent dans Keycloak, Nextcloud et Synapse → après tous.
 	fmt.Println("\n∙ phases 5/7/10 en parallèle (fichiers ‖ chat ‖ visio)")
+	// Chat et visio sont désormais fournis par Nextcloud Talk (app Nextcloud),
+	// déployée avec la couche fichiers : plus de Synapse/Element ni de Jitsi.
 	appTasks := []namedTask{
 		{"fichiers (Phase 5)", func(ctx context.Context) error { return files.Deploy(ctx) }},
-		{"chat (Phase 7)", func(ctx context.Context) error { return chat.Deploy(ctx, o.domain) }},
-	}
-	if o.video {
-		appTasks = append(appTasks, namedTask{"visio (Phase 10)", func(ctx context.Context) error {
-			return media.Deploy(ctx, o.domain)
-		}})
 	}
 	if err := runParallel(ctx, appTasks...); err != nil {
 		return err
@@ -178,29 +170,16 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	if err := sso.EnsureOIDCClients(ctx, o.domain); err != nil {
 		return err
 	}
-	// Jitsi est en ACCÈS LIBRE : le SSO (adaptateur OIDC puis jeton Matrix/UVS)
-	// a été retiré le 2026-10-09 — le widget d'Element relançait le SSO en
-	// boucle dans son iframe. Ce bloc ne configure plus rien : il NETTOIE les
-	// vestiges laissés par les versions précédentes dans un cluster existant.
-	if o.video {
-		if err := media.RetirerSSO(ctx, o.domain); err != nil {
-			return err
-		}
-		if err := sso.SupprimerClientOIDC(ctx, "jitsi"); err != nil {
-			fmt.Printf("  ! client OIDC « jitsi » non supprimé : %v\n", err)
-		}
-		if err := chat.DesactiverCompte(ctx, "uvs"); err != nil {
-			fmt.Printf("  ! compte Synapse « uvs » non désactivé : %v\n", err)
-		}
+	// Retrait de l'ancienne pile (Matrix + Jitsi) : nettoyage idempotent des
+	// vestiges sur un cluster existant. Talk remplace chat ET visio.
+	if err := stacks.RetirerMatrixEtJitsi(ctx, o.domain); err != nil {
+		return err
 	}
 	if err := files.ConfigureOIDC(ctx, o.domain); err != nil {
 		return err
 	}
-	if err := chat.ConfigureOIDC(ctx, o.domain); err != nil {
-		return err
-	}
 
-	fmt.Println("\n✓ SSO OIDC configuré (login unique Keycloak sur Nextcloud + Element).")
+	fmt.Println("\n✓ SSO OIDC configuré (login unique Keycloak sur Nextcloud).")
 
 	// 13. Ingress / TLS réel (Phase 9).
 	if err := ingress.Deploy(ctx, o.domain); err != nil {

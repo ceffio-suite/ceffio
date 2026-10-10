@@ -33,7 +33,7 @@ func LireConfig(chemin string) (Config, error) {
 		cfg.PortInterne = "80"
 	}
 	if len(cfg.SousDomaines) == 0 {
-		cfg.SousDomaines = []string{"cloud", "chat", "matrix", "keycloak", "office", "meet", "admin"}
+		cfg.SousDomaines = []string{"cloud", "keycloak", "office", "admin"}
 	}
 	return cfg, nil
 }
@@ -44,5 +44,5 @@ const exemple = `{
   "domaine": "ceffio.mandem-it.com",
   "ipInterne": "192.168.1.48",
   "portInterne": "80",
-  "sousDomaines": ["cloud", "chat", "matrix", "keycloak", "office", "meet", "admin"]
+  "sousDomaines": ["cloud", "keycloak", "office", "admin"]
 }`

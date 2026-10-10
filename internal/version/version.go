@@ -46,30 +46,6 @@ var Registry = []Composant{
 		Module: "internal/office", Role: "édition de documents",
 	},
 	{
-		Nom: "synapse", Image: "docker.io/matrixdotorg/synapse:v1.160.0",
-		Module: "internal/chat", Role: "messagerie (serveur Matrix)",
-	},
-	{
-		Nom: "element", Image: "docker.io/vectorim/element-web:v1.12.27",
-		Module: "internal/chat", Role: "messagerie (client web)",
-	},
-	{
-		Nom: "jitsi-web", Image: "ghcr.io/jitsi/web:stable-11146-2",
-		Module: "internal/media", Role: "visioconférence (interface)",
-	},
-	{
-		Nom: "jitsi-prosody", Image: "ghcr.io/jitsi/prosody:stable-11146-2",
-		Module: "internal/media", Role: "visioconférence (XMPP)",
-	},
-	{
-		Nom: "jitsi-jicofo", Image: "ghcr.io/jitsi/jicofo:stable-11146-2",
-		Module: "internal/media", Role: "visioconférence (conférencier)",
-	},
-	{
-		Nom: "jitsi-jvb", Image: "ghcr.io/jitsi/jvb:stable-11146-2",
-		Module: "internal/media", Role: "visioconférence (pont vidéo)",
-	},
-	{
 		Nom: "redis", Image: "redis:7.4.11",
 		Module: "internal/data", Role: "cache et état partagé",
 	},

@@ -19,12 +19,11 @@ func newBackupCmd() *cobra.Command {
 		Long: `Sauvegarde une installation Ceffio dans une archive autoportante.
 
 Contenu :
-  · les bases PostgreSQL   mysuite, keycloak, nextcloud, synapse
-  · les volumes            nextcloud-data, synapse-media, onlyoffice-data,
-                           jitsi-config
+  · les bases PostgreSQL   mysuite, keycloak, nextcloud
+  · les volumes            nextcloud-data, onlyoffice-data
   · les Secrets applicatifs — sans eux, les données restaurées seraient
                            orphelines (mots de passe de base, clés de
-                           signature Matrix et ONLYOFFICE)
+                           signature et ONLYOFFICE)
   · un manifeste           empreintes SHA-256 de chaque élément
 
 L'archive est écrite dans le répertoire courant, ou dans --dir. Elle contient

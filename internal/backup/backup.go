@@ -8,10 +8,10 @@
 // Ce qui est sauvegardé, et pourquoi ce choix :
 //
 //  1. Les bases PostgreSQL (logical dump par base) — mysuite, keycloak,
-//     nextcloud, synapse. C'est le cœur de la plateforme : identités, comptes,
+//     nextcloud. C'est le cœur de la plateforme : identités, comptes,
 //     métadonnées de fichiers, conversations.
 //  2. Les volumes (tar) — nextcloud-data (fichiers réels des utilisateurs),
-//     synapse-media, onlyoffice-data, jitsi-config. Un dump SQL ne suffit pas :
+//     onlyoffice-data. Un dump SQL ne suffit pas :
 //     les documents et les pièces jointes vivent sur disque.
 //  3. Les Secrets applicatifs — sans eux, une restauration rend des données
 //     orphelines : les mots de passe de base ne correspondent plus, les clés de
@@ -43,26 +43,22 @@ import (
 // Bases PostgreSQL de la plateforme. Toutes vivent dans le cluster CNPG
 // ceffio-pg ; les nommer explicitement évite de dépendre d'une découverte
 // dynamique qui inclurait un jour une base technique.
-var Bases = []string{"mysuite", "keycloak", "nextcloud", "synapse"}
+var Bases = []string{"mysuite", "keycloak", "nextcloud"}
 
 // Volumes à sauvegarder : namespace, nom du PVC, et le sous-chemin utile
 // (certains volumes contiennent à côté des données un état sans intérêt).
 var Volumes = []Volume{
 	{Namespace: "ceffio-files", PVC: "nextcloud-data", PodLabel: "app=nextcloud",
 		Path: "/var/www/html/data", UID: 33, GID: 33}, // www-data
-	{Namespace: "ceffio-chat", PVC: "synapse-media", PodLabel: "app=synapse",
-		Path: "/data/media_store", UID: 991, GID: 991},
 	{Namespace: "ceffio-office", PVC: "onlyoffice-data", PodLabel: "app=onlyoffice",
 		Path: "/var/lib/onlyoffice", UID: 0, GID: 0},
-	{Namespace: "ceffio-video", PVC: "jitsi-config", PodLabel: "app=prosody",
-		Path: "/config", UID: 0, GID: 0},
 }
 
 // Secrets applicatifs : sans eux, les données restaurées sont orphelines.
 //
 // Liste établie depuis l'inventaire réel du cluster (2026-10-07), et non depuis
-// une supposition : les secrets contenant les mots de passe de base, les clés de
-// signature Matrix, les identifiants OIDC et la clé de la console. Les secrets
+// une supposition : les mots de passe de base, les identifiants OIDC et la clé
+// de la console. Les secrets
 // TLS ne sont PAS listés : cert-manager les régénère depuis les Certificate, qui
 // sont eux-mêmes recréés par le déploiement. Les secrets d'opérateur (CNPG,
 // webhooks, tokens de service) sont recréés par leurs opérateurs respectifs.
@@ -73,17 +69,11 @@ var Secrets = []struct{ Name, Namespace string }{
 	{"keycloak-admin", "ceffio-identity"},
 	{"keycloak-db", "ceffio-identity"},
 	{"nextcloud-oidc", "ceffio-identity"},
-	{"synapse-oidc", "ceffio-identity"},
 	// fichiers
 	{"nextcloud-admin", "ceffio-files"},
 	{"nextcloud-db", "ceffio-files"},
-	// chat
-	{"synapse-db", "ceffio-chat"},
-	{"synapse-secrets", "ceffio-chat"},
 	// bureau
 	{"onlyoffice-secret", "ceffio-office"},
-	// visio
-	{"jitsi-secrets", "ceffio-video"},
 	// console d'administration
 	{"ceffio-console-key", "ceffio-system"},
 }

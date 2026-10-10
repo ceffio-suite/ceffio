@@ -15,7 +15,6 @@ import (
 type Options struct {
 	Domain    string
 	BackupDir string
-	Video     bool
 	Progress  func(string)
 	// Appliquer rejoue le déploiement complet (idempotent). C'est ce qui met
 	// réellement à jour les images : chaque module Déploy() vise la version

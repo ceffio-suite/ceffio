@@ -47,11 +47,6 @@ func clientsOIDC(domain string) []client {
 			id:        "nextcloud",
 			redirects: fmt.Sprintf("https://cloud.%s/apps/user_oidc/code,http://localhost/*", domain),
 		},
-		{
-			app:       "synapse",
-			id:        "synapse",
-			redirects: fmt.Sprintf("https://matrix.%s/_synapse/client/oidc/callback,http://localhost/*", domain),
-		},
 		// NB : pas de client « jitsi » — Jitsi est en accès libre (SSO retiré
 		// le 2026-10-09, voir internal/media/sans_sso.go). Les installations
 		// existantes le voient supprimé par SupprimerClientOIDC.
@@ -96,7 +91,7 @@ func EnsureOIDCClients(ctx context.Context, domain string) error {
 			fmt.Printf("∙ client OIDC %s réconcilié (secret → %s)\n", c.id, sec)
 		}
 	}
-	fmt.Println("✓ Clients OIDC Keycloak prêts (nextcloud, synapse)")
+	fmt.Println("✓ Clients OIDC Keycloak prêts (nextcloud)")
 	return nil
 }
 

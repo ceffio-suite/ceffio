@@ -80,14 +80,10 @@ var catalogueServices = []struct {
 }{
 	{"cloud", "Nextcloud", "Fichiers, partage et collaboration", false, true,
 		[]string{"nextcloud"}},
-	{"chat", "Element", "Messagerie d'équipe (Matrix)", false, true,
-		[]string{"element"}},
-	{"meet", "Jitsi Meet", "Visioconférence — accès libre, via Element ou lien direct", false, false,
-		[]string{"web", "prosody", "jicofo", "jvb"}},
+	{"talk", "Nextcloud Talk", "Messagerie et visioconférence (intégré à Nextcloud)", false, true,
+		[]string{"nextcloud"}},
 	{"keycloak", "Keycloak", "Authentification unique (SSO) de toutes les apps", false, false,
 		[]string{"keycloak"}},
-	{"matrix", "Synapse", "API Matrix — sert le chat, pas d'usage direct", true, false,
-		[]string{"synapse"}},
 	{"office", "ONLYOFFICE", "Moteur d'édition des documents Nextcloud — chargé par le navigateur, pas d'accès direct utile", true, false,
 		[]string{"onlyoffice"}},
 	{"admin", "Console Ceffio", "Cette console d'administration", true, false,
@@ -100,7 +96,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	// 1. Tous les pods ceffio-* d'un coup (une seule requête API par namespace).
 	podsParNS := map[string][]Pod{}
-	for _, l := range []string{"data", "identity", "files", "office", "chat", "video", "system"} {
+	for _, l := range []string{"data", "identity", "files", "office", "system"} {
 		ns := "ceffio-" + l
 		pl, err := s.kube.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
 		if err != nil {
@@ -137,7 +133,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	// 2. Couches (vue diagnostic interne).
 	var stack []Layer
-	for _, l := range []string{"data", "identity", "files", "office", "chat", "video", "system"} {
+	for _, l := range []string{"data", "identity", "files", "office", "system"} {
 		ly := Layer{Name: l}
 		for _, p := range podsParNS["ceffio-"+l] {
 			ly.Total++
@@ -161,7 +157,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			SSO:       c.sso,
 			Sante:     "inconnue",
 		}
-		for _, ns := range []string{"ceffio-files", "ceffio-chat", "ceffio-video", "ceffio-identity", "ceffio-office", "ceffio-system"} {
+		for _, ns := range []string{"ceffio-files", "ceffio-identity", "ceffio-office", "ceffio-system"} {
 			for _, p := range podsParNS[ns] {
 				if !porteService(p.Name, c.pods) {
 					continue

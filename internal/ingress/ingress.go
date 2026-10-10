@@ -36,32 +36,8 @@ func Deploy(ctx context.Context, domain string) error {
 // https Nextcloud, redirect URIs SSO et URL du connecteur ONLYOFFICE.
 func AdoptURLs(ctx context.Context, domain string) error {
 	fmt.Printf("\nAdoption des URLs publiques *.%s...\n", domain)
-	matrix := "matrix." + domain
 	cloud := "cloud." + domain
 	office := "office." + domain
-
-	// 1) Element → homeserver public (base_url) pour que le navigateur joigne Synapse.
-	if err := rewriteConfig(ctx, "ceffio-chat", "element-config", "config.json",
-		`"http://synapse.ceffio-chat.svc:8008"`, `"https://`+matrix+`"`,
-		"deploy/element"); err != nil {
-		return err
-	}
-
-	// 2) Synapse → public_baseurl pour les URLs d'auth/fédération générées.
-	if err := rewriteConfig(ctx, "ceffio-chat", "synapse-config", "homeserver.yaml",
-		"", "", "deploy/synapse"); err != nil {
-		return err
-	}
-	host := "https://" + matrix
-	if err := appendNonDuplicate(ctx, "ceffio-chat", "synapse-config", "homeserver.yaml",
-		"public_baseurl: "+host+"\n", "public_baseurl:", "deploy/synapse"); err != nil {
-		return err
-	}
-	// 2b) OIDC Synapse → issuer/endpoints publics https (discover:false). Sinon le
-	// navigateur est renvoyé vers l'URL interne, et un token_endpoint http est refusé.
-	if err := rewriteSynapseOidc(ctx, domain); err != nil {
-		return err
-	}
 
 	// 3) Nextcloud : protocole https + URL publique + SSRF + proxy derrière Traefik.
 	// Le HttpClient de Nextcloud bloque par défaut les adresses privées (SSRF) :
@@ -82,7 +58,7 @@ func AdoptURLs(ctx context.Context, domain string) error {
 		return err
 	}
 
-	// 4) Redirections SSO Keycloak des clients nextcloud + synapse vers le https.
+	// 4) Redirection SSO Keycloak du client nextcloud vers le https.
 	if err := ssoRedirect(ctx, domain); err != nil {
 		return err
 	}
@@ -139,7 +115,7 @@ func AdoptURLs(ctx context.Context, domain string) error {
 		return err
 	}
 
-	fmt.Println("✓ URLs publiques adoptées dans Element, Synapse, Nextcloud, ONLYOFFICE, Keycloak + redirects SSO")
+	fmt.Println("✓ URLs publiques adoptées dans Nextcloud, ONLYOFFICE, Keycloak + redirect SSO")
 	return nil
 }
 
@@ -166,33 +142,6 @@ func adoptKeycloakHost(ctx context.Context, domain string) error {
 // hostAliases + injection CA. Un domaine public n'en a pas besoin.
 func isDemo(domain string) bool {
 	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(domain)), ".local")
-}
-
-// rewriteSynapseOidc bascule le bloc OIDC de Synapse vers issuer + endpoints publics
-// https (discover:false). Sinon le navigateur reçoit l'URL interne et un token_endpoint
-// http est refusé par Synapse.
-func rewriteSynapseOidc(ctx context.Context, domain string) error {
-	key := "homeserver.yaml"
-	data, err := cmData(ctx, "ceffio-chat", "synapse-config", key)
-	if err != nil {
-		return err
-	}
-	oldIssuer := `issuer: "http://keycloak.ceffio-identity.svc:8080/realms/ceffio"`
-	if !strings.Contains(data, oldIssuer) {
-		return nil // déjà public
-	}
-	kc := "keycloak." + domain
-	newBlock := fmt.Sprintf(`issuer: "https://%s/realms/ceffio"
-    discover: false
-    authorization_endpoint: "https://%s/realms/ceffio/protocol/openid-connect/auth"
-    token_endpoint: "https://%s/realms/ceffio/protocol/openid-connect/token"
-    userinfo_endpoint: "https://%s/realms/ceffio/protocol/openid-connect/userinfo"
-    jwks_uri: "https://%s/realms/ceffio/protocol/openid-connect/certs"`, kc, kc, kc, kc, kc)
-	data = strings.Replace(data, oldIssuer, newBlock, 1)
-	if err := applyCMData(ctx, "ceffio-chat", "synapse-config", key, data); err != nil {
-		return err
-	}
-	return rolloutRestart(ctx, "deploy/synapse")
 }
 
 // InjecterConfianceTLS rend l'autorité interne reconnaissable par les services,
@@ -226,10 +175,10 @@ func InjecterConfianceTLS(ctx context.Context, domain string, avecHostAliases bo
 	// En domaine public, hosts reste VIDE : cela purge les hostAliases posés du
 	// temps de demo.local (un « hostAliases: null » les retire) et laisse le vrai
 	// DNS faire son travail.
-	hostsKeycloak, hostsAutres := []string{kc}, []string{kc, office}
+	hostsAutres := []string{kc, office}
 	hostsOffice := []string{cloud, office, kc}
 	if !avecHostAliases {
-		hostsKeycloak, hostsAutres, hostsOffice = nil, nil, nil
+		hostsAutres, hostsOffice = nil, nil
 	}
 
 	// Nextcloud (PHP) : CA via php.ini pointant sur la CA montée (persistant pour PHP).
@@ -241,22 +190,6 @@ func InjecterConfianceTLS(ctx context.Context, domain string, avecHostAliases bo
 	// les certificats publics et ses appels sortants échouent.
 	if err := patchApp(ctx, "ceffio-files", "nextcloud", "nextcloud", tip,
 		hostsAutres, []envKV{{"SSL_CERT_FILE", cheminPaquetCombine}}, true); err != nil {
-		return err
-	}
-
-	// Synapse (Python) : le paquet COMBINÉ, pas notre seule autorité.
-	//
-	// SSL_CERT_FILE n'est pas une liste d'appoint : c'est LA liste des autorités
-	// que Python utilise. Y mettre seulement notre autorité interne AMPUTE la
-	// confiance — Synapse refuse alors tout certificat public. C'est ce qui
-	// cassait le callback OIDC : Keycloak présente un certificat Let's Encrypt
-	// valide, et Synapse le rejetait sur « certificate verify failed ».
-	// On enrichit donc : autorités système + la nôtre.
-	if err := createCAConfigs(ctx, "ceffio-chat", ca); err != nil {
-		return err
-	}
-	if err := patchApp(ctx, "ceffio-chat", "synapse", "synapse", tip,
-		hostsKeycloak, []envKV{{"SSL_CERT_FILE", cheminPaquetCombine}}, false); err != nil {
 		return err
 	}
 
@@ -439,7 +372,6 @@ func patchApp(ctx context.Context, ns, deploy, container, traefikIP string, host
 	return r.Run()
 }
 
-// rewriteConfig fait une substitution simple dans une valeur de ConfigMap puis redémarre la cible.
 func rewriteConfig(ctx context.Context, ns, cm, key, old, repl, target string) error {
 	data, err := cmData(ctx, ns, cm, key)
 	if err != nil {
@@ -457,7 +389,6 @@ func rewriteConfig(ctx context.Context, ns, cm, key, old, repl, target string) e
 	return nil
 }
 
-// appendNonDuplicate ajoute une ligne à une ConfigMap si absente (idempotent), puis redémarre.
 func appendNonDuplicate(ctx context.Context, ns, cm, key, line, needle, target string) error {
 	data, err := cmData(ctx, ns, cm, key)
 	if err != nil {
@@ -476,7 +407,6 @@ func appendNonDuplicate(ctx context.Context, ns, cm, key, line, needle, target s
 func ssoRedirect(ctx context.Context, domain string) error {
 	for _, client := range []struct{ id, base string }{
 		{id: "nextcloud", base: "cloud." + domain},
-		{id: "synapse", base: "matrix." + domain},
 	} {
 		uri := "https://" + client.base + "/*"
 		if err := kcadmRedirect(ctx, client.id, uri); err != nil {
@@ -538,7 +468,6 @@ func rolloutRestart(ctx context.Context, target string) error {
 	ns := explicite
 	if ns == "" {
 		ns = map[string]string{
-			"element": "ceffio-chat", "synapse": "ceffio-chat",
 			"nextcloud": "ceffio-files", "onlyoffice": "ceffio-office",
 			"keycloak": "ceffio-identity",
 			"traefik":  "kube-system",
@@ -652,11 +581,8 @@ type appRoute struct {
 func ingressesManifest(domain string) string {
 	routes := []appRoute{
 		{sub: "cloud", namespace: "ceffio-files", service: "nextcloud", port: 80},
-		{sub: "chat", namespace: "ceffio-chat", service: "element", port: 8080},
-		{sub: "matrix", namespace: "ceffio-chat", service: "synapse", port: 8008},
 		{sub: "keycloak", namespace: "ceffio-identity", service: "keycloak", port: 8080},
 		{sub: "office", namespace: "ceffio-office", service: "onlyoffice", port: 80},
-		{sub: "meet", namespace: "ceffio-video", service: "web", port: 8000},
 	}
 	var sb strings.Builder
 	for _, r := range routes {

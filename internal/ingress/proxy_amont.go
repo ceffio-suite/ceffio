@@ -83,10 +83,7 @@ func NettoyerAncienDomaine(ctx context.Context, ancien, nouveau string) error {
 	fmt.Printf("Nettoyage de l'ancien domaine %s -> %s...\n", ancien, nouveau)
 
 	// 1) ConfigMaps : Element, Synapse (+ tout autre qui contiendrait le nom).
-	cibles := []struct{ ns, cm, cle string }{
-		{"ceffio-chat", "element-config", "config.json"},
-		{"ceffio-chat", "synapse-config", "homeserver.yaml"},
-	}
+	cibles := []struct{ ns, cm, cle string }{}
 	for _, c := range cibles {
 		data, err := cmData(ctx, c.ns, c.cm, c.cle)
 		if err != nil || !strings.Contains(data, ancien) {
@@ -143,9 +140,6 @@ func NettoyerAncienDomaine(ctx context.Context, ancien, nouveau string) error {
 	}
 
 	// 4) Redemarrer ce qui a ete modifie.
-	for _, t := range []string{"deploy/synapse", "deploy/element"} {
-		_ = rolloutRestart(ctx, t)
-	}
 	return nil
 }
 
