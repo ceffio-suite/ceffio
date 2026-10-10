@@ -583,9 +583,28 @@ func ingressesManifest(domain string) string {
 		{sub: "cloud", namespace: "ceffio-files", service: "nextcloud", port: 80},
 		{sub: "keycloak", namespace: "ceffio-identity", service: "keycloak", port: 8080},
 		{sub: "office", namespace: "ceffio-office", service: "onlyoffice", port: 80},
+		// Talk : le signaling server est joint par le NAVIGATEUR (pas seulement
+		// en interne) — il doit donc être exposé, et en WebSocket.
+		{sub: "spreed", namespace: "ceffio-video", service: "talk-signaling", port: 8081},
 	}
 	var sb strings.Builder
 	for _, r := range routes {
+		// Annotations supplémentaires, propres à certaines routes.
+		//
+		// POURQUOI ICI ET PAS DANS UN CHAMP DE appRoute : une seule route a
+		// besoin d'annotations aujourd'hui (le signaling, dont les connexions
+		// WebSocket durent des heures). Un champ dans la structure suggérerait
+		// que toutes les routes en ont, alors que l'immense majorité n'en a pas.
+		//
+		// ATTENTION AU YAML : une ligne d'annotation mal formée ou un index
+		// Fprintf mal numéroté produit un manifeste invalide, et kubectl refuse
+		// TOUT le lot (pas seulement la route concernée). Les index ci-dessous
+		// sont explicites pour cette raison.
+		ann := ""
+		if r.sub == "spreed" {
+			ann = "    traefik.ingress.kubernetes.io/proxy-read-timeout: \"3600\"\n" +
+				"    traefik.ingress.kubernetes.io/proxy-send-timeout: \"3600\""
+		}
 		host := r.sub + "." + domain
 		fmt.Fprintf(&sb, `---
 apiVersion: networking.k8s.io/v1
@@ -595,6 +614,7 @@ metadata:
   namespace: %[2]s
   annotations:
     cert-manager.io/cluster-issuer: ceffio-ca-issuer
+%[5]s
 spec:
   ingressClassName: traefik
   tls:
@@ -610,8 +630,8 @@ spec:
               service:
                 name: %[4]s
                 port:
-                  number: %[5]d
-`, r.sub, r.namespace, host, r.service, r.port)
+                  number: %[6]d
+`, r.sub, r.namespace, host, r.service, ann, r.port)
 	}
 	return sb.String()
 }

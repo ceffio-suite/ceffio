@@ -88,6 +88,8 @@ var catalogueServices = []struct {
 		[]string{"onlyoffice"}},
 	{"admin", "Console Ceffio", "Cette console d'administration", true, false,
 		[]string{"ceffio-admin"}},
+	{"spreed", "Talk — serveur de médias", "Transport vidéo des réunions (Janus + signaling)", true, false,
+		[]string{"janus", "talk-signaling", "coturn", "nats"}},
 }
 
 // handleStatus renvoie l'état complet de la plateforme.
@@ -96,7 +98,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	// 1. Tous les pods ceffio-* d'un coup (une seule requête API par namespace).
 	podsParNS := map[string][]Pod{}
-	for _, l := range []string{"data", "identity", "files", "office", "system"} {
+	for _, l := range []string{"data", "identity", "files", "office", "video", "system"} {
 		ns := "ceffio-" + l
 		pl, err := s.kube.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
 		if err != nil {
@@ -133,7 +135,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	// 2. Couches (vue diagnostic interne).
 	var stack []Layer
-	for _, l := range []string{"data", "identity", "files", "office", "system"} {
+	for _, l := range []string{"data", "identity", "files", "office", "video", "system"} {
 		ly := Layer{Name: l}
 		for _, p := range podsParNS["ceffio-"+l] {
 			ly.Total++
@@ -157,7 +159,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			SSO:       c.sso,
 			Sante:     "inconnue",
 		}
-		for _, ns := range []string{"ceffio-files", "ceffio-identity", "ceffio-office", "ceffio-system"} {
+		for _, ns := range []string{"ceffio-files", "ceffio-identity", "ceffio-office", "ceffio-video", "ceffio-system"} {
 			for _, p := range podsParNS[ns] {
 				if !porteService(p.Name, c.pods) {
 					continue

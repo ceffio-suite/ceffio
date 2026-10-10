@@ -42,6 +42,22 @@ var Registry = []Composant{
 		Module: "internal/files", Role: "fichiers et documents",
 	},
 	{
+		Nom: "talk-signaling", Image: "docker.io/strukturag/nextcloud-spreed-signaling:2.1.1",
+		Module: "internal/talk", Role: "Talk : coordination des sessions",
+	},
+	{
+		Nom: "janus", Image: "ghcr.io/ceffio-suite/janus-gateway:1.3.0-1",
+		Module: "internal/talk", Role: "Talk : SFU, transport du média",
+	},
+	{
+		Nom: "coturn", Image: "docker.io/coturn/coturn:4.18",
+		Module: "internal/talk", Role: "Talk : relais TURN/STUN",
+	},
+	{
+		Nom: "nats", Image: "docker.io/library/nats:2.15",
+		Module: "internal/talk", Role: "Talk : messagerie du signaling",
+	},
+	{
 		Nom: "onlyoffice", Image: "docker.io/onlyoffice/documentserver:9.4.0.1",
 		Module: "internal/office", Role: "édition de documents",
 	},

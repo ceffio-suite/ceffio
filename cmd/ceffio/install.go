@@ -16,6 +16,7 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/platform"
 	"github.com/ceffio-suite/ceffio/internal/sso"
 	"github.com/ceffio-suite/ceffio/internal/stacks"
+	"github.com/ceffio-suite/ceffio/internal/talk"
 	"github.com/spf13/cobra"
 )
 
@@ -27,6 +28,7 @@ type installOptions struct {
 	mail            bool
 	office          bool
 	monitoring      bool
+	ipPublique      string
 }
 
 const devClusterName = "ceffio-dev"
@@ -63,6 +65,8 @@ Exemples :
 	f.BoolVar(&o.mail, "mail", false, "Activer la messagerie")
 	f.BoolVar(&o.office, "office", true, "Activer ONLYOFFICE")
 	f.BoolVar(&o.monitoring, "monitoring", true, "Activer l'observabilité")
+	f.StringVar(&o.ipPublique, "ip-publique", "",
+		"Adresse publique du déploiement (visio : Janus doit l'annoncer aux navigateurs)")
 
 	return c
 }
@@ -173,6 +177,11 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	// Retrait de l'ancienne pile (Matrix + Jitsi) : nettoyage idempotent des
 	// vestiges sur un cluster existant. Talk remplace chat ET visio.
 	if err := stacks.RetirerMatrixEtJitsi(ctx, o.domain); err != nil {
+		return err
+	}
+	// Talk + High Performance Backend : messagerie ET visioconférence, dans
+	// Nextcloud. Déployé après le retrait, pour libérer d'abord les ressources.
+	if err := talk.Deploy(ctx, o.ipPublique); err != nil {
 		return err
 	}
 	if err := files.ConfigureOIDC(ctx, o.domain); err != nil {
