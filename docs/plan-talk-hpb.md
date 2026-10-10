@@ -96,13 +96,32 @@ NAT vers Janus. Même principe que JVB et AgenTorch.
 
 ## 4. Réseau — ports à ouvrir (OPNsense)
 
+**Ceffio a ses ports DÉDIÉS** — décision : isolation complète d'AgenTorch
+(même raisonnement que « deux LiveKit séparés »). Aucun service partagé, aucun
+secret commun, aucune règle NAT commune.
+
 ```
-spreed.<domaine>      443/tcp     via Caddy — déjà routé par *.ceffio
-20000-20100/udp       média Janus             ← À OUVRIR
-3478/udp              TURN (coturn)           ← À OUVRIR
-5349/tcp              TURN-over-TLS           ← recommandé
-49152-49200/udp       relais coturn           ← À OUVRIR
+spreed.<domaine>      443/tcp       via Caddy — déjà routé par *.ceffio
+20000-20100/udp       média Janus                 ← À OUVRIR
+3479/udp              TURN coturn (Ceffio)        ← À OUVRIR (3478 = AgenTorch)
+5349/tcp              TURN-over-TLS               ← À OUVRIR
+49152-49200/udp       relais coturn               ← À OUVRIR
 ```
+
+Répartition des ports TURN dans l'infrastructure :
+
+```
+3478/udp       AgenTorch — NE PAS TOUCHER
+3479/udp       Ceffio                 (choix lisible : voisin du standard)
+```
+
+Le numéro de port TURN est **libre** (ce n'est pas un standard figé comme le
+443). Le seul impératif : **le même numéro des deux côtés** (config coturn ↔
+règle NAT), sinon le relais est injoignable.
+
+Vérifié sur la VM 310 : `3479`, `5349`, `49152-49200`, `20000-20100` sont
+**tous libres** (aucun conflit local). Le conflit avec AgenTorch n'existe que
+sur l'IP publique, via les règles NAT — et il est résolu par le port dédié.
 
 La plage Janus par défaut est `20000-40000` (lue dans
 `conf/janus.jcfg.sample.in`). On la **réduit à 100 ports** : largement suffisant
@@ -118,14 +137,41 @@ rtp_port_range = "20000-20100"
 1. **Pour une plage, le champ « port local » de la règle OPNsense doit rester
    VIDE** — renseigné, pf rabat toute la plage sur un seul port. Erreur déjà
    commise pour AgenTorch, documentée dans le wiki.
-2. **Vérifier les chevauchements** : AgenTorch occupe déjà `50000-60000/udp`,
-   `30000-40000/udp`, `3478/udp`. ⚠️ **Conflit TURN** : `3478/udp` est déjà
-   utilisé par AgenTorch → il faut soit partager, soit déplacer le TURN Ceffio
-   sur un autre port. **À trancher.**
+2. **Vérifier les chevauchements** : AgenTorch occupe `50000-60000/udp`,
+   `30000-40000/udp`, `3478/udp`. Réglé : Ceffio utilise des plages et un port
+   TURN **entièrement distincts** (voir ci-dessus), et une VM différente
+   (192.168.1.48 contre 10.9.1.113). Aucune règle NAT n'est partagée.
 3. Les pods k3s ne lisent pas `/etc/hosts` du nœud : `hostAliases` ou CoreDNS
    pour résoudre par nom public.
 
 ---
+
+## 4bis. Isolation réseau — décision de traçabilité
+
+**Décision : Ceffio et AgenTorch ne partagent AUCUNE ressource réseau.**
+
+Motif : une entreprise n'héberge pas plusieurs services critiques sur les mêmes
+ports, avec le même secret et la même règle NAT. Partager le TURN voudrait dire
+qu'une panne d'un relais coupe les visios des deux produits, qu'un changement de
+config pour l'un casse l'autre, et que les identifiants TURN d'AgenTorch
+ouvriraient le relais Ceffio. C'est exactement le raisonnement appliqué aux deux
+instances LiveKit séparées.
+
+```
+                    VM                  ports média       TURN
+AgenTorch   10.9.1.113  (at-livekit)   50000-60000/udp   3478/udp
+                                      30000-40000/udp
+Ceffio      192.168.1.48 (VM 310)     20000-20100/udp   3479/udp
+                                      49152-49200/udp
+```
+
+Aucun chevauchement. Aucune règle NAT partagée. Aucun secret commun.
+
+Réserve honnête : le TURN n'est **pas obligatoire au démarrage**. Janus
+fonctionne sans, tant que les utilisateurs sont sur des réseaux autorisant l'UDP
+direct. Le coturn sert à ceux qui sont bloqués (4G d'entreprise, réseaux
+d'hôtel). On peut donc déployer Talk **sans** coturn d'abord, et l'ajouter
+seulement si des utilisateurs se plaignent — c'est un test qui ne coûte rien.
 
 ## 5. Ce qu'il faut automatiser dans `ceffio install`
 
@@ -241,10 +287,22 @@ pendant toute la migration.
 
 ## 9. Points à trancher avant de commencer
 
-1. **Ressources VM 310** — Janus + coturn + signaling + NATS sur une VM qui
-   héberge déjà 12 pods. Recommandation HPB : 4 vCPU / 8 Go + bande passante.
-   **Bloquant** : si ça ne rentre pas, il faut une VM dédiée.
-2. **Conflit TURN 3478/udp** avec AgenTorch — partager ou déplacer ?
+1. ~~Ressources VM 310~~ — **MESURÉ, LARGEMENT SUFFISANT** (2026-10-09) :
+
+   ```
+   machine        8 coeurs · 31 Gi RAM · 96 G disque (23 % utilisé)
+   disponible     26 Gi RAM · ~7.9 coeurs · 75 G disque
+   pods actuels   0.45 coeur demandé · 6.8 Gi demandés (8.3 Gi de limite)
+   besoin HPB     ~3.8 Gi (Janus 2 + coturn 1 + signaling 0.5 + NATS 0.25)
+   après déploiement   > 20 Gi de RAM libre
+   ```
+
+   Ces chiffres sont ceux d'une VM **au repos** : ils prouvent qu'il y a la
+   place d'installer sans dégrader Nextcloud/Keycloak/ONLYOFFICE, mais pas la
+   tenue en charge réelle (qui dépend de la **bande passante**, ~1.5 Mbps par
+   participant dans les deux sens — non mesurable sans appel en cours).
+2. ~~Conflit TURN 3478/udp avec AgenTorch~~ — **RÉSOLU** : port dédié 3479
+   pour Ceffio, isolation complète.
 3. **Image Janus** — bâtir et versionner (recommandé) ou image publique ?
 4. **Le flag `--video`** — devient la visio Talk. Renommer, ou Talk par défaut ?
 5. **Transcription** — Talk a une app `live_transcription` mais elle exige un
