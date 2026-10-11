@@ -147,6 +147,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9S14.5 18.5 12 21c-2.5-2.5-3.5-5.5-3.5-9S9.5 5.5 12 3z"/></svg>
       Applications
     </div>
+    <div class="nav-item" data-tab="apps">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M17.5 14v7M14 17.5h7"/></svg>
+      Apps Nextcloud
+    </div>
     <div class="nav-item" data-tab="users">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17.5" cy="8.5" r="2.5"/><path d="M21 20c0-2.5-1.5-4.5-3.5-5.5"/></svg>
       Utilisateurs
@@ -216,6 +220,18 @@
         </table>
       </section>
 
+      <!-- APPS NEXTCLOUD -->
+      <section class="section" id="tab-apps">
+        <h2 class="section-title">Applications Nextcloud</h2>
+        <p class="section-sub">Applications de collaboration retenues pour Ceffio : toutes en
+        licence libre (AGPL-3.0, sans quota d'utilisateurs). Cochez une case pour activer
+        l'application, décochez pour la désactiver — la modification prend effet immédiatement.</p>
+
+        <div id="appsGroups">
+          <div class="note">Chargement du catalogue…</div>
+        </div>
+      </section>
+
       <!-- CERTIFICATS -->
       <section class="section" id="tab-certs">
         <h2 class="section-title">Certificats TLS</h2>
@@ -242,7 +258,11 @@
 <div class="overlay" id="keyOverlay">
   <div class="modal">
     <h2>Clé d'administration</h2>
-    <p>La clé se trouve dans le Secret Kubernetes <span class="mono">ceffio-console-key</span>. Elle n'est stockée que dans votre navigateur.</p>
+    <p>La clé se trouve dans le Secret Kubernetes <span class="mono">ceffio-console-key</span>.
+    Elle n'est stockée que dans votre navigateur.</p>
+    <p class="mono" style="font-size:11px;background:var(--bg2);padding:8px 10px;border-radius:6px;margin:10px 0">
+      kubectl get secret ceffio-console-key -n ceffio-system -o jsonpath='{.data.key}' | base64 -d
+    </p>
     <input id="keyInput" type="password" placeholder="Clé admin" autocomplete="off">
     <div class="form-row">
       <button class="btn" onclick="saveKey()" style="flex:1">Connexion</button>
@@ -262,6 +282,7 @@
   const TITLES = {
     dashboard: ["Vue d'ensemble", 'état de la plateforme'],
     services:  ['Applications', 'expositions publiques et rôles'],
+    apps:      ['Apps Nextcloud', 'installation et désinstallation'],
     users:     ['Utilisateurs', 'comptes du login unique'],
     certs:     ['Certificats TLS', 'validité et expiration'],
     infra:     ['Infrastructure', 'couches internes et pods'],
@@ -292,7 +313,7 @@
     key = $('keyInput').value.trim();
     localStorage.setItem('ceffio_key', key);
     $('keyOverlay').classList.remove('show');
-    if (key) { toast('Clé enregistrée'); refresh(); }
+    if (key) { toast('Clé enregistrée'); refresh(); renderApps(); }
   };
   window.clearKey = () => { key = ''; localStorage.removeItem('ceffio_key'); $('keyOverlay').classList.remove('show'); toast('Clé oubliée', 'ko'); };
   $('keyInput').addEventListener('keydown', e => { if (e.key === 'Enter') saveKey(); });
@@ -421,12 +442,126 @@
     catch (e) { toast('Erreur : ' + e.message, 'ko'); }
   };
 
+  // ── Applications Nextcloud ──────────────────────────────────────────────
+  //
+  // Tout passe par l'API OCS de Nextcloud : la console ne fait que des appels
+  // HTTP authentifiés. Aucun droit d'exécution dans le cluster, aucun Job.
+
+
+  async function renderApps() {
+    let d;
+    try {
+      d = await api('/api/apps');
+    } catch (e) {
+      // PAS DE CLE : la page restait vide sans rien dire — l'utilisateur ne
+      // pouvait pas savoir si la page était cassée, vide, ou verrouillée.
+      // On l'explique, avec le moyen de se connecter.
+      if (e.message === 'auth' || /jeton|auth/i.test(e.message)) {
+        $('appsGroups').innerHTML = `
+          <div class="card" style="border-color:#3a3f52">
+            <h3>Clé d'administration requise</h3>
+            <div class="note">Cette page affiche les applications Nextcloud de votre
+            instance. Elle a besoin de la clé de la console pour interroger Nextcloud.</div>
+            <div class="form-row" style="margin-top:12px">
+              <button class="btn" onclick="openKeyModal()" style="flex:1">Saisir la clé</button>
+            </div>
+            <div class="note mono" style="margin-top:10px;font-size:11px">
+              kubectl get secret ceffio-console-key -n ceffio-system \
+                -o jsonpath='{.data.key}' | base64 -d
+            </div>
+          </div>`;
+        return;
+      }
+      $('appsGroups').innerHTML =
+        `<div class="card"><div class="note">Erreur : ${esc(e.message)}</div></div>`;
+      return;
+    }
+    const apps = d.apps || [];
+
+    // DEUX LISTES DISJOINTES :
+    //   - installables : l'app fonctionne dès l'activation (case à cocher) ;
+    //   - enAttente   : l'app existe mais exige un service séparé. Elle n'est
+    //                   PAS installable ici — la montrer cochable laisserait
+    //                   croire qu'un clic suffit, et l'utilisateur chercherait
+    //                   ensuite pourquoi la fonction ne marche pas.
+    const installables = apps.filter(a => !a.en_attente);
+    const enAttente = apps.filter(a => a.en_attente);
+
+    const groupes = {};
+    for (const a of installables) {
+      (groupes[a.categorie] ||= []).push(a);
+    }
+    const ordre = ['Collaboration', 'Communication', 'Organisation', 'Documents'];
+    $('appsGroups').innerHTML = ordre.filter(c => groupes[c]).map(cat => `
+      <div class="card" style="margin-bottom:14px">
+        <h3>${esc(cat)}</h3>
+        ${groupes[cat].map(appRow).join('')}
+      </div>`).join('')
+
+    // Section séparée et clairement identifiée : lecture seule.
+    + (enAttente.length ? `
+      <div class="card" style="margin-top:22px;border-color:#3a3f52">
+        <h3>Applications à dépendance externe</h3>
+        <div class="note" style="margin-bottom:12px">
+          Ces applications ne s'activent pas d'un simple clic : chacune exige un
+          service à déployer séparément. Elles sont listées ici pour information —
+          elles ne sont pas installables depuis cette page.
+        </div>
+        ${enAttente.map(appRow).join('')}
+      </div>` : '');
+  }
+
+  function appRow(a) {
+    const coche = a.installee ? 'checked' : '';
+    // Une app à dépendance externe n'est PAS cochable : elle n'est pas
+    // installable depuis cette page, et une case active laisserait croire le
+    // contraire.
+    const bloque = !!a.en_attente;
+    const attente = a.en_attente
+      ? `<span class="badge warn" title="${esc(a.en_attente)}">${esc(a.en_attente)}</span>` : '';
+    return `<div style="display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid var(--line);${bloque ? 'opacity:.75' : ''}">
+      <input type="checkbox" ${coche} ${bloque ? 'disabled' : ''}
+        onchange="toggleApp('${esc(a.id)}', this.checked, this)"
+        style="width:16px;height:16px;cursor:pointer;flex:none;${bloque ? 'cursor:not-allowed' : ''}">
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;font-size:13px">${esc(a.nom)}
+          ${a.version ? `<span class="muted mono" style="font-size:11px">${esc(a.version)}</span>` : ''}
+        </div>
+        <div class="muted" style="font-size:12px">${esc(a.role)}</div>
+      </div>
+      ${attente}
+      <span class="badge mut">AGPL-3.0</span>
+      <a class="open" href="${esc(a.docs)}" target="_blank" rel="noopener" style="flex:none">docs ↗</a>
+    </div>`;
+  }
+
+  window.toggleApp = async (id, veutInstaller, el) => {
+    const action = veutInstaller ? 'install' : 'uninstall';
+    const verbe = veutInstaller ? 'Installer' : 'Désinstaller';
+    if (!confirm(verbe + ' « ' + id + ' » ?')) { el.checked = !veutInstaller; return; }
+    el.disabled = true;
+    try {
+      const r = await api('/api/apps/' + id + '/' + action, { method: 'POST' });
+      toast(r.message || (verbe + ' effectué'));
+      // Relecture de l'etat reel : on ne suppose pas que la case reflete la
+      // verite, on redemande a Nextcloud.
+      await renderApps();
+    } catch (e) {
+      toast('Erreur : ' + e.message, 'ko');
+      el.checked = !veutInstaller;
+      el.disabled = false;
+    }
+  };
+
+
+
   window.refresh = async () => {
     if (!key) { openKeyModal(); return; }
     try {
       const st = await api('/api/status');
       renderDashboard(st); renderInfra(st); renderCerts(st);
       await renderUsers();
+      await renderApps();
       $('sideFoot').innerHTML = esc(st.domain || '') + '<br>MAJ ' + new Date().toLocaleTimeString('fr-FR');
     } catch (e) { if (e.message !== 'auth') toast('Erreur : ' + e.message, 'ko'); }
   };

@@ -39,6 +39,11 @@ type Server struct {
 	kube    kubernetes.Interface
 	kcAdmin string // user admin Keycloak
 	kcPass  string // mot de passe admin Keycloak
+	// Compte de service Nextcloud dedie a la console (mot de passe
+	// d'application, revocable). On n'utilise PAS le compte admin : son secret
+	// est trop large, et un changement de son mot de passe casserait la console.
+	ncUser string
+	ncPass string
 	kcBase  string // base URL API Keycloak (Service ClusterIP résolu)
 }
 
@@ -77,6 +82,23 @@ func New(domain, apiKey string) (*Server, error) {
 			s.kcBase = "http://" + svc.Spec.ClusterIP + ":8080"
 		}
 	}
+
+	// Compte de service Nextcloud : la console lit et gère les applications via
+	// l'API OCS. Env en priorité, sinon le Secret (même schéma que Keycloak).
+	//
+	// SANS CES DEUX VALEURS, l'API OCS répond 401 « Current user is not logged
+	// in » — un message qui ne dit pas que l'identifiant manque, et fait perdre
+	// du temps à chercher du côté de Nextcloud.
+	s.ncUser = strings.TrimSpace(os.Getenv("NC_USER"))
+	s.ncPass = strings.TrimSpace(os.Getenv("NC_PASSWORD"))
+	if s.ncUser == "" && s.kube != nil {
+		if sec, err := s.kube.CoreV1().Secrets(deployNS).Get(context.Background(),
+			"nextcloud-console-api", metav1.GetOptions{}); err == nil {
+			s.ncUser = string(sec.Data["username"])
+			s.ncPass = string(sec.Data["password"])
+		}
+	}
+
 	return s, nil
 }
 
@@ -87,6 +109,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/status", s.requireAuth(s.handleStatus))
 	mux.HandleFunc("/api/users", s.requireAuth(s.handleUsers))
 	mux.HandleFunc("/api/users/", s.requireAuth(s.handleUsersByID))
+	// Applications Nextcloud : consultation, activation, désactivation.
+	// Tout passe par l'API OCS de Nextcloud (voir apps.go) — aucun droit
+	// d'exécution, aucun Job, un simple appel HTTP authentifié.
+	mux.HandleFunc("/api/apps", s.requireAuth(s.handleApps))
+	mux.HandleFunc("/api/apps/", s.requireAuth(s.handleAppsAction))
 	return mux
 }
 

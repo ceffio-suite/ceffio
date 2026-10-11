@@ -25,7 +25,7 @@ const (
 	// Bump OBLIGATOIRE à chaque changement de la page ou du code console :
 	// buildAndImportImage saute la reconstruction si le tag existe déjà dans
 	// containerd. Sans bump, l'ancienne image continue de servir.
-	imageTag = "0.2.0"
+	imageTag = "1.6.0"
 	imageRef = imageName + ":" + imageTag
 )
 
@@ -391,6 +391,8 @@ roleRef:
   name: ceffio-admin
   apiGroup: rbac.authorization.k8s.io
 ---
+---
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -413,6 +415,12 @@ spec:
         - {name: CEFFIO_KEY, valueFrom: {secretKeyRef: {name: ceffio-console-key, key: key}}}
         - {name: KC_ADMIN, valueFrom: {secretKeyRef: {name: keycloak-admin, key: username}}}
         - {name: KC_ADMIN_PASSWORD, valueFrom: {secretKeyRef: {name: keycloak-admin, key: password}}}
+        # Compte de service Nextcloud : la console lit et gere les applications
+        # via l'API OCS. Mot de passe d'application dedie et revocable, jamais
+        # le compte admin (secret trop large, et changer son mot de passe
+        # casserait la console).
+        - {name: NC_USER, valueFrom: {secretKeyRef: {name: nextcloud-console-api, key: username}}}
+        - {name: NC_PASSWORD, valueFrom: {secretKeyRef: {name: nextcloud-console-api, key: password}}}
         ports:
         - {name: http, containerPort: 8088}
         readinessProbe:

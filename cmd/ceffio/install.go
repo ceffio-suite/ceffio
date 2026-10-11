@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ceffio-suite/ceffio/internal/apps"
 	"github.com/ceffio-suite/ceffio/internal/bootstrap"
 	"github.com/ceffio-suite/ceffio/internal/cluster"
 	"github.com/ceffio-suite/ceffio/internal/console"
@@ -14,6 +15,7 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/ingress"
 	"github.com/ceffio-suite/ceffio/internal/office"
 	"github.com/ceffio-suite/ceffio/internal/platform"
+	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"github.com/ceffio-suite/ceffio/internal/sso"
 	"github.com/ceffio-suite/ceffio/internal/stacks"
 	"github.com/ceffio-suite/ceffio/internal/talk"
@@ -184,6 +186,20 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	if err := talk.Deploy(ctx, o.ipPublique); err != nil {
 		return err
 	}
+	// Applications Nextcloud (Phase 12) : les apps de collaboration controlees
+	// (licence libre, version stable). Sans ce module, une installation neuve
+	// n'aurait AUCUNE de ces apps — elles ne vivraient que sur la machine ou
+	// elles ont ete installees a la main.
+	if err := apps.Deploy(ctx); err != nil {
+		return err
+	}
+
+	// Coffre de secrets : OpenBao s'il est configure, Kubernetes sinon.
+	// On ne fait que DIRE lequel est utilise — c'est une information
+	// d'exploitation, et c'est aussi la preuve que le coffre reste optionnel :
+	// aucun deploiement ne doit echouer parce qu'il est absent.
+	coffre := secrets.DepuisEnvironnement()
+	fmt.Println("\nCoffre de secrets : " + coffre.Description())
 	if err := files.ConfigureOIDC(ctx, o.domain); err != nil {
 		return err
 	}

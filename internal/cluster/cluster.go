@@ -45,6 +45,34 @@ func Provision(ctx context.Context, rt Runtime, name string) (*Cluster, error) {
 	return c, nil
 }
 
+// k3sDejaOperationnel dit si un cluster k3s tourne déjà sur cette machine.
+//
+// On teste le SERVICE et l'API, pas la présence d'un fichier : un binaire
+// présent mais un service arrêté doit déclencher la réparation, alors qu'un
+// fichier absent avec un service actif (installation système) ne doit rien
+// déclencher.
+//
+// Deux signaux, dans l'ordre du moins coûteux :
+//  1. le kubeconfig existe et kubectl répond -> le cluster est vivant ;
+//  2. le service systemd est actif.
+//
+// Si l'un des deux est vrai, on considère le cluster en place. Le risque de se
+// tromper est faible, et l'erreur symétrique (réinstaller un cluster sain) est
+// bien plus coûteuse : elle casse ce qui marchait.
+func k3sDejaOperationnel(ctx context.Context) bool {
+	// 1. kubectl répond-il ? C'est la preuve la plus directe.
+	if _, err := os.Stat("/etc/rancher/k3s/k3s.yaml"); err == nil {
+		c := exec.CommandContext(ctx, "kubectl", "get", "nodes",
+			"--request-timeout=5s", "-o", "name")
+		if err := c.Run(); err == nil {
+			return true
+		}
+	}
+	// 2. le service tourne-t-il ?
+	c := exec.CommandContext(ctx, "systemctl", "is-active", "--quiet", "k3s")
+	return c.Run() == nil
+}
+
 func provisionK3d(ctx context.Context, name string) error {
 	if k3dExists(ctx, name) {
 		fmt.Printf("cluster k3d %q existe déjà, réutilisation\n", name)
@@ -72,6 +100,20 @@ func k3dExists(ctx context.Context, name string) bool {
 // provisionK3s installe un vrai cluster K3s via le script officiel (Linux),
 // plus helm (prérequis de la pile) et le kubeconfig par défaut de l'utilisateur.
 func provisionK3s(ctx context.Context) error {
+	// AVANT TOUT : un cluster vivant ne doit PAS être re-provisionné.
+	//
+	// POURQUOI CE CONTRÔLE EXISTE : sans lui, chaque `ceffio install` relance
+	// l'installeur k3s, qui interroge update.k3s.io pour connaître le canal de
+	// version. Sur un réseau qui filtre ce domaine (proxy, DPI, DNS menteur), la
+	// requête échoue en erreur de certificat et TOUT le déploiement s'arrête —
+	// alors que le cluster tournait parfaitement et qu'il n'y avait rien à
+	// installer. Une installation idempotente ne doit pas dépendre d'un appel
+	// réseau dont elle n'a pas besoin.
+	if k3sDejaOperationnel(ctx) {
+		fmt.Println("∙ cluster k3s déjà opérationnel, réutilisation (aucune re-installation)")
+		return nil
+	}
+
 	// TODO(phase-1) : flags HA (--cluster-init), version pin, options servi-extra.
 	cmd := exec.CommandContext(ctx, "sh", "-c",
 		"curl -sfL https://get.k3s.io | INSTALL_K3S_SKIP_START=false sh -")
