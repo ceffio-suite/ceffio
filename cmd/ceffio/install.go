@@ -31,7 +31,6 @@ type installOptions struct {
 	mail            bool
 	office          bool
 	monitoring      bool
-	ipPublique      string
 
 	// Relais d'expédition sortant. INDISPENSABLE en pratique : le port 25
 	// sortant est bloqué chez les FAI grand public (vérifié sur Free), donc
@@ -77,9 +76,6 @@ Exemples :
 	f.BoolVar(&o.mail, "mail", false, "Activer la messagerie")
 	f.BoolVar(&o.office, "office", true, "Activer ONLYOFFICE")
 	f.BoolVar(&o.monitoring, "monitoring", true, "Activer l'observabilité")
-	f.StringVar(&o.ipPublique, "ip-publique", "",
-		"Adresse publique du déploiement (visio : Janus l'annonce aux navigateurs). "+
-			"Facultative : sans elle, Janus la découvre via un serveur STUN public")
 	// Relais d'expédition. Par défaut : aucun (Stalwart reçoit mais n'envoie
 	// pas vers l'extérieur). Le port 25 sortant étant bloqué chez les FAI, ce
 	// relais est ce qui rend la messagerie réellement utilisable.
@@ -202,7 +198,7 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	}
 	// Talk + High Performance Backend : messagerie ET visioconférence, dans
 	// Nextcloud. Déployé après le retrait, pour libérer d'abord les ressources.
-	if err := talk.Deploy(ctx, o.ipPublique); err != nil {
+	if err := talk.Deploy(ctx); err != nil {
 		return err
 	}
 	// Applications Nextcloud (Phase 12) : les apps de collaboration controlees

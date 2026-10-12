@@ -10,7 +10,7 @@ abonnement, sans dépendance à un service tiers.
 ```bash
 git clone https://github.com/ceffio-suite/ceffio.git
 cd ceffio && make build
-sudo ./bin/ceffio install --domain example.com --ip-publique 203.0.113.10
+sudo ./bin/ceffio install --domain example.com
 ```
 
 > Un script de bootstrap (`installer/install.sh`) est présent mais **encore
@@ -107,7 +107,11 @@ Deux points de conception qui ont demandé une correction en conditions réelles
   `hostNetwork`, tout apparaît « Running » et rien ne passe.
 - **L'adresse publique doit être annoncée.** Derrière un NAT, Janus qui annonce
   ses adresses privées dans les candidats ICE produit un écran noir : le
-  navigateur ne peut pas le joindre. D'où le paramètre `--ip-publique`.
+  navigateur ne peut pas le joindre. Elle est **découverte automatiquement**,
+  jamais fournie au déploiement : Janus et le relais TURN l'obtiennent eux-mêmes
+  au démarrage par STUN, et le serveur de signalisation annonce un nom public
+  (`talk.<domaine>`), qui survit à un changement d'adresse là où une valeur
+  figée cesserait de fonctionner sans rien dire.
 
 ## Installation
 
@@ -115,7 +119,7 @@ Depuis les sources, pour l'instant :
 
 ```bash
 make build
-sudo ./bin/ceffio install --domain example.com --ip-publique 203.0.113.10
+sudo ./bin/ceffio install --domain example.com
 ```
 
 Le déploiement est **idempotent** : le relancer ne casse rien, il met à jour ce
@@ -196,9 +200,10 @@ participants), console d'administration, sauvegarde/restauration.
 
 Points encore ouverts, dits franchement :
 
-- **L'adresse publique est fournie au déploiement** (`--ip-publique`). La
-  détection automatique par STUN est écrite mais n'est pas encore publiée dans
-  l'image Janus : une prochaine version rendra ce paramètre inutile.
+- **L'adresse publique n'est plus un paramètre.** Elle est découverte au
+  démarrage par STUN, côté Janus comme côté relais TURN, et annoncée sous forme
+  de nom public pour le serveur de signalisation. Rien d'infrastructure n'est
+  figé dans l'installation.
 - **La messagerie (Stalwart/Mailu) n'est qu'un POC** et n'est pas déployée par
   `ceffio install`.
 - **Le script de bootstrap** suppose des binaires publiés qui n'existent pas

@@ -74,30 +74,21 @@ const (
 
 // Deploy installe Talk + HPB, de façon idempotente.
 //
-// ipPublique est l'adresse publique du déploiement, annoncée aux navigateurs.
-// Elle est FACULTATIVE : si elle n'est pas fournie, Janus la découvre lui-même
-// au démarrage via un serveur STUN public. Dans les deux cas l'adresse est
-// annoncée — c'est la condition pour que le média passe depuis Internet.
+// AUCUNE ADRESSE PUBLIQUE N'EST DEMANDÉE, et c'est délibéré : elle est
+// nécessaire à trois endroits (les candidats ICE de Janus, ceux du relais
+// coturn, et l'adresse TURN que le signaling remet aux navigateurs), mais
+// aucun n'a besoin qu'on la lui fournisse.
 //
-// Fournir la valeur reste préférable quand elle est connue : elle évite un
-// appel réseau au démarrage et rend le déploiement déterministe.
-func Deploy(ctx context.Context, ipPublique string) error {
+//   - Janus et coturn la découvrent eux-mêmes au démarrage, par STUN, avec le
+//     client présent dans leurs images respectives ;
+//   - le signaling annonce un NOM public (talk.<domaine>), qui survit à un
+//     changement d'adresse là où une valeur figée cesserait de fonctionner
+//     sans rien dire.
+//
+// Un paramètre à connaître AVANT de déployer était une dépendance inutile, et
+// une valeur en dur dans l'installation est une panne différée.
+func Deploy(ctx context.Context) error {
 	fmt.Println("\nDéploiement de Talk + High Performance Backend (Phase 10)...")
-
-	// L'adresse publique est nécessaire à TROIS endroits, et doit être la même :
-	// Janus (candidats ICE du média), coturn (candidats de relais), et le
-	// signaling (l'adresse TURN qu'il remet aux navigateurs). L'exiger en
-	// paramètre était une dépendance inutile : elle est découvrable.
-	if ipPublique == "" {
-		fmt.Printf("∙ adresse publique non fournie — découverte via STUN (%s:%d)\n",
-			stunPublic, stunPort)
-		deouverte, err := DécouvrirIPPublique(ctx)
-		if err != nil {
-			return err
-		}
-		ipPublique = deouverte
-		fmt.Printf("  adresse publique détectée : %s\n", ipPublique)
-	}
 
 	// 1. Secrets d'abord : les Deployments les référencent.
 	if err := ensureSecrets(ctx); err != nil {
@@ -113,7 +104,7 @@ func Deploy(ctx context.Context, ipPublique string) error {
 	if err := ensurePullSecret(ctx); err != nil {
 		return err
 	}
-	if err := deployJanus(ctx, ipPublique); err != nil {
+	if err := deployJanus(ctx); err != nil {
 		return err
 	}
 	if err := deploySignaling(ctx); err != nil {
@@ -391,31 +382,24 @@ data:
 // C'est le composant qui TRANSPORTE le média : chaque participant envoie son
 // flux une fois, Janus le redistribue à tous. Sans lui, Talk plafonne à ~4-6
 // participants (connexions directes entre navigateurs).
-func deployJanus(ctx context.Context, ipPublique string) error {
+func deployJanus(ctx context.Context) error {
 	fmt.Printf("∙ Janus %s (SFU, média UDP %d-%d)\n", janusImage, plageMediaDebut, plageMediaFin)
 
-	// L'ADRESSE PUBLIQUE DOIT TOUJOURS ÊTRE ANNONCÉE.
+	// L'ADRESSE PUBLIQUE EST DÉCOUVERTE PAR JANUS LUI-MÊME, AU DÉMARRAGE.
 	//
-	// Sans elle, Janus publie ses adresses privées dans les candidats ICE et le
-	// média ne passe jamais depuis Internet : c'est le piège classique du
-	// WebRTC auto-hébergé. Deux voies, dans cet ordre :
+	// Janus doit annoncer aux navigateurs une adresse qu'ils peuvent joindre.
+	// Derrière un NAT ses interfaces sont privées : s'il les annonce telles
+	// quelles dans les candidats ICE, le média ne passe jamais depuis Internet.
 	//
-	//   1. --ip-publique fournie : posée en nat_1_1_mapping, annoncée telle
-	//      quelle. Déterministe, aucun appel réseau au démarrage.
-	//   2. sinon, STUN : Janus interroge le serveur au démarrage et annonce
-	//      l'adresse publique qu'il en déduit. C'est ce qui rend le paramètre
-	//      facultatif.
+	// Elle n'est PAS fournie au déploiement : un paramètre à connaître avant de
+	// déployer est une dépendance, et une valeur en dur cesse de fonctionner
+	// sans rien dire le jour où le FAI change l'adresse. Janus interroge donc un
+	// serveur STUN PUBLIC au démarrage et annonce l'adresse qu'il en déduit.
 	//
 	// Le serveur STUN DOIT être joignable depuis Internet. Pointé sur coturn,
 	// qui tourne sur le même réseau, il renvoie l'adresse PRIVÉE — mesuré :
-	// « Our public address is 192.168.1.48 ». La détection devient alors un
-	// piège : elle « réussit » en annonçant une adresse injoignable.
-	envIP := ""
-	if ipPublique != "" {
-		envIP = fmt.Sprintf("        # Adresse publique fournie : annoncée telle quelle (nat_1_1_mapping).\n"+
-			"        - {name: JANUS_PUBLIC_IP, value: %q}\n", ipPublique)
-	}
-
+	// « Our public address is 192.168.1.48 ». La détection « réussit » alors en
+	// annonçant une adresse injoignable, ce qui est pire qu'un échec franc.
 	manifeste := fmt.Sprintf(`apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -448,12 +432,12 @@ spec:
       - name: janus
         image: %[2]s
         env:
-%[7]s        - {name: JANUS_RTP_PORT_RANGE, value: "%[4]d-%[5]d"}
-        # Serveur STUN PUBLIC : source de l'adresse publique quand elle n'est
-        # pas fournie. L'entrypoint le résout en IPv4 (un nom d'hôte résolu en
+        - {name: JANUS_RTP_PORT_RANGE, value: "%[4]d-%[5]d"}
+        # Serveur STUN PUBLIC : source de l'adresse publique annoncée aux
+        # navigateurs. L'entrypoint le résout en IPv4 (un nom d'hôte résolu en
         # IPv6 ferait annoncer une adresse IPv6, injoignable en IPv4).
-        - {name: JANUS_STUN_SERVER, value: %[8]q}
-        - {name: JANUS_STUN_PORT, value: "%[9]d"}
+        - {name: JANUS_STUN_SERVER, value: %[7]q}
+        - {name: JANUS_STUN_PORT, value: "%[8]d"}
         ports:
         - {name: api, containerPort: 8088, protocol: TCP}
         - {name: ws, containerPort: 8188, protocol: TCP}
@@ -473,13 +457,28 @@ spec:
   ports:
   - {name: api, port: 8088, targetPort: 8088, protocol: TCP}
   - {name: ws, port: 8188, targetPort: 8188, protocol: TCP}
-`, ns, janusImage, "", plageMediaDebut, plageMediaFin, portTurn, envIP, stunPublic, stunPort)
+`, ns, janusImage, "", plageMediaDebut, plageMediaFin, portTurn, stunPublic, stunPort)
 	return appliquer(ctx, manifeste)
 }
 
 // ---------------------------------------------------------------------------
 // Signaling server
 // ---------------------------------------------------------------------------
+
+// turnURL construit la liste des serveurs TURN remise AUX NAVIGATEURS par le
+// serveur de signalisation.
+//
+// L'adresse doit être joignable depuis Internet, sinon le relais est
+// inutilisable. On donne un NOM public plutôt qu'une adresse : il survit à un
+// changement d'adresse publique, et c'est le même que celui déclaré côté
+// Nextcloud. C'est le seul endroit où l'adresse publique apparaît, et elle y
+// apparaît sous forme de nom, jamais de valeur figée.
+func turnURL(domaine string) string {
+	hote := "talk." + domaine
+	udp := fmt.Sprintf("turn:%s:%d?transport=udp", hote, portTurn)
+	tcp := fmt.Sprintf("turn:%s:%d?transport=tcp", hote, portTurn)
+	return udp + "," + tcp
+}
 
 // deploySignaling déploie le serveur de signalisation.
 //
