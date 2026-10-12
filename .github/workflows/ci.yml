@@ -1,0 +1,125 @@
+name: CI
+
+# POURQUOI CETTE CI, ET POURQUOI ELLE CONSTRUIT LE BINAIRE.
+#
+# Tant qu'aucune automatisation ne construisait le projet, une erreur de
+# compilation pouvait vivre des jours dans le dépôt : elle n'apparaissait qu'au
+# moment où quelqu'un tapait `go build` sur sa machine. C'est arrivé, sur ce
+# dépôt, et c'est exactement ce qu'une CI existe pour empêcher.
+#
+# Elle a trois étages, du moins coûteux au plus coûteux :
+#   1. le formatage et le vet — quelques secondes, attrapent les fautes ;
+#   2. la compilation — attrape ce que vet ne voit pas ;
+#   3. les tests, avec la course activée (les pannes d'accès concurrent
+#      n'apparaissent pas dans un `go test` séquentiel) ;
+#   4. la construction RÉELLE du binaire pour les architectures de production,
+#      publiée comme artefact téléchargeable.
+#
+# LE POINT QUI COMPTE : l'artefact. Un `go build` vert dans un journal de CI ne
+# prouve pas qu'un binaire utilisable existe. En publiant le fichier, on peut le
+# TÉLÉCHARGER et l'exécuter — c'est la seule vérification qui vaille.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualite:
+    name: formatage, vet et tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Formatage
+        run: |
+          non_formate=$(gofmt -l . | grep -v '^$' || true)
+          if [ -n "$non_formate" ]; then
+            echo "::error::Ces fichiers ne sont pas au format gofmt :"
+            echo "$non_formate"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Tests (avec détection de course)
+        run: go test -race ./...
+
+      - name: Cohérence du registre de versions
+        # Le test porte la promesse écrite dans internal/version : aucune image
+        # en `latest`, toutes qualifiées, et le coffre bien déclaré.
+        run: go test ./internal/version/ -v -run 'TestRegistry|TestAucuneVersion|TestImages|TestOpenBao'
+
+  binaire:
+    name: construction du binaire
+    runs-on: ubuntu-latest
+    needs: qualite
+    strategy:
+      matrix:
+        include:
+          - { goarch: amd64, suffixe: linux-amd64 }
+          - { goarch: arm64, suffixe: linux-arm64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Construction
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          # Le nom de version est injecté et non inventé : une version affichée
+          # qui ne correspond à rien est pire qu'une version absente, parce
+          # qu'elle fait croire qu'on sait ce qui tourne.
+          VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo 0.0.0-dev)"
+          COMMIT="$(git rev-parse --short HEAD)"
+          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          go build -trimpath \
+            -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
+            -o "bin/ceffio-${VERSION}-linux-${GOARCH}" ./cmd/ceffio
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+
+      - name: Vérification du binaire produit
+        # On ne se contente pas de constater que la construction s'est terminée :
+        # on EXÉCUTE ce qui vient d'être produit. Un binaire qui ne démarre pas
+        # est un binaire cassé, même si `go build` a rendu 0.
+        #
+        # Les commandes choisies le sont pour une raison : il n'existe PAS de
+        # sous-commande `version` dans ce projet. Appeler une commande qui n'existe
+        # pas aurait fait échouer la CI pour une mauvaise raison — et c'est
+        # arrivé lors de l'écriture de ce fichier. On exerce donc l'arbre de
+        # commandes réel : l'aide générale et le parcours d'une commande clé.
+        run: |
+          set -euo pipefail
+          BIN="bin/ceffio-${VERSION}-linux-${{ matrix.goarch }}"
+          test -x "$BIN" || { echo "::error::le binaire n'est pas exécutable"; exit 1; }
+          file "$BIN"
+          ./"$BIN" --help > /dev/null
+          ./"$BIN" install --help > /dev/null
+          ./"$BIN" status --help > /dev/null
+          echo "le binaire démarre et son arbre de commandes répond"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ceffio-${{ matrix.suffixe }}
+          path: bin/ceffio-*-linux-*
+          if-no-files-found: error
+          retention-days: 90

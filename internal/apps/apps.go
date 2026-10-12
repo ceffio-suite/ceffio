@@ -63,8 +63,9 @@ type App struct {
 // restriction d'usage commercial ni quota d'utilisateurs.
 //
 // La catégorie sépare deux choses que l'utilisateur ne doit PAS confondre :
-//   simple  → l'app fonctionne dès l'activation (page 1, installable)
-//   serveur → l'app a besoin d'un service séparé (page 2, lecture seule)
+//
+//	simple  → l'app fonctionne dès l'activation (page 1, installable)
+//	serveur → l'app a besoin d'un service séparé (page 2, lecture seule)
 //
 // Les deux listes sont DISJOINTES : une app apparaît sur une seule page.
 var Catalogue = []App{

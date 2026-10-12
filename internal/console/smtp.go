@@ -20,12 +20,12 @@ package console
 
 import (
 	"bufio"
-	"log"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -44,13 +44,13 @@ import (
 // défini (`MotDePasseDefini`). Une valeur de secret ne doit pas voyager vers une
 // page web, même pour l'afficher.
 type SmtpConfig struct {
-	Hote              string `json:"hote"`
-	Port              int    `json:"port"`
-	Securite          string `json:"securite"`  // "tls" (STARTTLS), "ssl", "aucune"
-	Utilisateur       string `json:"utilisateur"`
-	MotDePasseDefini  bool   `json:"mot_de_passe_defini"`
-	Expediteur        string `json:"expediteur"`
-	NomExpediteur     string `json:"nom_expediteur,omitempty"`
+	Hote             string `json:"hote"`
+	Port             int    `json:"port"`
+	Securite         string `json:"securite"` // "tls" (STARTTLS), "ssl", "aucune"
+	Utilisateur      string `json:"utilisateur"`
+	MotDePasseDefini bool   `json:"mot_de_passe_defini"`
+	Expediteur       string `json:"expediteur"`
+	NomExpediteur    string `json:"nom_expediteur,omitempty"`
 }
 
 // handleSmtp lit ou écrit la configuration SMTP.
@@ -153,13 +153,13 @@ func (s *Server) handleSmtpTester(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var entree struct {
-		Hote          string `json:"hote"`
-		Port          int    `json:"port"`
-		Securite      string `json:"securite"`
-		Utilisateur   string `json:"utilisateur"`
-		MotDePasse    string `json:"mot_de_passe"`
-		Expediteur    string `json:"expediteur"`
-		Destinataire  string `json:"destinataire"`
+		Hote         string `json:"hote"`
+		Port         int    `json:"port"`
+		Securite     string `json:"securite"`
+		Utilisateur  string `json:"utilisateur"`
+		MotDePasse   string `json:"mot_de_passe"`
+		Expediteur   string `json:"expediteur"`
+		Destinataire string `json:"destinataire"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&entree); err != nil {
 		apiErr(w, 400, "JSON illisible : "+err.Error())
@@ -508,16 +508,14 @@ func testerSmtp(hote string, port int, securite, utilisateur, motdepasse,
 	// ne répond plus normalement : on NE réessaie donc PAS sur la même
 	// connexion — c'est ce qui produisait des « 501 Syntax » en cascade.
 	bloc := "\x00" + utilisateur + "\x00" + motdepasse
-	if rep := envoyer("AUTH PLAIN " + base64.StdEncoding.EncodeToString([]byte(bloc)));
-		strings.HasPrefix(rep, "235") {
+	if rep := envoyer("AUTH PLAIN " + base64.StdEncoding.EncodeToString([]byte(bloc))); strings.HasPrefix(rep, "235") {
 		journal("Authentification acceptée (PLAIN)")
 	} else {
 		journal("AUTH PLAIN refusé : %s", tronquer(rep, 80))
 		// Repli LOGIN, sur la même session : si le serveur l'accepte encore.
 		if rep2 := envoyer("AUTH LOGIN"); strings.HasPrefix(rep2, "334") {
 			envoyer(base64.StdEncoding.EncodeToString([]byte(utilisateur)))
-			if rep3 := envoyer(base64.StdEncoding.EncodeToString([]byte(motdepasse)));
-				strings.HasPrefix(rep3, "235") {
+			if rep3 := envoyer(base64.StdEncoding.EncodeToString([]byte(motdepasse))); strings.HasPrefix(rep3, "235") {
 				journal("Authentification acceptée (LOGIN)")
 			} else {
 				journal("ÉCHEC AUTHENTIFICATION : %s", tronquer(rep3, 80))

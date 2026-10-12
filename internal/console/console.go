@@ -44,7 +44,7 @@ type Server struct {
 	// est trop large, et un changement de son mot de passe casserait la console.
 	ncUser string
 	ncPass string
-	kcBase  string // base URL API Keycloak (Service ClusterIP résolu)
+	kcBase string // base URL API Keycloak (Service ClusterIP résolu)
 }
 
 // New crée le serveur console : client K8s in-cluster (ou kubeconfig hors cluster),

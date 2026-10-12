@@ -67,9 +67,9 @@ const (
 	plageMediaFin   = 20100 // 100 ports : largement suffisant pour une PME
 	portTurn        = 3479  // 3478 = AgenTorch, ne pas y toucher
 	portTurnTLS     = 5349
-	portSignaling   = 8081  // HTTP interne du signaling server
-	portJanusAPI    = 8088  // API HTTP de Janus (utilisée par le signaling)
-	portJanusWS     = 8188  // transport WebSocket de Janus
+	portSignaling   = 8081 // HTTP interne du signaling server
+	portJanusAPI    = 8088 // API HTTP de Janus (utilisée par le signaling)
+	portJanusWS     = 8188 // transport WebSocket de Janus
 )
 
 // Deploy installe Talk + HPB, de façon idempotente.
