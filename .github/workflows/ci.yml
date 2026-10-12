@@ -33,11 +33,11 @@ permissions:
 jobs:
   qualite:
     name: formatage, vet et tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -64,7 +64,7 @@ jobs:
 
   binaire:
     name: construction du binaire
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: qualite
     strategy:
       matrix:
@@ -72,9 +72,9 @@ jobs:
           - { goarch: amd64, suffixe: linux-amd64 }
           - { goarch: arm64, suffixe: linux-arm64 }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -130,7 +130,7 @@ jobs:
           ./"$BIN" status --help > /dev/null
           echo "le binaire démarre et son arbre de commandes répond"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ceffio-${{ matrix.suffixe }}
           path: bin/ceffio-*-linux-*
