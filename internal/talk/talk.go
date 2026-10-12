@@ -107,7 +107,7 @@ func Deploy(ctx context.Context, ipPublique string) error {
 		return err
 	}
 	// coturn AVANT Janus : Janus le référence comme serveur STUN/TURN.
-	if err := deployCoturn(ctx, ipPublique); err != nil {
+	if err := deployCoturn(ctx); err != nil {
 		return err
 	}
 	if err := ensurePullSecret(ctx); err != nil {
@@ -227,24 +227,65 @@ spec:
 //
 // Le secret d'authentification est partagé avec le signaling server, qui
 // génère les identifiants TURN temporaires pour les clients.
-func deployCoturn(ctx context.Context, ipPublique string) error {
+func deployCoturn(ctx context.Context) error {
 	fmt.Println("∙ coturn " + coturnImage + " (relais TURN, port " + fmt.Sprint(portTurn) + ")")
 
-	// --external-ip : sans lui, coturn annonce les adresses PRIVÉES du pod dans
-	// les candidats de relais TURN. Un participant derrière un NAT symétrique
-	// reçoit alors une adresse qu'il ne peut pas joindre, et la connexion
-	// échoue précisément dans le cas où TURN sert à quelque chose.
+	// L'ADRESSE PUBLIQUE EST DÉCOUVERTE AU DÉMARRAGE, JAMAIS FIGÉE.
 	//
-	// Mesuré sans cette option : le serveur STUN de coturn répond
-	// « UDP reflexive addr: 192.168.1.48 ».
+	// coturn doit annoncer une adresse joignable depuis Internet dans ses
+	// candidats de relais (option --external-ip). Sans elle, il annonce la
+	// sienne, privée — mesuré : « UDP reflexive addr: 192.168.1.48 » — et un
+	// participant derrière un NAT restrictif reçoit une adresse qu'il ne peut
+	// pas joindre, exactement dans le cas où le relais sert à quelque chose.
 	//
-	// Option absente quand l'adresse n'est pas connue : TURN reste alors
-	// utilisable à l'intérieur du réseau, ce qui vaut mieux qu'une valeur
-	// inventée.
-	externalIP := ""
-	if ipPublique != "" {
-		externalIP = fmt.Sprintf("        - --external-ip=%s\n", ipPublique)
-	}
+	// Mais cette adresse ne doit PAS figurer dans l'installation : elle change
+	// (FAI, déménagement) et un déploiement qui la porte en dur cesse de
+	// fonctionner sans rien dire le jour où elle change. Aucune valeur
+	// d'infrastructure n'entre dans le dépôt.
+	//
+	// coturn la découvre donc lui-même au démarrage, avec le client STUN présent
+	// dans son image, contre le même serveur que celui donné à Janus — une seule
+	// source de vérité pour toute la plateforme.
+	//
+	// Si la détection échoue (UDP filtré), l'option est simplement omise : le
+	// relais ne sert plus qu'à l'intérieur du réseau, ce qui vaut mieux qu'une
+	// adresse inventée — et l'avertissement est explicite dans les journaux.
+	// Aucune substitution de commande ni d'accolade dans ce script : Kubernetes
+	// interprète $(...) et ${...} dans les arguments d'un conteneur, ce qui
+	// abîmerait le script. On n'utilise que des variables simples et une
+	// redirection vers un fichier temporaire.
+	script := fmt.Sprintf(`turnutils_stunclient -p %[1]d %[2]s 2>&1 \
+    | sed -n 's/.*UDP reflexive addr: \([0-9.]*\):.*/\1/p' \
+    | head -1 > /tmp/adresse-publique.txt || true
+
+ADRESSE=""
+read ADRESSE < /tmp/adresse-publique.txt || true
+ARG_EXTERNE=""
+if [ -n "$ADRESSE" ]; then
+    ARG_EXTERNE="--external-ip=$ADRESSE"
+    echo "coturn: adresse publique detectee = $ADRESSE"
+else
+    echo "coturn: AVERTISSEMENT - adresse publique non detectee (STUN %[2]s:%[1]d injoignable)." >&2
+    echo "coturn: les candidats de relais porteront l'adresse privee ;" >&2
+    echo "coturn: le relais ne servira qu'a l'interieur du reseau." >&2
+fi
+
+exec turnserver \
+    --realm=%[3]s \
+    --use-auth-secret \
+    --static-auth-secret="$TURN_SECRET" \
+    --lt-cred-mech \
+    --fingerprint \
+    --no-software-attribute \
+    --no-multicast-peers \
+    --no-stdout-log \
+    --log-file=stdout \
+    --stale-nonce=600 \
+    --min-port=49152 \
+    --max-port=49200 \
+    --listening-port=%[4]d \
+    $ARG_EXTERNE
+`, stunPort, stunPublic, "talk."+domaineDe(ctx), portTurn)
 
 	manifeste := fmt.Sprintf(`apiVersion: apps/v1
 kind: Deployment
@@ -269,20 +310,12 @@ spec:
       containers:
       - name: coturn
         image: %[2]s
+        # Enveloppe de démarrage : elle découvre l'adresse publique, puis la
+        # transmet à coturn. Le remplacement se fait ici, pas dans l'installation.
+        command: ["/bin/sh", "-c"]
         args:
-        - --realm=%[3]s
-%[6]s        - --use-auth-secret
-        - --static-auth-secret=$(TURN_SECRET)
-        - --lt-cred-mech
-        - --fingerprint
-        - --no-software-attribute
-        - --no-multicast-peers
-        - --no-stdout-log
-        - --log-file=stdout
-        - --stale-nonce=600
-        - --min-port=49152
-        - --max-port=49200
-        - --listening-port=%[4]d
+        - |
+%[3]s
         env:
         - name: TURN_SECRET
           valueFrom: {secretKeyRef: {name: talk-secrets, key: turn-secret}}
@@ -307,7 +340,7 @@ spec:
   - {name: turn, port: %[4]d, targetPort: %[4]d, protocol: UDP}
   - {name: turn-tcp, port: %[4]d, targetPort: %[4]d, protocol: TCP}
   - {name: turns, port: %[5]d, targetPort: %[5]d, protocol: TCP}
-`, ns, coturnImage, "talk.ceffio.local", portTurn, portTurnTLS, externalIP)
+`, ns, coturnImage, indentYaml(script, 10), portTurn, portTurnTLS)
 	return appliquer(ctx, manifeste)
 }
 
