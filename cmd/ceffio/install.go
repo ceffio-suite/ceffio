@@ -13,6 +13,7 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/files"
 	"github.com/ceffio-suite/ceffio/internal/identity"
 	"github.com/ceffio-suite/ceffio/internal/ingress"
+	"github.com/ceffio-suite/ceffio/internal/mail"
 	"github.com/ceffio-suite/ceffio/internal/office"
 	"github.com/ceffio-suite/ceffio/internal/platform"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
@@ -31,6 +32,15 @@ type installOptions struct {
 	office          bool
 	monitoring      bool
 	ipPublique      string
+
+	// Relais d'expédition sortant. INDISPENSABLE en pratique : le port 25
+	// sortant est bloqué chez les FAI grand public (vérifié sur Free), donc
+	// Stalwart ne peut pas livrer vers Gmail par lui-même. Le relais authentifié
+	// sur 587 contourne ce blocage et endosse le reverse DNS.
+	relaisSmtpHote string
+	relaisSmtpPort int
+	relaisSmtpUser string
+	relaisSmtpPass string
 }
 
 const devClusterName = "ceffio-dev"
@@ -69,6 +79,14 @@ Exemples :
 	f.BoolVar(&o.monitoring, "monitoring", true, "Activer l'observabilité")
 	f.StringVar(&o.ipPublique, "ip-publique", "",
 		"Adresse publique du déploiement (visio : Janus doit l'annoncer aux navigateurs)")
+	// Relais d'expédition. Par défaut : aucun (Stalwart reçoit mais n'envoie
+	// pas vers l'extérieur). Le port 25 sortant étant bloqué chez les FAI, ce
+	// relais est ce qui rend la messagerie réellement utilisable.
+	f.StringVar(&o.relaisSmtpHote, "smtp-relais", "",
+		"Relais SMTP sortant (ex. send.one.com) — nécessaire car le port 25 sortant est souvent bloqué")
+	f.IntVar(&o.relaisSmtpPort, "smtp-relais-port", 587, "Port du relais SMTP sortant")
+	f.StringVar(&o.relaisSmtpUser, "smtp-relais-user", "", "Utilisateur du relais SMTP sortant")
+	f.StringVar(&o.relaisSmtpPass, "smtp-relais-pass", "", "Mot de passe du relais SMTP sortant")
 
 	return c
 }
@@ -191,6 +209,35 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	// n'aurait AUCUNE de ces apps — elles ne vivraient que sur la machine ou
 	// elles ont ete installees a la main.
 	if err := apps.Deploy(ctx); err != nil {
+		return err
+	}
+
+	// 12bis. Messagerie (Phase 13) : Stalwart. Nextcloud fournit l'interface
+	// (app Mail) mais pas le serveur de courrier. Le relais d'expédition est
+	// INDISPENSABLE ici : le port 25 sortant est bloqué chez le FAI (vérifié),
+	// donc Stalwart ne peut pas livrer vers Gmail par lui-même.
+	if err := mail.Deploy(ctx, o.domain, o.relaisSmtpHote, o.relaisSmtpPort,
+		o.relaisSmtpUser, o.relaisSmtpPass); err != nil {
+		return err
+	}
+
+	// 12ter. Authentification unique de Stalwart. Le serveur de messagerie a sa
+	// propre interface d'administration, et elle doit déléguer à Keycloak comme
+	// le reste de la plateforme. Ce bloc rejoue exactement la configuration qui
+	// a été établie à la main : chaque ligne correspond à un blocage réel, et
+	// notamment aux quatre tables de rôles de l'objet Authentication, sans
+	// lesquelles une connexion pourtant réussie se solde par un « 403 ».
+	//
+	// Le domaine des ADRESSES est le domaine de la plateforme, pas l'hôte web
+	// « mail.<domaine> » : ce sont deux choses distinctes, et les confondre
+	// placerait les enregistrements MX au mauvais endroit.
+	if err := mail.ConfigurerSSO(ctx, o.domain, mail.SSO{
+		Hote:         mail.DomaineMessagerie(o.domain),
+		Issuer:       "https://keycloak." + o.domain + "/realms/ceffio",
+		ClientID:     "stalwart-webui",
+		DomaineAdmin: "ceffio.local",
+		CompteAdmin:  "adminceffio",
+	}); err != nil {
 		return err
 	}
 
