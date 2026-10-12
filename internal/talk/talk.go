@@ -116,7 +116,7 @@ func Deploy(ctx context.Context, ipPublique string) error {
 	if err := deployJanus(ctx, ipPublique); err != nil {
 		return err
 	}
-	if err := deploySignaling(ctx, ipPublique); err != nil {
+	if err := deploySignaling(ctx); err != nil {
 		return err
 	}
 	// 2. Raccorder Nextcloud au HPB (via occ, jamais à la main).
@@ -454,9 +454,11 @@ spec:
 // transporte AUCUN média — c'est un routeur de métadonnées, très léger. C'est
 // l'équivalent de Prosody dans la pile Jitsi, avec NATS pour la coordination.
 //
-// ipPublique est l'adresse que ce serveur TRANSMET AUX NAVIGATEURS dans sa
-// liste de serveurs TURN. Elle doit être joignable depuis Internet.
-func deploySignaling(ctx context.Context, ipPublique string) error {
+// Deux réglages conditionnent le fait que les appels FONCTIONNENT réellement :
+// la section de backend (sans elle, aucune connexion de client n'est acceptée)
+// et l'adresse TURN remise aux navigateurs (sans elle, le relais est
+// injoignable depuis Internet). Voir les commentaires dans la configuration.
+func deploySignaling(ctx context.Context) error {
 	fmt.Println("∙ signaling " + signalingImage + " (coordination, passe par Janus)")
 
 	// Configuration : le signaling connaît Janus, NATS, et le secret partagé
@@ -503,6 +505,23 @@ backends = nextcloud
 allowall = false
 secret = $(SHARED_SECRET)
 
+# LE BACKEND LUI-MÊME — SANS CETTE SECTION, AUCUN CLIENT NE PEUT SE CONNECTER.
+#
+# Le nom de section doit correspondre EXACTEMENT à un identifiant listé dans
+# « backends » ci-dessus. Son absence ne produit pas d'erreur fatale : le
+# serveur démarre, sert ses pages, accepte les requêtes — et refuse silencieusement
+# toute connexion de client :
+#
+#   backend_storage_static.go:116: WARNING: No backends configured,
+#     client connections will not be possible.
+#
+# Le symptôme est trompeur : l'appelant croit à un problème de média (TURN, ICE)
+# alors que le serveur n'accepte aucune session. Les journaux de Nextcloud, eux,
+# restent parfaitement normaux — les deux clients échangent présence et messages,
+# seul le média ne s'établit jamais.
+[nextcloud]
+urls = https://cloud.%[3]s
+
 # Relais TURN, avec identifiants temporaires générés par ce serveur.
 #
 # L'ADRESSE ICI EST CELLE QUE LES NAVIGATEURS VONT CONTACTER. Elle doit donc
@@ -510,14 +529,14 @@ secret = $(SHARED_SECRET)
 # résout PAS dans le navigateur : le relais serait alors inutilisable dans le
 # seul cas où il sert — le participant derrière un NAT restrictif.
 #
-# C'est l'endroit le plus facile à oublier : Janus peut annoncer correctement
-# son adresse que le relais reste hors de portée, parce que c'est ICI que le
-# client lit où aller.
+# On utilise le nom public de la plateforme plutôt que l'adresse IP : il reste
+# valable si l'adresse publique change. C'est le MÊME nom que celui déclaré
+# côté Nextcloud pour ses propres serveurs TURN.
 [turn]
 apikey = $(SHARED_SECRET)
 secret = $(TURN_SECRET)
 servers = %[2]s
-`, portSignaling, turnURL(ipPublique))
+`, portSignaling, turnURL(domaineDe(ctx)), domaineDe(ctx))
 
 	manifeste := fmt.Sprintf(`apiVersion: v1
 kind: ConfigMap

@@ -183,16 +183,11 @@ func découvrirParSTUN(ctx context.Context, serveur string, port int) (string, e
 // serveur de signalisation.
 //
 // L'adresse doit être joignable depuis Internet, sinon le relais est
-// inutilisable. Quand l'adresse publique est inconnue (mode « réseau local »,
-// adresse non détectable), on retombe sur le nom du service interne : cela
-// fonctionne à l'intérieur du cluster, ce qui vaut mieux qu'une adresse
-// inventée — mais JAMAIS depuis un navigateur externe.
-func turnURL(ipPublique string) string {
-	hote := ipPublique
-	if hote == "" {
-		// Nom du service Kubernetes. Repli explicite, jamais silencieux.
-		hote = "coturn"
-	}
+// inutilisable. On préfère le nom public de la plateforme à l'adresse IP : il
+// survit à un changement d'adresse publique, et il est identique à celui que
+// Nextcloud déclare de son côté.
+func turnURL(domaine string) string {
+	hote := "talk." + domaine
 	udp := fmt.Sprintf("turn:%s:%d?transport=udp", hote, portTurn)
 	tcp := fmt.Sprintf("turn:%s:%d?transport=tcp", hote, portTurn)
 	return udp + "," + tcp
