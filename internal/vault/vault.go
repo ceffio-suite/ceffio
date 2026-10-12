@@ -167,9 +167,21 @@ func Deploy(ctx context.Context) *Resultat {
 // 1. Namespace et clé de descellement
 // ---------------------------------------------------------------------------
 
+// ensureNamespace crée le namespace, de façon IDEMPOTENTE.
+//
+// POURQUOI PAS `kubectl create` : cette commande ÉCHOUE si le namespace existe
+// déjà, et un échec ferait abandonner tout le déploiement. Le coffre ne
+// pourrait donc jamais être redéployé — précisément au moment où l'on en a le
+// plus besoin, après une mise à niveau ou un changement de configuration.
+//
+// `kubectl apply` sur un manifeste de namespace dit la même chose sans échouer
+// quand c'est déjà en place.
 func ensureNamespace(ctx context.Context) error {
-	_, err := kube(ctx, "create", "namespace", ns)
-	return err
+	return appliquer(ctx, fmt.Sprintf(`apiVersion: v1
+kind: Namespace
+metadata:
+  name: %s
+`, ns))
 }
 
 // ensureCleDescellement crée la clé de 32 octets du sceau « static », si elle
@@ -506,6 +518,24 @@ func monterMoteurKV(ctx context.Context) error {
 // « simplifier » revient à laisser une clé passe-partout dans un tiroir. Le
 // jeton dérivé porte exactement les droits listés ci-dessous, et se révoque.
 func poserPolitiqueEtJeton(ctx context.Context) (string, error) {
+	// ON RÉUTILISE UN JETON DÉJÀ POSÉ, s'il fonctionne encore.
+	//
+	// POURQUOI C'EST INDISPENSABLE : le jeton racine est RÉVOQUÉ après la mise en
+	// place, et sa copie locale supprimée. Un redéploiement n'a donc plus les
+	// moyens d'en fabriquer un — il échouerait sur « jeton racine indisponible »,
+	// alors que le coffre tourne parfaitement. Un coffre qu'on ne peut pas
+	// redéployer est un coffre qu'on n'ose pas toucher.
+	if jeton, _ := lireSecret(ctx, "openbao-token", "token"); jeton != "" {
+		// On ne se fie pas à sa seule présence : on vérifie qu'il est encore
+		// valide. Un jeton expiré ou révoqué laissé dans un Secret donnerait
+		// l'illusion d'un coffre opérationnel.
+		if _, err := baoAvecJeton(ctx, jeton, "token", "lookup-self"); err == nil {
+			fmt.Println("  ∙ jeton d'administration déjà en place (réutilisé)")
+			return jeton, nil
+		}
+		fmt.Println("  ∙ jeton en place invalide — il faut le jeton racine pour en refaire un")
+	}
+
 	// La politique couvre les besoins RÉELS de Ceffio : lire et écrire les
 	// secrets de la suite, lire les métadonnées, et rien d'autre. Les actions
 	// d'administration du coffre lui-même (montage de moteurs, politiques,
@@ -558,10 +588,18 @@ path "kv/list/ceffio" { capabilities = ["list"] }`
 //
 // Un jeton maître qui survit à la mise en place est un défaut, pas une
 // commodité. Les clés de récupération permettent d'en régénérer un si besoin.
+//
+// SI LE JETON RACINE N'EST DÉJÀ PLUS LÀ, ce n'est pas une erreur : c'est le cas
+// nominal d'un redéploiement, où la révocation a déjà eu lieu. Le dire comme un
+// avertissement ferait croire à un incident à chaque relance.
 func retirerJetonRacine(ctx context.Context) error {
 	racine, err := lireSecret(ctx, "openbao-recovery", "root-token")
-	if err != nil || racine == "" {
-		return fmt.Errorf("jeton racine illisible : %v", err)
+	if err != nil {
+		return fmt.Errorf("jeton racine illisible : %w", err)
+	}
+	if racine == "" {
+		fmt.Println("  ∙ jeton racine déjà révoqué (rien à faire)")
+		return nil
 	}
 	if _, err := baoAvecJeton(ctx, racine, "token", "revoke-self"); err != nil {
 		return err
