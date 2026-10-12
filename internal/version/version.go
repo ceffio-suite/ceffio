@@ -58,12 +58,20 @@ var Registry = []Composant{
 		Module: "internal/talk", Role: "Talk : messagerie du signaling",
 	},
 	{
+		Nom: "openbao", Image: "docker.io/openbao/openbao:2.7.1",
+		Module: "internal/vault", Role: "coffre de secrets : centralisation, rotation, audit",
+	},
+	{
 		Nom: "onlyoffice", Image: "docker.io/onlyoffice/documentserver:9.4.0.1",
 		Module: "internal/office", Role: "édition de documents",
 	},
 	{
 		Nom: "redis", Image: "redis:7.4.11",
 		Module: "internal/data", Role: "cache et état partagé",
+	},
+	{
+		Nom: "stalwart", Image: "docker.io/stalwartlabs/stalwart:v0.16.26",
+		Module: "internal/mail", Role: "messagerie : SMTP entrant, IMAP, filtres",
 	},
 }
 

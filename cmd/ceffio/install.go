@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/ceffio-suite/ceffio/internal/apps"
@@ -20,6 +21,7 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/sso"
 	"github.com/ceffio-suite/ceffio/internal/stacks"
 	"github.com/ceffio-suite/ceffio/internal/talk"
+	"github.com/ceffio-suite/ceffio/internal/vault"
 	"github.com/spf13/cobra"
 )
 
@@ -157,6 +159,37 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 		namedTask{"données (Phase 3)", func(ctx context.Context) error { return data.Deploy(ctx) }},
 	); err != nil {
 		return err
+	}
+
+	// 6. Coffre de secrets (OpenBao).
+	//
+	// PLACÉ ICI, ET PAS AILLEURS : avant l'identité et avant toutes les couches
+	// applicatives, parce que c'est à partir de là que les composants peuvent
+	// LIRE leurs secrets au lieu de les inventer. S'il était déployé plus tard,
+	// chaque composant aurait déjà généré les siens et il faudrait les migrer
+	// après coup — c'est-à-dire refaire le travail.
+	//
+	// APRÈS la plateforme, en revanche : le coffre n'a besoin ni de cert-manager
+	// ni de PostgreSQL. L'ordre est donc : plateforme → coffre → tout le reste.
+	//
+	// Rien n'est obligatoire ici : si le coffre échoue, poursuivre avec les
+	// Secrets Kubernetes est le comportement attendu (voir internal/secrets).
+	//
+	// ON PUBLIE L'ADRESSE ET LE JETON DANS L'ENVIRONNEMENT : c'est ainsi que les
+	// modules suivants les trouveront, via secrets.DepuisEnvironnement(). Sans
+	// cette publication, le coffre serait déployé mais personne ne lirait
+	// dedans — un coffre plein que les composants continueraient d'ignorer.
+	//
+	// Le nom est coffreBao et non coffre : la suite du fichier nomme déjà
+	// « coffre » la configuration lue depuis l'environnement.
+	coffreBao := vault.Deploy(ctx, o.domain)
+	if coffreBao.Pret {
+		os.Setenv("BAO_ADDR", coffreBao.Adresse)
+		os.Setenv("BAO_TOKEN", coffreBao.Jeton)
+		os.Setenv("BAO_MOTEUR", "kv")
+		fmt.Printf("∙ coffre publié pour la suite : %s (jeton non affiché)\n", coffreBao.Adresse)
+	} else {
+		fmt.Println("∙ coffre indisponible : les secrets resteront dans Kubernetes (comportement prévu)")
 	}
 
 	// 7. Identité / SSO (Phase 4) — dépend de la base PostgreSQL.
