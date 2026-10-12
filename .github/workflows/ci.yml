@@ -99,19 +99,32 @@ jobs:
 
       - name: Vérification du binaire produit
         # On ne se contente pas de constater que la construction s'est terminée :
-        # on EXÉCUTE ce qui vient d'être produit. Un binaire qui ne démarre pas
-        # est un binaire cassé, même si `go build` a rendu 0.
+        # on EXÉCUTE ce qui vient d'être produit, quand c'est possible.
         #
-        # Les commandes choisies le sont pour une raison : il n'existe PAS de
-        # sous-commande `version` dans ce projet. Appeler une commande qui n'existe
-        # pas aurait fait échouer la CI pour une mauvaise raison — et c'est
-        # arrivé lors de l'écriture de ce fichier. On exerce donc l'arbre de
-        # commandes réel : l'aide générale et le parcours d'une commande clé.
+        # QUAND CE N'EST PAS POSSIBLE, ET POURQUOI ON LE DIT : un binaire arm64 ne
+        # s'exécute pas sur un runner amd64. Tenter de le lancer ferait échouer la
+        # CI pour une raison qui n'a rien à voir avec la qualité du code — c'est
+        # arrivé, deux fois, dans l'écriture de ce fichier. On exécute donc
+        # seulement l'architecture NATIVE du runner, et on annonce clairement que
+        # l'autre n'est pas exécutée. Un artefact publié sans avoir été exécuté se
+        # dit, il ne se cache pas.
+        #
+        # Les commandes exécutées sont choisies pour une raison : il n'existe PAS
+        # de sous-commande `version` dans ce projet. On exerce donc l'arbre de
+        # commandes réel — l'aide générale et deux parcours de commandes.
         run: |
           set -euo pipefail
           BIN="bin/ceffio-${VERSION}-linux-${{ matrix.goarch }}"
           test -x "$BIN" || { echo "::error::le binaire n'est pas exécutable"; exit 1; }
           file "$BIN"
+
+          NATIF="$(go env GOARCH)"
+          if [ "${{ matrix.goarch }}" != "$NATIF" ]; then
+            echo "architecture ${{ matrix.goarch }} : construite mais NON exécutée ici (runner $NATIF)."
+            echo "Vérification complète à faire sur une machine ${{ matrix.goarch }}."
+            exit 0
+          fi
+
           ./"$BIN" --help > /dev/null
           ./"$BIN" install --help > /dev/null
           ./"$BIN" status --help > /dev/null
