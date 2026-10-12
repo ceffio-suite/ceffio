@@ -39,7 +39,9 @@ package vault
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -101,11 +103,12 @@ func Deploy(ctx context.Context) *Resultat {
 		fmt.Printf("  ∙ coffre non déployé (clé de descellement) : %v\n", err)
 		return &Resultat{}
 	}
-	if err := applyConfig(ctx); err != nil {
+	empreinte, err := applyConfig(ctx)
+	if err != nil {
 		fmt.Printf("  ∙ coffre non déployé (configuration) : %v\n", err)
 		return &Resultat{}
 	}
-	if err := applyWorkload(ctx); err != nil {
+	if err := applyWorkload(ctx, empreinte); err != nil {
 		fmt.Printf("  ∙ coffre non déployé (charge de travail) : %v\n", err)
 		return &Resultat{}
 	}
@@ -216,6 +219,12 @@ func ensureCleDescellement(ctx context.Context) error {
 //     d'OpenBao attend, et elle survit aux redémarrages. Retirer ce bloc
 //     supprimerait le journal.
 //
+//     LA SYNTAXE EXACTE COMPTE : `audit "<type>" "<chemin>"` prend DEUX
+//     étiquettes — le type d'abord, le chemin de montage ensuite — et `options`
+//     est un BLOC, pas une affectation. Écrire `audit "file" { … }` avec une
+//     seule étiquette fait échouer le démarrage du serveur sur
+//     « audit type must be specified », constaté en service.
+//
 //   - LE DESCELlement EST AUTOMATIQUE, par le sceau statique. Voir l'entête du
 //     paquet pour le compromis.
 func configManifest() string {
@@ -244,10 +253,9 @@ data:
       current_key    = "file://%[3]s"
     }
 
-    audit "file" {
-      path        = "fichier"
+    audit "file" "fichier" {
       description = "Journal d'audit Ceffio"
-      options = {
+      options {
         file_path = "%[4]s"
       }
     }
@@ -257,8 +265,25 @@ data:
 `, ns, cheminDonnees, cheminCle, cheminAudit, service)
 }
 
-func applyConfig(ctx context.Context) error {
-	return appliquer(ctx, configManifest())
+// applyConfig pose la configuration et rend son empreinte.
+//
+// L'EMPREINTE SERT À REDÉMARRER LE POD QUAND LA CONFIGURATION CHANGE. Kubernetes
+// ne redémarre pas un pod parce qu'un ConfigMap a changé : le fichier monté se
+// met à jour sur le disque, mais le processus en cours ne relit rien. Un pod en
+// marche continuerait donc d'utiliser l'ancienne configuration — et une
+// correction de configuration resterait sans effet, ce qui fait perdre beaucoup
+// de temps à qui croit avoir corrigé.
+//
+// En reportant l'empreinte dans une annotation du gabarit, toute modification
+// devient un changement de pod : le StatefulSet roule, et la nouvelle
+// configuration est réellement appliquée.
+func applyConfig(ctx context.Context) (string, error) {
+	manifeste := configManifest()
+	if err := appliquer(ctx, manifeste); err != nil {
+		return "", err
+	}
+	somme := sha256.Sum256([]byte(manifeste))
+	return hex.EncodeToString(somme[:])[:16], nil
 }
 
 // ---------------------------------------------------------------------------
@@ -270,11 +295,15 @@ func applyConfig(ctx context.Context) error {
 // UN SEUL NŒUD, ET C'EST UN CHOIX : le stockage raft sait faire un cluster, mais
 // une PME n'a pas besoin de trois coffres pour trois secrets. Le jour où il en
 // faudra un, c'est le nombre de réplicas qui changera — pas la conception.
-func applyWorkload(ctx context.Context) error {
-	return appliquer(ctx, workloadManifest())
+//
+// L'EMPREINTE DE CONFIGURATION EST REPORTÉE DANS LE GABARIT : c'est elle qui fait
+// qu'une modification de la configuration redémarre réellement le pod, au lieu de
+// laisser tourner l'ancienne.
+func applyWorkload(ctx context.Context, empreinte string) error {
+	return appliquer(ctx, workloadManifest(empreinte))
 }
 
-func workloadManifest() string {
+func workloadManifest(empreinte string) string {
 	return fmt.Sprintf(`apiVersion: v1
 kind: Service
 metadata:
@@ -308,6 +337,8 @@ spec:
     metadata:
       labels:
         app: %[1]s
+      annotations:
+        ceffio.fr/empreinte-config: "%[5]s"
     spec:
       securityContext:
         runAsUser: 100
@@ -359,7 +390,7 @@ spec:
         resources:
           requests:
             storage: 1Gi
-`, service, ns, openbaoImage, cheminDonnees)
+`, service, ns, openbaoImage, cheminDonnees, empreinte)
 }
 
 // waitReady attend que le serveur réponde. Il peut répondre 501 (non
