@@ -84,9 +84,19 @@ const (
 func Deploy(ctx context.Context, ipPublique string) error {
 	fmt.Println("\nDéploiement de Talk + High Performance Backend (Phase 10)...")
 
+	// L'adresse publique est nécessaire à TROIS endroits, et doit être la même :
+	// Janus (candidats ICE du média), coturn (candidats de relais), et le
+	// signaling (l'adresse TURN qu'il remet aux navigateurs). L'exiger en
+	// paramètre était une dépendance inutile : elle est découvrable.
 	if ipPublique == "" {
-		fmt.Printf("∙ adresse publique non fournie — Janus la découvrira via %s:%d\n",
+		fmt.Printf("∙ adresse publique non fournie — découverte via STUN (%s:%d)\n",
 			stunPublic, stunPort)
+		deouverte, err := DécouvrirIPPublique(ctx)
+		if err != nil {
+			return err
+		}
+		ipPublique = deouverte
+		fmt.Printf("  adresse publique détectée : %s\n", ipPublique)
 	}
 
 	// 1. Secrets d'abord : les Deployments les référencent.
@@ -106,7 +116,7 @@ func Deploy(ctx context.Context, ipPublique string) error {
 	if err := deployJanus(ctx, ipPublique); err != nil {
 		return err
 	}
-	if err := deploySignaling(ctx); err != nil {
+	if err := deploySignaling(ctx, ipPublique); err != nil {
 		return err
 	}
 	// 2. Raccorder Nextcloud au HPB (via occ, jamais à la main).
@@ -443,7 +453,10 @@ spec:
 // Rôle : dire aux participants qui est présent et où se connecter. Il ne
 // transporte AUCUN média — c'est un routeur de métadonnées, très léger. C'est
 // l'équivalent de Prosody dans la pile Jitsi, avec NATS pour la coordination.
-func deploySignaling(ctx context.Context) error {
+//
+// ipPublique est l'adresse que ce serveur TRANSMET AUX NAVIGATEURS dans sa
+// liste de serveurs TURN. Elle doit être joignable depuis Internet.
+func deploySignaling(ctx context.Context, ipPublique string) error {
 	fmt.Println("∙ signaling " + signalingImage + " (coordination, passe par Janus)")
 
 	// Configuration : le signaling connaît Janus, NATS, et le secret partagé
@@ -491,11 +504,20 @@ allowall = false
 secret = $(SHARED_SECRET)
 
 # Relais TURN, avec identifiants temporaires générés par ce serveur.
+#
+# L'ADRESSE ICI EST CELLE QUE LES NAVIGATEURS VONT CONTACTER. Elle doit donc
+# être joignable depuis Internet. Un nom interne au cluster (« coturn ») ne
+# résout PAS dans le navigateur : le relais serait alors inutilisable dans le
+# seul cas où il sert — le participant derrière un NAT restrictif.
+#
+# C'est l'endroit le plus facile à oublier : Janus peut annoncer correctement
+# son adresse que le relais reste hors de portée, parce que c'est ICI que le
+# client lit où aller.
 [turn]
 apikey = $(SHARED_SECRET)
 secret = $(TURN_SECRET)
-servers = turn:coturn:%[2]d?transport=udp,turn:coturn:%[2]d?transport=tcp
-`, portSignaling, portTurn)
+servers = %[2]s
+`, portSignaling, turnURL(ipPublique))
 
 	manifeste := fmt.Sprintf(`apiVersion: v1
 kind: ConfigMap
