@@ -191,25 +191,72 @@ func ensureCleDescellement(ctx context.Context) error {
 	if _, err := kube(ctx, "get", "secret", "openbao-unseal-key", "-n", ns); err == nil {
 		return nil
 	}
-	// 32 octets aléatoires, exactement ce qu'exige le sceau statique
-	// (AES-256-GCM). Une valeur plus courte fait échouer le démarrage du
-	// serveur, une valeur plus longue aussi.
-	cle, err := kube(ctx, "run", "gen-cle", "--rm", "-i", "--restart=Never",
-		"--image="+openbaoImage, "-n", ns, "--command", "--",
-		"sh", "-c", "head -c 32 /dev/urandom | base64 -w0")
-	if err != nil {
-		return fmt.Errorf("génération de la clé : %w", err)
+
+	// POURQUOI PAS `kubectl run` : cette commande est faite pour un humain devant
+	// un terminal. Elle mêle à sa sortie des messages d'accompagnement (« pod
+	// deleted », « if you don't see a command prompt… ») et, avec `-i`, elle
+	// attend parfois une entrée. Constaté en service : la clé enregistrée faisait
+	// 309 caractères au lieu de 44, et le coffre refusait de démarrer sur
+	// « unknown encoding for AES-256 key ». Le coffre aurait pu être configuré
+	// avec une clé dont la moitié était un message d'aide.
+	//
+	// Un pod JETABLE dont on ne lit QUE la sortie standard fait la même chose
+	// sans rien y mêler.
+	nom := "gen-cle"
+	_, _ = kube(ctx, "delete", "pod", nom, "-n", ns, "--ignore-not-found")
+
+	lancer := []string{"run", nom, "--image=" + openbaoImage, "-n", ns,
+		"--restart=Never", "--command", "--", "sh", "-c",
+		// 32 octets aléatoires, exactement ce qu'exige le sceau statique
+		// (AES-256-GCM), encodés en base64 sur une seule ligne.
+		"head -c 32 /dev/urandom | base64 -w0"}
+	if _, err := kube(ctx, lancer...); err != nil {
+		return fmt.Errorf("lancement de la génération : %w", err)
 	}
-	cle = strings.TrimSpace(cle)
-	if cle == "" {
-		return fmt.Errorf("clé vide")
+	defer func() {
+		_, _ = kube(ctx, "delete", "pod", nom, "-n", ns, "--ignore-not-found")
+	}()
+
+	// Attente bornée de la fin du pod : un pod qui n'aboutit pas ne doit pas
+	// bloquer le déploiement indéfiniment.
+	phase := ""
+	for i := 0; i < 24; i++ {
+		phase, _ = kube(ctx, "get", "pod", nom, "-n", ns, "-o", "jsonpath={.status.phase}")
+		if phase == "Succeeded" || phase == "Failed" {
+			break
+		}
+		time.Sleep(5 * time.Second)
 	}
-	_, err = kube(ctx, "create", "secret", "generic", "openbao-unseal-key",
-		"-n", ns, "--from-literal=unseal.key="+cle)
+	if phase != "Succeeded" {
+		return fmt.Errorf("le pod de génération n'a pas abouti (état %q)", phase)
+	}
+
+	// LA SORTIE STANDARD SEULE, et rien d'autre : c'est le cœur de la correction.
+	cmd := k8s.Command(ctx, "kubectl", "logs", nom, "-n", ns)
+	cmd.Env = k8s.Env()
+	brut, err := cmd.Output()
 	if err != nil {
+		return fmt.Errorf("lecture de la clé générée : %w", err)
+	}
+	cle := strings.TrimSpace(string(brut))
+
+	// ON CONTRÔLE LA FORME AVANT DE S'EN SERVIR. Sans cette vérification, une
+	// sortie polluée se retrouve dans le coffre et l'erreur n'apparaît qu'au
+	// démarrage du serveur, sous une forme qui ne dit pas d'où elle vient.
+	// 32 octets en base64 font exactement 44 caractères.
+	if len(cle) != 44 {
+		return fmt.Errorf("clé mal formée : %d caractères au lieu de 44 — sortie inattendue de kubectl : %.80s",
+			len(cle), cle)
+	}
+	if _, err := base64.StdEncoding.DecodeString(cle); err != nil {
+		return fmt.Errorf("clé qui n'est pas du base64 valide : %w", err)
+	}
+
+	if _, err := kube(ctx, "create", "secret", "generic", "openbao-unseal-key",
+		"-n", ns, "--from-literal=unseal.key="+cle); err != nil {
 		return fmt.Errorf("pose de la clé : %w", err)
 	}
-	fmt.Println("  ∙ clé de descellement créée (32 octets, le secret-zéro)")
+	fmt.Println("  ∙ clé de descellement créée (32 octets, vérifiée, le secret-zéro)")
 	return nil
 }
 
@@ -225,6 +272,11 @@ func ensureCleDescellement(ctx context.Context) error {
 //     pas le réseau des pods. Le dire explicitement plutôt que de le laisser
 //     deviner : un serveur TLS qui reçoit du clair répond 400, donc un code
 //     d'erreur ne prouve pas qu'on parle à un serveur en clair.
+//
+//   - `disable_mlock` A ÉTÉ RETIRÉ, et c'est délibéré : OpenBao le signale comme
+//     « unknown or unsupported field » au démarrage. Le garder produirait un
+//     avertissement à chaque démarrage, et un avertissement permanent finit par
+//     être ignoré — y compris le jour où il annonce autre chose.
 //
 //   - LE JOURNAL D'AUDIT EST DÉCLARÉ ICI, dans le fichier de configuration, et
 //     non activé par une commande : c'est la forme que la version actuelle
@@ -248,7 +300,6 @@ metadata:
 data:
   openbao.hcl: |
     ui = true
-    disable_mlock = true
 
     storage "raft" {
       path    = "%[2]s"
