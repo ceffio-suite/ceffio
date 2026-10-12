@@ -84,7 +84,13 @@ type Resultat struct {
 // Ne rend JAMAIS d'erreur fatale pour la suite : en cas d'échec, un
 // avertissement est imprimé et Resultat{Pret:false} est rendu, pour que le
 // déploiement se poursuive avec les Secrets Kubernetes.
-func Deploy(ctx context.Context, domain string) *Resultat {
+//
+// PAS DE PARAMÈTRE DE DOMAINE, VOLONTAIREMENT : le coffre n'en a pas besoin
+// aujourd'hui. Le jour où il sera exposé en https://bao.<domaine>, l'entrée
+// publique demandera le domaine — et c'est à ce moment-là qu'il faudra ajouter
+// le paramètre, pas avant. Un paramètre que rien n'utilise finit par être
+// rempli au hasard, puis lu par erreur.
+func Deploy(ctx context.Context) *Resultat {
 	fmt.Println("\nDéploiement du coffre de secrets (OpenBao)...")
 
 	if err := ensureNamespace(ctx); err != nil {
