@@ -78,7 +78,8 @@ Exemples :
 	f.BoolVar(&o.office, "office", true, "Activer ONLYOFFICE")
 	f.BoolVar(&o.monitoring, "monitoring", true, "Activer l'observabilité")
 	f.StringVar(&o.ipPublique, "ip-publique", "",
-		"Adresse publique du déploiement (visio : Janus doit l'annoncer aux navigateurs)")
+		"Adresse publique du déploiement (visio : Janus l'annonce aux navigateurs). "+
+			"Facultative : sans elle, Janus la découvre via un serveur STUN public")
 	// Relais d'expédition. Par défaut : aucun (Stalwart reçoit mais n'envoie
 	// pas vers l'extérieur). Le port 25 sortant étant bloqué chez les FAI, ce
 	// relais est ce qui rend la messagerie réellement utilisable.

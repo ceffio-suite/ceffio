@@ -43,9 +43,23 @@ const (
 
 	// Images du HPB.
 	signalingImage = "docker.io/strukturag/nextcloud-spreed-signaling:2.1.1"
-	janusImage     = "ghcr.io/ceffio-suite/janus-gateway:1.3.0-1"
+	janusImage     = "ghcr.io/ceffio-suite/janus-gateway:1.4.0-1"
 	natsImage      = "docker.io/library/nats:2.15"
 	coturnImage    = "docker.io/coturn/coturn:4.18"
+
+	// Serveur STUN chargé de découvrir l'adresse publique que Janus doit
+	// annoncer, quand elle n'est pas fournie au déploiement.
+	//
+	// PUBLIC, impérativement : un serveur du réseau local (coturn, par exemple)
+	// voit la requête arriver depuis l'intérieur et répond l'adresse PRIVÉE —
+	// mesuré : « Our public address is 192.168.1.48 ». La détection « réussit »
+	// alors en annonçant une adresse injoignable depuis Internet.
+	//
+	// L'entrypoint de l'image résout ce nom en IPv4 avant de l'écrire dans la
+	// configuration : laissé en nom d'hôte, Janus le résout en IPv6 sur une
+	// machine double-pile et n'annonce qu'une adresse IPv6.
+	stunPublic = "stun.l.google.com"
+	stunPort   = 19302
 
 	// Réseau — ports DÉDIÉS à Ceffio, sans chevauchement avec AgenTorch
 	// (qui occupe 50000-60000, 30000-40000 et 3478).
@@ -60,19 +74,19 @@ const (
 
 // Deploy installe Talk + HPB, de façon idempotente.
 //
-// secondesAvanceesIP est l'adresse publique du déploiement, transmise à Janus
-// (nat_1_1_mapping). Elle est REQUISE : sans elle, Janus annonce ses adresses
-// privées dans les candidats ICE et le média ne passe jamais depuis Internet —
-// c'est le piège classique du WebRTC auto-hébergé.
+// ipPublique est l'adresse publique du déploiement, annoncée aux navigateurs.
+// Elle est FACULTATIVE : si elle n'est pas fournie, Janus la découvre lui-même
+// au démarrage via un serveur STUN public. Dans les deux cas l'adresse est
+// annoncée — c'est la condition pour que le média passe depuis Internet.
 //
-// Une détection automatique par STUN existe dans l'image (JANUS_STUN_SERVER),
-// à activer quand coturn sera en place : elle rendra ce paramètre inutile.
+// Fournir la valeur reste préférable quand elle est connue : elle évite un
+// appel réseau au démarrage et rend le déploiement déterministe.
 func Deploy(ctx context.Context, ipPublique string) error {
 	fmt.Println("\nDéploiement de Talk + High Performance Backend (Phase 10)...")
 
 	if ipPublique == "" {
-		return fmt.Errorf("adresse publique requise : Janus doit l'annoncer aux navigateurs " +
-			"(sans quoi le média ne passe pas). Fournir --ip-publique, ou activer la détection STUN")
+		fmt.Printf("∙ adresse publique non fournie — Janus la découvrira via %s:%d\n",
+			stunPublic, stunPort)
 	}
 
 	// 1. Secrets d'abord : les Deployments les référencent.
@@ -83,7 +97,7 @@ func Deploy(ctx context.Context, ipPublique string) error {
 		return err
 	}
 	// coturn AVANT Janus : Janus le référence comme serveur STUN/TURN.
-	if err := deployCoturn(ctx); err != nil {
+	if err := deployCoturn(ctx, ipPublique); err != nil {
 		return err
 	}
 	if err := ensurePullSecret(ctx); err != nil {
@@ -203,8 +217,25 @@ spec:
 //
 // Le secret d'authentification est partagé avec le signaling server, qui
 // génère les identifiants TURN temporaires pour les clients.
-func deployCoturn(ctx context.Context) error {
+func deployCoturn(ctx context.Context, ipPublique string) error {
 	fmt.Println("∙ coturn " + coturnImage + " (relais TURN, port " + fmt.Sprint(portTurn) + ")")
+
+	// --external-ip : sans lui, coturn annonce les adresses PRIVÉES du pod dans
+	// les candidats de relais TURN. Un participant derrière un NAT symétrique
+	// reçoit alors une adresse qu'il ne peut pas joindre, et la connexion
+	// échoue précisément dans le cas où TURN sert à quelque chose.
+	//
+	// Mesuré sans cette option : le serveur STUN de coturn répond
+	// « UDP reflexive addr: 192.168.1.48 ».
+	//
+	// Option absente quand l'adresse n'est pas connue : TURN reste alors
+	// utilisable à l'intérieur du réseau, ce qui vaut mieux qu'une valeur
+	// inventée.
+	externalIP := ""
+	if ipPublique != "" {
+		externalIP = fmt.Sprintf("        - --external-ip=%s\n", ipPublique)
+	}
+
 	manifeste := fmt.Sprintf(`apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -212,6 +243,9 @@ metadata:
   namespace: %[1]s
   labels: {app: coturn}
 spec:
+  # Recreate : même raison que Janus — pod en hostNetwork, donc ports de l'hôte
+  # occupés. Voir le commentaire détaillé sur le déploiement de Janus.
+  strategy: {type: Recreate}
   replicas: 1
   selector: {matchLabels: {app: coturn}}
   template:
@@ -227,7 +261,7 @@ spec:
         image: %[2]s
         args:
         - --realm=%[3]s
-        - --use-auth-secret
+%[6]s        - --use-auth-secret
         - --static-auth-secret=$(TURN_SECRET)
         - --lt-cred-mech
         - --fingerprint
@@ -263,7 +297,7 @@ spec:
   - {name: turn, port: %[4]d, targetPort: %[4]d, protocol: UDP}
   - {name: turn-tcp, port: %[4]d, targetPort: %[4]d, protocol: TCP}
   - {name: turns, port: %[5]d, targetPort: %[5]d, protocol: TCP}
-`, ns, coturnImage, "talk.ceffio.local", portTurn, portTurnTLS)
+`, ns, coturnImage, "talk.ceffio.local", portTurn, portTurnTLS, externalIP)
 	return appliquer(ctx, manifeste)
 }
 
@@ -316,6 +350,29 @@ data:
 // participants (connexions directes entre navigateurs).
 func deployJanus(ctx context.Context, ipPublique string) error {
 	fmt.Printf("∙ Janus %s (SFU, média UDP %d-%d)\n", janusImage, plageMediaDebut, plageMediaFin)
+
+	// L'ADRESSE PUBLIQUE DOIT TOUJOURS ÊTRE ANNONCÉE.
+	//
+	// Sans elle, Janus publie ses adresses privées dans les candidats ICE et le
+	// média ne passe jamais depuis Internet : c'est le piège classique du
+	// WebRTC auto-hébergé. Deux voies, dans cet ordre :
+	//
+	//   1. --ip-publique fournie : posée en nat_1_1_mapping, annoncée telle
+	//      quelle. Déterministe, aucun appel réseau au démarrage.
+	//   2. sinon, STUN : Janus interroge le serveur au démarrage et annonce
+	//      l'adresse publique qu'il en déduit. C'est ce qui rend le paramètre
+	//      facultatif.
+	//
+	// Le serveur STUN DOIT être joignable depuis Internet. Pointé sur coturn,
+	// qui tourne sur le même réseau, il renvoie l'adresse PRIVÉE — mesuré :
+	// « Our public address is 192.168.1.48 ». La détection devient alors un
+	// piège : elle « réussit » en annonçant une adresse injoignable.
+	envIP := ""
+	if ipPublique != "" {
+		envIP = fmt.Sprintf("        # Adresse publique fournie : annoncée telle quelle (nat_1_1_mapping).\n"+
+			"        - {name: JANUS_PUBLIC_IP, value: %q}\n", ipPublique)
+	}
+
 	manifeste := fmt.Sprintf(`apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -323,6 +380,13 @@ metadata:
   namespace: %[1]s
   labels: {app: janus}
 spec:
+  # Recreate, PAS RollingUpdate. Le pod est en hostNetwork : il occupe les
+  # ports de la VM (média 20000-20100, API 8088, WS 8188). Un déploiement
+  # progressif est alors IMPOSSIBLE — le nouveau pod ne peut pas démarrer tant
+  # que l'ancien tient ces ports, et l'ancien n'est retiré qu'une fois le
+  # nouveau prêt. Mesuré : « FailedScheduling: 1 node(s) didn't have free ports
+  # for the requested pod ports », déploiement bloqué indéfiniment.
+  strategy: {type: Recreate}
   replicas: 1
   selector: {matchLabels: {app: janus}}
   template:
@@ -341,19 +405,21 @@ spec:
       - name: janus
         image: %[2]s
         env:
-        # Adresse publique annoncée aux navigateurs (nat_1_1_mapping).
-        - {name: JANUS_PUBLIC_IP, value: %[3]q}
-        - {name: JANUS_RTP_PORT_RANGE, value: "%[4]d-%[5]d"}
-        - {name: JANUS_STUN_SERVER, value: "coturn"}
-        - {name: JANUS_STUN_PORT, value: "%[6]d"}
+%[7]s        - {name: JANUS_RTP_PORT_RANGE, value: "%[4]d-%[5]d"}
+        # Serveur STUN PUBLIC : source de l'adresse publique quand elle n'est
+        # pas fournie. L'entrypoint le résout en IPv4 (un nom d'hôte résolu en
+        # IPv6 ferait annoncer une adresse IPv6, injoignable en IPv4).
+        - {name: JANUS_STUN_SERVER, value: %[8]q}
+        - {name: JANUS_STUN_PORT, value: "%[9]d"}
         ports:
         - {name: api, containerPort: 8088, protocol: TCP}
         - {name: ws, containerPort: 8188, protocol: TCP}
         resources: {limits: {memory: 2Gi, cpu: "2"}}
 ---
 # NodePort pour TOUTE la plage média : c'est le flux vidéo lui-même qui passe
-# par là. Le signaling indique aux navigateurs ces ports (via nat_1_1_mapping),
-# qui doivent donc être ouverts de bout en bout — pare-feu ET Kubernetes.
+# par là. Le signaling indique aux navigateurs ces ports (via l'adresse
+# publique annoncée), qui doivent donc être ouverts de bout en bout — pare-feu
+# ET Kubernetes.
 apiVersion: v1
 kind: Service
 metadata:
@@ -364,7 +430,7 @@ spec:
   ports:
   - {name: api, port: 8088, targetPort: 8088, protocol: TCP}
   - {name: ws, port: 8188, targetPort: 8188, protocol: TCP}
-`, ns, janusImage, ipPublique, plageMediaDebut, plageMediaFin, portTurn)
+`, ns, janusImage, "", plageMediaDebut, plageMediaFin, portTurn, envIP, stunPublic, stunPort)
 	return appliquer(ctx, manifeste)
 }
 
