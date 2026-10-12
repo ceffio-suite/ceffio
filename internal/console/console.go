@@ -109,11 +109,20 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/status", s.requireAuth(s.handleStatus))
 	mux.HandleFunc("/api/users", s.requireAuth(s.handleUsers))
 	mux.HandleFunc("/api/users/", s.requireAuth(s.handleUsersByID))
-	// Applications Nextcloud : consultation, activation, désactivation.
-	// Tout passe par l'API OCS de Nextcloud (voir apps.go) — aucun droit
-	// d'exécution, aucun Job, un simple appel HTTP authentifié.
-	mux.HandleFunc("/api/apps", s.requireAuth(s.handleApps))
-	mux.HandleFunc("/api/apps/", s.requireAuth(s.handleAppsAction))
+	// Compte administrateur unique : identifiant, rotation du mot de passe.
+	// Un seul compte administre Nextcloud, Stalwart et cette console — il vit
+	// dans Keycloak, donc la rotation s'y applique et se propage partout.
+	mux.HandleFunc("/api/admin", s.requireAuth(s.handleAdmin))
+	mux.HandleFunc("/api/admin/rotate", s.requireAuth(s.handleAdminRotate))
+	// PAS de routes /api/apps : la gestion des applications se fait dans
+	// l'INTERFACE DE NEXTCLOUD. L'UI native connaît son catalogue (catégories,
+	// compatibilité, avis) mieux qu'une page reconstruite ici, et elle suit
+	// automatiquement les évolutions de Nextcloud. On ne la duplique pas.
+	// Le lien vers cette UI est fourni par /api/admin.
+	// SMTP de la plateforme : configuration, test et enregistrement. Le test
+	// avant sauvegarde est le point clé — une config non testee ne vaut rien.
+	mux.HandleFunc("/api/smtp", s.requireAuth(s.handleSmtp))
+	mux.HandleFunc("/api/smtp/tester", s.requireAuth(s.handleSmtpTester))
 	return mux
 }
 

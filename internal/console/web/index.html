@@ -147,9 +147,13 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9S14.5 18.5 12 21c-2.5-2.5-3.5-5.5-3.5-9S9.5 5.5 12 3z"/></svg>
       Applications
     </div>
-    <div class="nav-item" data-tab="apps">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M17.5 14v7M14 17.5h7"/></svg>
-      Apps Nextcloud
+    <div class="nav-item" data-tab="admin">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 4 6v6c0 5 3.4 9.2 8 10 4.6-.8 8-5 8-10V6l-8-4z"/><path d="M12 11v4M12 8.5v.5"/></svg>
+      Administration
+    </div>
+    <div class="nav-item" data-tab="smtp">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="m2 7 10 6 10-6"/></svg>
+      Messagerie
     </div>
     <div class="nav-item" data-tab="users">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17.5" cy="8.5" r="2.5"/><path d="M21 20c0-2.5-1.5-4.5-3.5-5.5"/></svg>
@@ -220,15 +224,97 @@
         </table>
       </section>
 
-      <!-- APPS NEXTCLOUD -->
-      <section class="section" id="tab-apps">
-        <h2 class="section-title">Applications Nextcloud</h2>
-        <p class="section-sub">Applications de collaboration retenues pour Ceffio : toutes en
-        licence libre (AGPL-3.0, sans quota d'utilisateurs). Cochez une case pour activer
-        l'application, décochez pour la désactiver — la modification prend effet immédiatement.</p>
+      <!-- ADMINISTRATION -->
+      <section class="section" id="tab-admin">
+        <h2 class="section-title">Administration</h2>
+        <p class="section-sub">Un seul compte administre la plateforme : Nextcloud, le serveur
+        de mail et cette console. Il est créé dans l'annuaire d'authentification (Keycloak),
+        donc la même identité fonctionne partout — et la rotation du mot de passe s'y propage.</p>
 
-        <div id="appsGroups">
-          <div class="note">Chargement du catalogue…</div>
+        <div class="card">
+          <h3>Compte administrateur</h3>
+          <div id="adminEtat"><div class="note">Chargement…</div></div>
+        </div>
+
+        <div style="height:14px"></div>
+
+        <div class="card">
+          <h3>Interfaces d'administration</h3>
+          <p class="section-sub" style="margin-top:0">La console ne réimplémente pas ces
+          interfaces : elle vous y conduit. Celle de Nextcloud connaît son catalogue
+          d'applications (catégories, compatibilité, avis) mieux qu'une page reconstruite ici.</p>
+          <div id="adminLiens"></div>
+        </div>
+
+        <div style="height:14px"></div>
+
+        <div class="card">
+          <h3>Rotation du mot de passe</h3>
+          <p class="section-sub" style="margin-top:0">Le mot de passe est généré ici puis
+          appliqué à chaque système. Il est affiché <b>une seule fois</b> : notez-le avant de
+          quitter cette page. Aucun système ne peut le relire ensuite — seul un empreinte
+          irréversible est conservée, c'est ce qui protège le compte.</p>
+          <button class="btn" id="btnRotate" onclick="tournerMdp()">Régénérer le mot de passe</button>
+
+          <div id="mdpBoite" style="display:none;margin-top:14px">
+            <div class="note" style="margin-bottom:8px">
+              <b>Ce mot de passe ne sera plus affiché.</b> Copiez-le maintenant.
+            </div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <input id="mdpValeur" readonly class="mono"
+                     style="flex:1;font-size:13px;background:var(--bg2);border:1px solid var(--border);padding:10px;border-radius:8px">
+              <button class="btn-ghost" onclick="copierMdp()">Copier</button>
+              <button class="btn-ghost" onclick="masquerMdp()">Masquer</button>
+            </div>
+          </div>
+        </div>
+
+        <div style="height:14px"></div>
+
+        <div class="card">
+          <h3>Journal de la rotation</h3>
+          <pre class="mono" id="adminJournal" style="max-height:240px;overflow:auto;font-size:11.5px;background:var(--bg2);padding:12px;border-radius:8px;white-space:pre-wrap">—</pre>
+        </div>
+      </section>
+
+      <!-- MESSAGERIE -->
+      <section class="section" id="tab-smtp">
+        <h2 class="section-title">Messagerie de la plateforme</h2>
+        <p class="section-sub">Configuration de l'envoi de mail par Nextcloud lui-même :
+        invitations à un partage, réinitialisation de mot de passe, notifications.
+        Ce n'est pas le compte de votre app Mail — celle-ci lit vos propres boîtes,
+        celle-ci est l'adresse depuis laquelle la plateforme écrit.</p>
+
+        <div class="card">
+          <h3>Serveur d'envoi</h3>
+          <div class="form-row">
+            <input id="s_hote" placeholder="Serveur (ex. send.one.com)" style="flex:2">
+            <input id="s_port" placeholder="Port" style="flex:1">
+            <select id="s_securite" style="flex:1">
+              <option value="tls">TLS (STARTTLS)</option>
+              <option value="ssl">SSL</option>
+              <option value="aucune">Aucun chiffrement</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <input id="s_user" placeholder="Utilisateur (adresse d'envoi)" style="flex:2">
+            <input id="s_pass" type="password" placeholder="Mot de passe" style="flex:2"
+                   autocomplete="new-password">
+          </div>
+          <div class="form-row">
+            <input id="s_exped" placeholder="Expéditeur (ex. noreply@exemple.com)" style="flex:2">
+            <input id="s_domaine" placeholder="Domaine" style="flex:2">
+          </div>
+          <div class="note" id="s_etat">—</div>
+          <div class="form-row" style="margin-top:12px">
+            <button class="btn-ghost" id="btnTestSmtp" onclick="testerSmtp()">Tester l'envoi</button>
+            <button class="btn" id="btnSaveSmtp" onclick="sauverSmtp()">Enregistrer</button>
+          </div>
+        </div>
+
+        <div class="card" id="smtpResultat" style="display:none">
+          <h3>Résultat du test</h3>
+          <pre class="mono" id="smtpJournal" style="max-height:260px;overflow:auto;font-size:11.5px;background:var(--bg2);padding:12px;border-radius:8px;white-space:pre-wrap"></pre>
         </div>
       </section>
 
@@ -283,6 +369,7 @@
     dashboard: ["Vue d'ensemble", 'état de la plateforme'],
     services:  ['Applications', 'expositions publiques et rôles'],
     apps:      ['Apps Nextcloud', 'installation et désinstallation'],
+    smtp:      ['Messagerie', 'envoi de mail de la plateforme'],
     users:     ['Utilisateurs', 'comptes du login unique'],
     certs:     ['Certificats TLS', 'validité et expiration'],
     infra:     ['Infrastructure', 'couches internes et pods'],
@@ -313,7 +400,7 @@
     key = $('keyInput').value.trim();
     localStorage.setItem('ceffio_key', key);
     $('keyOverlay').classList.remove('show');
-    if (key) { toast('Clé enregistrée'); refresh(); renderApps(); }
+    if (key) { toast('Clé enregistrée'); refresh(); }
   };
   window.clearKey = () => { key = ''; localStorage.removeItem('ceffio_key'); $('keyOverlay').classList.remove('show'); toast('Clé oubliée', 'ko'); };
   $('keyInput').addEventListener('keydown', e => { if (e.key === 'Enter') saveKey(); });
@@ -445,115 +532,269 @@
   // ── Applications Nextcloud ──────────────────────────────────────────────
   //
   // Tout passe par l'API OCS de Nextcloud : la console ne fait que des appels
-  // HTTP authentifiés. Aucun droit d'exécution dans le cluster, aucun Job.
+  // ── Administration (compte unique + rotation du mot de passe) ──────────
+  //
+  // La gestion des applications Nextcloud se fait dans l'INTERFACE DE NEXTCLOUD.
+  // Elle n'est pas reproduite ici : l'UI native connaît son catalogue (catégories,
+  // compatibilité, avis) et suit les évolutions de Nextcloud. La console se
+  // contente d'y conduire — c'est le lien fourni ci-dessous.
 
-
-  async function renderApps() {
-    let d;
+  async function renderAdmin() {
     try {
-      d = await api('/api/apps');
+      const d = await api('/api/admin');
+
+      // Etat du compte : présence dans chaque système. On affiche ce qui est
+      // VÉRIFIÉ, pas ce qui est supposé — un compte absent quelque part doit
+      // se voir, sinon la rotation échouerait sans que rien ne l'annonce.
+      const pastille = (ok, txt) =>
+        `<span class="badge ${ok ? 'ok' : 'warn'}">${esc(txt)}</span>`;
+      $('adminEtat').innerHTML = `
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <div style="flex:1;min-width:200px">
+            <div style="font-weight:600;font-size:15px" class="mono">${esc(d.identifiant)}</div>
+            <div class="muted" style="font-size:12px">${esc(d.email || 'sans adresse de courriel')}</div>
+          </div>
+          ${pastille(d.existe_keycloak, d.existe_keycloak ? 'annuaire' : 'absent de l\'annuaire')}
+          ${pastille(d.existe_nextcloud, d.existe_nextcloud ? 'Nextcloud' : 'absent de Nextcloud')}
+          ${pastille(d.dans_groupe_admin, d.dans_groupe_admin ? 'administrateur' : 'SANS droits admin')}
+          ${d.actif ? '' : '<span class="badge warn">compte inactif</span>'}
+        </div>
+        ${d.note ? `<div class="note" style="margin-top:12px">${esc(d.note)}</div>` : ''}`;
+
+      // Liens vers les interfaces d'administration réelles.
+      let liens = `<div style="display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="flex:1">
+            <div style="font-weight:600;font-size:13px">Applications Nextcloud</div>
+            <div class="muted" style="font-size:12px">Activer, désactiver ou installer une
+            application. Le catalogue est celui de Nextcloud.</div>
+          </div>
+          <a class="btn-ghost" href="${esc(d.url_admin_nextcloud)}" target="_blank" rel="noopener">Ouvrir ↗</a>
+        </div>`;
+      if (d.url_admin_stalwart) {
+        liens += `
+        <div style="display:flex;align-items:center;gap:10px;padding-top:10px;border-top:1px solid var(--line)">
+          <div style="flex:1">
+            <div style="font-weight:600;font-size:13px">Serveur de mail (Stalwart)</div>
+            <div class="muted" style="font-size:12px">Domaines, boîtes, quotas et filtres
+            du serveur de courrier. Administration séparée, derrière le même compte.</div>
+          </div>
+          <a class="btn-ghost" href="${esc(d.url_admin_stalwart)}" target="_blank" rel="noopener">Ouvrir ↗</a>
+        </div>`;
+      } else {
+        liens += `
+        <div style="padding-top:10px;border-top:1px solid var(--line)">
+          <div style="font-weight:600;font-size:13px" class="muted">Serveur de mail (Stalwart)</div>
+          <div class="muted" style="font-size:12px">Non déployé. Le lien apparaîtra dès que
+          le service sera en place.</div>
+        </div>`;
+      }
+      liens += `</div>`;
+      $('adminLiens').innerHTML = liens;
+
+      // Si le compte manque quelque part, on le dit AVANT que l'utilisateur
+      // tente une rotation qui échouerait à moitié.
+      if (!d.existe_keycloak || !d.existe_nextcloud) {
+        $('adminJournal').textContent =
+          'Attention : le compte n\'est pas complet.\n' +
+          `  annuaire   : ${d.existe_keycloak ? 'présent' : 'ABSENT'}\n` +
+          `  Nextcloud  : ${d.existe_nextcloud ? 'présent' : 'ABSENT'}\n` +
+          'La rotation ne s\'appliquera qu\'aux systèmes où le compte existe.';
+      }
     } catch (e) {
-      // PAS DE CLE : la page restait vide sans rien dire — l'utilisateur ne
-      // pouvait pas savoir si la page était cassée, vide, ou verrouillée.
-      // On l'explique, avec le moyen de se connecter.
+      // PAS DE CLE : on explique quoi faire au lieu de laisser la page vide.
       if (e.message === 'auth' || /jeton|auth/i.test(e.message)) {
-        $('appsGroups').innerHTML = `
-          <div class="card" style="border-color:#3a3f52">
-            <h3>Clé d'administration requise</h3>
-            <div class="note">Cette page affiche les applications Nextcloud de votre
-            instance. Elle a besoin de la clé de la console pour interroger Nextcloud.</div>
-            <div class="form-row" style="margin-top:12px">
-              <button class="btn" onclick="openKeyModal()" style="flex:1">Saisir la clé</button>
-            </div>
-            <div class="note mono" style="margin-top:10px;font-size:11px">
-              kubectl get secret ceffio-console-key -n ceffio-system \
-                -o jsonpath='{.data.key}' | base64 -d
-            </div>
+        $('adminEtat').innerHTML = `
+          <div class="note">Clé d'administration requise pour afficher cet onglet.</div>
+          <div class="form-row" style="margin-top:12px">
+            <button class="btn" onclick="openKeyModal()" style="flex:1">Saisir la clé</button>
           </div>`;
         return;
       }
-      $('appsGroups').innerHTML =
-        `<div class="card"><div class="note">Erreur : ${esc(e.message)}</div></div>`;
-      return;
+      $('adminEtat').innerHTML = `<div class="note">Erreur : ${esc(e.message)}</div>`;
     }
-    const apps = d.apps || [];
-
-    // DEUX LISTES DISJOINTES :
-    //   - installables : l'app fonctionne dès l'activation (case à cocher) ;
-    //   - enAttente   : l'app existe mais exige un service séparé. Elle n'est
-    //                   PAS installable ici — la montrer cochable laisserait
-    //                   croire qu'un clic suffit, et l'utilisateur chercherait
-    //                   ensuite pourquoi la fonction ne marche pas.
-    const installables = apps.filter(a => !a.en_attente);
-    const enAttente = apps.filter(a => a.en_attente);
-
-    const groupes = {};
-    for (const a of installables) {
-      (groupes[a.categorie] ||= []).push(a);
-    }
-    const ordre = ['Collaboration', 'Communication', 'Organisation', 'Documents'];
-    $('appsGroups').innerHTML = ordre.filter(c => groupes[c]).map(cat => `
-      <div class="card" style="margin-bottom:14px">
-        <h3>${esc(cat)}</h3>
-        ${groupes[cat].map(appRow).join('')}
-      </div>`).join('')
-
-    // Section séparée et clairement identifiée : lecture seule.
-    + (enAttente.length ? `
-      <div class="card" style="margin-top:22px;border-color:#3a3f52">
-        <h3>Applications à dépendance externe</h3>
-        <div class="note" style="margin-bottom:12px">
-          Ces applications ne s'activent pas d'un simple clic : chacune exige un
-          service à déployer séparément. Elles sont listées ici pour information —
-          elles ne sont pas installables depuis cette page.
-        </div>
-        ${enAttente.map(appRow).join('')}
-      </div>` : '');
   }
 
-  function appRow(a) {
-    const coche = a.installee ? 'checked' : '';
-    // Une app à dépendance externe n'est PAS cochable : elle n'est pas
-    // installable depuis cette page, et une case active laisserait croire le
-    // contraire.
-    const bloque = !!a.en_attente;
-    const attente = a.en_attente
-      ? `<span class="badge warn" title="${esc(a.en_attente)}">${esc(a.en_attente)}</span>` : '';
-    return `<div style="display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid var(--line);${bloque ? 'opacity:.75' : ''}">
-      <input type="checkbox" ${coche} ${bloque ? 'disabled' : ''}
-        onchange="toggleApp('${esc(a.id)}', this.checked, this)"
-        style="width:16px;height:16px;cursor:pointer;flex:none;${bloque ? 'cursor:not-allowed' : ''}">
-      <div style="flex:1;min-width:0">
-        <div style="font-weight:600;font-size:13px">${esc(a.nom)}
-          ${a.version ? `<span class="muted mono" style="font-size:11px">${esc(a.version)}</span>` : ''}
-        </div>
-        <div class="muted" style="font-size:12px">${esc(a.role)}</div>
-      </div>
-      ${attente}
-      <span class="badge mut">AGPL-3.0</span>
-      <a class="open" href="${esc(a.docs)}" target="_blank" rel="noopener" style="flex:none">docs ↗</a>
-    </div>`;
-  }
+  // Rotation du mot de passe.
+  //
+  // Le mot de passe n'existe en clair que dans la réponse à cet appel. Il n'est
+  // écrit nulle part — ni en base, ni dans un fichier. Si l'utilisateur quitte
+  // la page sans le noter, il doit refaire une rotation. C'est voulu : c'est le
+  // prix d'un secret qui n'est stocké qu'en empreinte.
+  window.tournerMdp = async () => {
+    if (!confirm('Régénérer le mot de passe du compte administrateur ?\n\n' +
+                 'Il sera appliqué à l\'annuaire, à Nextcloud et au serveur de mail.\n' +
+                 'Vous devrez vous reconnecter partout avec le nouveau.')) return;
 
-  window.toggleApp = async (id, veutInstaller, el) => {
-    const action = veutInstaller ? 'install' : 'uninstall';
-    const verbe = veutInstaller ? 'Installer' : 'Désinstaller';
-    if (!confirm(verbe + ' « ' + id + ' » ?')) { el.checked = !veutInstaller; return; }
-    el.disabled = true;
+    const b = $('btnRotate');
+    b.disabled = true;
+    $('mdpBoite').style.display = 'none';
+    $('adminJournal').textContent = 'Rotation en cours…';
+
     try {
-      const r = await api('/api/apps/' + id + '/' + action, { method: 'POST' });
-      toast(r.message || (verbe + ' effectué'));
-      // Relecture de l'etat reel : on ne suppose pas que la case reflete la
-      // verite, on redemande a Nextcloud.
-      await renderApps();
+      const d = await api('/api/admin/rotate', { method: 'POST' });
+      const lignes = (d.etapes || []).map(e =>
+        `  ${e.reussi ? '✓' : '✗'} ${e.systeme}${e.message ? ' — ' + e.message : ''}`);
+      $('adminJournal').textContent = lignes.join('\n');
+
+      if (d.mot_de_passe) {
+        $('mdpValeur').value = d.mot_de_passe;
+        $('mdpBoite').style.display = '';
+        toast('Mot de passe régénéré — notez-le maintenant');
+      } else {
+        toast(d.message || 'Échec de la rotation', 'ko');
+      }
+      await renderAdmin();
     } catch (e) {
+      $('adminJournal').textContent = 'Erreur : ' + e.message;
       toast('Erreur : ' + e.message, 'ko');
-      el.checked = !veutInstaller;
-      el.disabled = false;
+    } finally {
+      b.disabled = false;
     }
   };
 
+  window.copierMdp = async () => {
+    const v = $('mdpValeur').value;
+    try {
+      await navigator.clipboard.writeText(v);
+      toast('Mot de passe copié');
+    } catch (e) {
+      // Le presse-papiers peut être refusé (contexte non sécurisé, permission).
+      // On sélectionne alors le texte : l'utilisateur copie à la main plutôt
+      // que de se retrouver sans solution.
+      $('mdpValeur').select();
+      toast('Copie automatique refusée — le texte est sélectionné', 'ko');
+    }
+  };
 
+  // Masquer = oublier. On vide la valeur du champ : la garder dans le DOM la
+  // laisserait accessible à toute inspection de la page.
+  window.masquerMdp = () => {
+    $('mdpValeur').value = '';
+    $('mdpBoite').style.display = 'none';
+    toast('Mot de passe masqué');
+  };
+
+
+
+  // ── Messagerie (SMTP de la plateforme) ─────────────────────────────────
+  //
+  // Le TEST AVANT SAUVEGARDE est le point important : on teste ce qui est SAISI,
+  // pas ce qui est enregistre. L'utilisateur ajuste, teste, puis sauvegarde
+  // seulement quand le test passe — au lieu de decouvrir l'erreur apres coup.
+
+  async function chargerSmtp() {
+    try {
+      const d = await api('/api/smtp');
+      $('s_hote').value = d.hote || '';
+      $('s_port').value = d.port || 587;
+      $('s_securite').value = d.securite || 'tls';
+      $('s_user').value = d.utilisateur || '';
+      $('s_exped').value = d.expediteur || '';
+      $('s_domaine').value = d.nom_expediteur || '';
+      // Le mot de passe n'est JAMAIS renvoye par l'API : on dit seulement
+      // s'il est deja defini, pour que l'utilisateur sache qu'il peut tester
+      // sans le ressaisir.
+      $('s_etat').innerHTML = d.hote
+        ? (d.mot_de_passe_defini
+            ? 'Configuration actuelle : <b>' + esc(d.hote) + ':' + d.port +
+              '</b> — mot de passe enregistré'
+            : 'Configuration actuelle : <b>' + esc(d.hote) + ':' + d.port +
+              '</b> — aucun mot de passe enregistré')
+        : 'Aucun serveur d\'envoi configuré. Les mails de la plateforme ne partent pas.';
+    } catch (e) {
+      $('s_etat').textContent = 'Erreur : ' + e.message;
+    }
+  }
+
+  function corpsSmtp() {
+    return {
+      hote: $('s_hote').value.trim(),
+      port: parseInt($('s_port').value || '587', 10),
+      securite: $('s_securite').value,
+      utilisateur: $('s_user').value.trim(),
+      mot_de_passe: $('s_pass').value,
+      expediteur: $('s_exped').value.trim(),
+      nom_expediteur: $('s_domaine').value.trim(),
+    };
+  }
+
+  // Toute modification d'un champ ANNULE le test : sinon on testerait une
+  // configuration, on en changerait un champ, et on enregistrerait autre chose
+  // que ce qui a été vérifié — le verrou ne servirait à rien.
+  ['s_hote', 's_port', 's_securite', 's_user', 's_pass', 's_exped', 's_domaine']
+    .forEach(id => {
+      const el = $(id);
+      if (el) el.addEventListener('input', () => { smtpTeste = false; majBoutonSmtp(); });
+      if (el) el.addEventListener('change', () => { smtpTeste = false; majBoutonSmtp(); });
+    });
+
+  // Le bouton Enregistrer reste VERROUILLÉ tant que la configuration n'a pas
+  // été testée avec succès. On ne peut donc pas enregistrer une configuration
+  // non vérifiée : c'est exactement ce qui évite de casser l'envoi de mails de
+  // toute l'instance avec une faute de frappe.
+  let smtpTeste = false;   // un test a-t-il réussi pour ce qui est SAISI ?
+
+  window.majBoutonSmtp = () => {
+    const b = $('btnSaveSmtp');
+    if (!b) return;
+    b.disabled = !smtpTeste;
+    b.title = smtpTeste ? '' : 'Testez d\'abord la configuration';
+    b.style.opacity = smtpTeste ? '' : '.45';
+  };
+
+  window.testerSmtp = async () => {
+    const c = corpsSmtp();
+    if (!c.hote || !c.utilisateur) { toast('Serveur et utilisateur requis', 'ko'); return; }
+    $('btnTestSmtp').disabled = true;
+    $('smtpResultat').style.display = '';
+    $('smtpJournal').textContent = 'Test en cours…';
+    try {
+      const d = await api('/api/smtp/tester', { method: 'POST', body: JSON.stringify(c) });
+      // On affiche CHAQUE etape : « ca ne marche pas » ne dit pas quoi corriger,
+      // alors que « identifiants refuses » est directement actionnable.
+      $('smtpJournal').textContent = (d.etapes || []).join('\n');
+      smtpTeste = !!d.ok;
+      majBoutonSmtp();
+      toast(d.ok ? 'Test réussi — vous pouvez enregistrer' : 'Test en échec : ' + (d.erreur || ''),
+            d.ok ? 'ok' : 'ko');
+    } catch (e) {
+      smtpTeste = false; majBoutonSmtp();
+      $('smtpJournal').textContent = 'Erreur : ' + e.message;
+      toast('Erreur : ' + e.message, 'ko');
+    } finally {
+      $('btnTestSmtp').disabled = false;
+    }
+  };
+
+  window.sauverSmtp = async () => {
+    const c = corpsSmtp();
+    if (!c.hote || !c.utilisateur) { toast('Serveur et utilisateur requis', 'ko'); return; }
+    if (!smtpTeste) { toast('Testez la configuration avant d\'enregistrer', 'ko'); return; }
+    $('btnSaveSmtp').disabled = true;
+    try {
+      const d = await api('/api/smtp', { method: 'POST', body: JSON.stringify(c) });
+      // Le serveur teste AVANT d'enregistrer : s'il refuse, rien n'a été écrit
+      // et on affiche le detail pour que l'utilisateur corrige.
+      if (d.ok === false) {
+        $('smtpResultat').style.display = '';
+        $('smtpJournal').textContent = (d.etapes || []).join('\n');
+        toast('NON enregistré : ' + (d.erreur || 'test en échec'), 'ko');
+        smtpTeste = false; majBoutonSmtp();
+        return;
+      }
+      toast(d.message || 'Configuration enregistrée');
+      $('s_pass').value = '';
+      smtpTeste = false; majBoutonSmtp();   // une nouvelle saisie devra être testée
+      await chargerSmtp();
+    } catch (e) {
+      toast('Erreur : ' + e.message, 'ko');
+    } finally {
+      $('btnSaveSmtp').disabled = !smtpTeste;
+    }
+  };
+
+  majBoutonSmtp();
 
   window.refresh = async () => {
     if (!key) { openKeyModal(); return; }
@@ -561,7 +802,8 @@
       const st = await api('/api/status');
       renderDashboard(st); renderInfra(st); renderCerts(st);
       await renderUsers();
-      await renderApps();
+      await renderAdmin();
+      await chargerSmtp();
       $('sideFoot').innerHTML = esc(st.domain || '') + '<br>MAJ ' + new Date().toLocaleTimeString('fr-FR');
     } catch (e) { if (e.message !== 'auth') toast('Erreur : ' + e.message, 'ko'); }
   };

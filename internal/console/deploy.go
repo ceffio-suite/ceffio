@@ -25,7 +25,7 @@ const (
 	// Bump OBLIGATOIRE à chaque changement de la page ou du code console :
 	// buildAndImportImage saute la reconstruction si le tag existe déjà dans
 	// containerd. Sans bump, l'ancienne image continue de servir.
-	imageTag = "1.6.0"
+	imageTag = "1.32.0"
 	imageRef = imageName + ":" + imageTag
 )
 
@@ -391,7 +391,50 @@ roleRef:
   name: ceffio-admin
   apiGroup: rbac.authorization.k8s.io
 ---
+# Droit d exécuter occ dans le pod Nextcloud, LIMITÉ à ce namespace.
+#
+# POURQUOI ICI ET PAS DANS LE ClusterRole : un ClusterRole s'applique à tous les
+# namespaces. On veut au contraire restreindre ce droit à ceffio-files et à lui
+# seul — la console peut exécuter dans Nextcloud, jamais ailleurs. C'est un
+# Role + RoleBinding locaux qui l'expriment.
+#
+# Ce droit sert aux reglages SYSTEME de Nextcloud (mail_smtp*, qui ne passent
+# pas par l'API OCS). La gestion des applications, elle, n en a pas besoin.
+#
+# Le droit sur les Secrets est limité à UN SEUL (resourceNames) : la console
+# relit le mot de passe SMTP pour tester une configuration sans le ressaisir,
+# mais ne peut PAS lire les autres Secrets du namespace (base de données,
+# clés de chiffrement…).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ceffio-console-occ
+  namespace: ceffio-files
+rules:
+- apiGroups: [""]
+  resources: [pods]
+  verbs: [get, list]
+- apiGroups: [""]
+  resources: [pods/exec]
+  verbs: [create]
+- apiGroups: [""]
+  resources: [secrets]
+  resourceNames: [nextcloud-smtp]
+  verbs: [get]
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ceffio-console-occ
+  namespace: ceffio-files
+subjects:
+- kind: ServiceAccount
+  name: ceffio-admin
+  namespace: ` + deployNS + `
+roleRef:
+  kind: Role
+  name: ceffio-console-occ
+  apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: apps/v1
 kind: Deployment

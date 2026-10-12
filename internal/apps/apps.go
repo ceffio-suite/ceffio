@@ -23,6 +23,7 @@ package apps
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -51,6 +52,10 @@ type App struct {
 	Licence   string    // licence constatée sur l'app store
 	Cat       categorie //
 	DependsOn string    // service requis, vide si aucun
+	// Avertissement signale un RISQUE, pas une dépendance : l'app peut
+	// s'activer, mais pas à la légère. Distinct de DependsOn, qui signifie
+	// « il manque un service, ne l'active pas ».
+	Avertissement string
 }
 
 // Catalogue : l'inventaire retenu, vérifié sur l'app store officiel pour
@@ -119,8 +124,12 @@ var Catalogue = []App{
 	},
 	{
 		ID: "encryption", Nom: "Chiffrement du stockage", Cat: serveur, Licence: "AGPL-3.0",
-		Role:      "chiffrement des fichiers au repos",
-		DependsOn: "irréversible : une fois activé, tout déchiffrer est très lourd",
+		Role: "chiffrement des fichiers au repos",
+		// ATTENTION : ce n'est PAS une dépendance manquante, c'est un RISQUE.
+		// On la laisse donc installable (DependsOn vide) mais on la signale
+		// séparément — la désactiver automatiquement serait excessif, l'activer
+		// en silence serait dangereux.
+		Avertissement: "irréversible : une fois activé, déchiffrer prend des jours",
 	},
 }
 
@@ -130,18 +139,30 @@ var Catalogue = []App{
 // `app:enable` réussit sans rien faire. On NE traite donc PAS l'échec de
 // l'installation comme une erreur — sinon un second passage signalerait une
 // panne là où tout va bien.
+//
+// CE QU'ON N'ACTIVE PAS, ET POURQUOI : une application dont DependsOn est
+// renseigné exige un service qui n'est PAS déployé par Ceffio (serveur
+// WebSocket du tableau blanc, ClamAV, modèles d'IA…). L'activer quand même
+// l'installe dans un état où elle s'interpose et casse ce qu'elle touche :
+// constaté avec files_antivirus, activée sans clamscan, qui faisait échouer
+// TOUTE connexion en erreur 500 (« No connection to anti virus »). On
+// l'installe donc sans l'activer : elle est présente, visible, et il suffit de
+// déployer sa dépendance puis de l'activer pour s'en servir.
 func Deploy(ctx context.Context) error {
 	fmt.Println("\nInstallation des applications Nextcloud (Phase 12)...")
 
-	// 1. État initial : savoir ce qui est déjà là évite de rejouer inutilement.
+	// 1. État initial : « présente » et « active » sont DEUX choses.
+	//    On lit les deux, car une app à dépendance externe doit rester
+	//    présente sans être active.
 	deja := appsInstallees(ctx)
+	actives0 := appsActives(ctx)
 
-	var actives, nouvelles []string
+	var actives, nouvelles, posees, enAttente []string
 	for _, a := range Catalogue {
 		if _, ok := deja[a.ID]; !ok {
 			nouvelles = append(nouvelles, a.Nom)
 		}
-		// 2. Installer si absent, puis activer dans tous les cas.
+		// 2. Installer si absent.
 		if err := occ(ctx, "app:install", a.ID); err != nil &&
 			!strings.Contains(err.Error(), "already installed") {
 			// Un échec réel : on le signale et on continue. Une app
@@ -149,6 +170,25 @@ func Deploy(ctx context.Context) error {
 			fmt.Printf("  ! %s : installation impossible (%v)\n", a.Nom, err)
 			continue
 		}
+
+		// 3. Dépendance externe non fournie : on pose SANS activer.
+		//    L'activer la ferait tourner sans son service et casserait
+		//    l'instance — c'est exactement le piège de files_antivirus.
+		if a.DependsOn != "" {
+			// Si elle avait été activée par une version précédente, on la
+			// désactive : le correctif doit s'appliquer aux instances
+			// existantes, pas seulement aux installations neuves.
+			if _, active := actives0[a.ID]; active {
+				if err := occ(ctx, "app:disable", a.ID); err == nil {
+					fmt.Printf("  ∙ %s : désactivée (dépendance absente : %s)\n",
+						a.Nom, a.DependsOn)
+				}
+			}
+			posees = append(posees, a.Nom)
+			enAttente = append(enAttente, fmt.Sprintf("%s (requiert %s)", a.Nom, a.DependsOn))
+			continue
+		}
+
 		if err := occ(ctx, "app:enable", a.ID); err != nil {
 			fmt.Printf("  ! %s : activation impossible (%v)\n", a.Nom, err)
 			continue
@@ -165,20 +205,15 @@ func Deploy(ctx context.Context) error {
 	fmt.Printf("  ✓ %d applications actives : %s\n",
 		len(actives), strings.Join(actives, ", "))
 
-	// 3. Signaler les apps qui exigent une dépendance non fournie ici. C'est
-	//    un point de transparence : sans lui, l'utilisateur croirait que tout
-	//    fonctionne alors que deux apps attendent un service.
-	var enAttente []string
-	for _, a := range Catalogue {
-		if a.Cat == serveur {
-			enAttente = append(enAttente, fmt.Sprintf("%s (requiert %s)", a.Nom, a.DependsOn))
-		}
-	}
-	if len(enAttente) > 0 {
-		fmt.Println("  ∙ fonctionnalité complète en attente :")
+	// 4. Signaler les apps posées mais laissées INACTIVES, avec ce qu'il
+	//    faudrait pour les activer. Transparence : sans ce message,
+	//    l'utilisateur les croirait disponibles.
+	if len(posees) > 0 {
+		fmt.Printf("  ∙ %d application(s) installée(s) mais laissée(s) inactive(s) :\n", len(posees))
 		for _, e := range enAttente {
 			fmt.Println("      " + e)
 		}
+		fmt.Println("      → déployez la dépendance, puis activez l'app dans Nextcloud")
 	}
 
 	// 4. Nettoyer le cache d'applications : sans ça, Nextcloud peut continuer
@@ -209,6 +244,34 @@ func appsInstallees(ctx context.Context) map[string]struct{} {
 		}
 	}
 	return connus
+}
+
+// appsActives rend l'ensemble des identifiants d'apps ACTIVES.
+//
+// POURQUOI SÉPARÉ DE appsInstallees : `app:list` contient deux sections,
+// « enabled » et « disabled ». Une app peut être PRÉSENTE sans être active —
+// c'est justement l'état dans lequel on veut laisser celles à dépendance
+// externe. Chercher l'identifiant dans toute la sortie ne dit donc pas si
+// l'app tourne : il faut lire la section « enabled ».
+func appsActives(ctx context.Context) map[string]struct{} {
+	out, err := occSortie(ctx, "app:list", "--output=json")
+	if err != nil {
+		return map[string]struct{}{}
+	}
+	// Section « enabled » uniquement. Si le JSON change de forme, on ne
+	// renvoie rien : mieux vaut ne rien désactiver par erreur que toucher à
+	// une app dont on a mal interprété l'état.
+	var liste struct {
+		Enabled map[string]any `json:"enabled"`
+	}
+	if err := json.Unmarshal([]byte(out), &liste); err != nil {
+		return map[string]struct{}{}
+	}
+	actives := map[string]struct{}{}
+	for id := range liste.Enabled {
+		actives[id] = struct{}{}
+	}
+	return actives
 }
 
 // occ exécute une commande occ dans le pod Nextcloud.
