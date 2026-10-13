@@ -47,8 +47,10 @@ type EtatAdmin struct {
 	ExisteKeycloak    bool   `json:"existe_keycloak"`
 	ExisteNextcloud   bool   `json:"existe_nextcloud"`
 	StalwartPresent   bool   `json:"stalwart_present"`
+	CoffrePresent     bool   `json:"coffre_present"`
 	UrlAdminNextcloud string `json:"url_admin_nextcloud"`
 	UrlAdminStalwart  string `json:"url_admin_stalwart,omitempty"`
+	UrlAdminCoffre    string `json:"url_admin_coffre,omitempty"`
 	Note              string `json:"note,omitempty"`
 }
 
@@ -108,6 +110,14 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		etat.UrlAdminStalwart = "https://mail." + s.Domain + "/admin"
 	} else {
 		etat.Note = "Stalwart n'est pas déployé : la rotation ne concerne que Keycloak et Nextcloud."
+	}
+
+	// Coffre de secrets : même principe — on y CONDUIT, on ne le réimplémente pas.
+	// Son interface sait montrer les versions d'un secret, ses métadonnées et son
+	// historique, ce qu'une page refaite ici ne saurait pas faire.
+	etat.CoffrePresent = s.coffreJoignable(r)
+	if etat.CoffrePresent {
+		etat.UrlAdminCoffre = "https://bao." + s.Domain + "/ui/"
 	}
 
 	writeJSON(w, 200, etat)
@@ -255,6 +265,31 @@ func (s *Server) stalwartJoignable(r *http.Request) bool {
 	}
 	defer rep.Body.Close()
 	return rep.StatusCode < 500
+}
+
+// coffreJoignable dit si le coffre de secrets répond.
+//
+// L'ADRESSE INTERROGÉE EST CELLE DE LA SANTÉ, et c'est le seul point du coffre
+// joignable sans jeton : il suffit à répondre à la question posée, « le service
+// est-il là ? ».
+//
+// ON ACCEPTE TOUT CODE DE RÉPONSE, y compris 503. Contrairement au serveur de
+// mail, où une erreur serveur veut dire « pas prêt », un coffre qui répond 503
+// est un coffre SCELLÉ — donc bien présent, et dont l'interface a quelque chose à
+// dire à qui s'y connecte. Ne retenir que les codes inférieurs à 500 ferait
+// disparaître le lien exactement quand on en a besoin.
+func (s *Server) coffreJoignable(r *http.Request) bool {
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet,
+		"https://bao."+s.Domain+"/v1/sys/health", nil)
+	if err != nil {
+		return false
+	}
+	rep, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer rep.Body.Close()
+	return true
 }
 
 // rotStalwart change le mot de passe de l'administrateur du mail.

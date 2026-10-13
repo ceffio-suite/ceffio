@@ -589,6 +589,28 @@
           le service sera en place.</div>
         </div>`;
       }
+      // Coffre de secrets : même principe que les deux ci-dessus — la console y
+      // CONDUIT. Son interface sait montrer les versions d'un secret, ses
+      // métadonnées et son historique ; une page reconstruite ici ne le saurait
+      // pas, et vieillirait à chaque évolution du coffre.
+      if (d.url_admin_coffre) {
+        liens += `
+        <div style="display:flex;align-items:center;gap:10px;padding-top:10px;border-top:1px solid var(--line)">
+          <div style="flex:1">
+            <div style="font-weight:600;font-size:13px">Coffre de secrets (OpenBao)</div>
+            <div class="muted" style="font-size:12px">Secrets de la suite, versions et
+            historique. Accès par le même compte, en SSO.</div>
+          </div>
+          <a class="btn-ghost" href="${esc(d.url_admin_coffre)}" target="_blank" rel="noopener">Ouvrir ↗</a>
+        </div>`;
+      } else {
+        liens += `
+        <div style="padding-top:10px;border-top:1px solid var(--line)">
+          <div style="font-weight:600;font-size:13px" class="muted">Coffre de secrets (OpenBao)</div>
+          <div class="muted" style="font-size:12px">Non déployé. Le lien apparaîtra dès que
+          le service sera en place.</div>
+        </div>`;
+      }
       liens += `</div>`;
       $('adminLiens').innerHTML = liens;
 

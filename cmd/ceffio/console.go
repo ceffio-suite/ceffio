@@ -17,6 +17,7 @@ func newConsoleCmd() *cobra.Command {
 	var domain string
 	var addr string
 	var apiKey string
+	var deployer bool
 	cmd := &cobra.Command{
 		Use:   "console",
 		Short: "Console d'administration Ceffio (dashboard + utilisateurs SSO)",
@@ -24,6 +25,16 @@ func newConsoleCmd() *cobra.Command {
 		RunE: func(c *cobra.Command, args []string) error {
 			if domain == "" {
 				return fmt.Errorf("--domain est requis")
+			}
+			// DÉPLOIEMENT DANS LE CLUSTER : on s'arrête ici.
+			//
+			// Générer une clé n'aurait pas de sens dans ce cas — celle de la
+			// console vit dans un Secret, et c'est le déploiement qui la crée ou
+			// la réutilise. En fabriquer une ici, puis l'afficher, donnerait une
+			// clé qui n'ouvre rien : la panne la plus déroutante, puisqu'elle
+			// ressemble à un jeton valide.
+			if deployer {
+				return console.Deploy(c.Context(), domain)
 			}
 			if apiKey == "" {
 				apiKey = os.Getenv("CEFFIO_KEY")
@@ -48,6 +59,8 @@ func newConsoleCmd() *cobra.Command {
 	cmd.Flags().StringVar(&domain, "domain", "", "Domaine public (ex. demo.local)")
 	cmd.Flags().StringVar(&addr, "addr", ":8088", "Adresse d'écoute")
 	cmd.Flags().StringVar(&apiKey, "key", "", "Jeton admin (sinon généré)")
+	cmd.Flags().BoolVar(&deployer, "deploy", false,
+		"Déployer la console dans le cluster (au lieu de la lancer sur cette machine)")
 	return cmd
 }
 
