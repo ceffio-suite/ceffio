@@ -12,6 +12,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"github.com/ceffio-suite/ceffio/internal/k8s"
+	"github.com/ceffio-suite/ceffio/internal/secrets"
+	"github.com/ceffio-suite/ceffio/internal/vault"
 	"os"
 	"strings"
 	"time"
@@ -43,6 +45,9 @@ func Deploy(ctx context.Context) error {
 	if err := ensureNextcloudDB(ctx); err != nil {
 		return err
 	}
+	if err := ensureServiceAccount(ctx); err != nil {
+		return err
+	}
 	if err := ensureAdminSecret(ctx); err != nil {
 		return err
 	}
@@ -57,8 +62,24 @@ func Deploy(ctx context.Context) error {
 	return nil
 }
 
+// ensureNextcloudDB garantit le rôle PostgreSQL DANS LE COFFRE, et nulle part ailleurs.
+//
+// Le mot de passe vient du coffre s'il y est déjà : une valeur vivante est REPRISE,
+// jamais refabriquée. Le régénérer laisserait Nextcloud avec un mot de passe que la
+// base refuse — la panne ne se verrait qu'au redémarrage suivant.
 func ensureNextcloudDB(ctx context.Context) error {
-	if secretExists(ctx, "nextcloud-db") {
+	coffre := secrets.DepuisEnvironnement()
+	entree := map[string]string{}
+	actuelle, err := secrets.LireEntreeCoffre(ctx, coffre, "nextcloud", "db")
+	switch {
+	case err == nil:
+		entree = actuelle
+	case secrets.EntreeAbsente(err):
+		// Première installation : on génère et on crée le rôle ci-dessous.
+	default:
+		return fmt.Errorf("coffre illisible pour nextcloud/db : %w", err)
+	}
+	if entree["password"] != "" {
 		return nil
 	}
 	fmt.Println("∙ création du rôle PostgreSQL dédié à Nextcloud")
@@ -72,29 +93,69 @@ func ensureNextcloudDB(ctx context.Context) error {
 	if err := psqlExec(ctx, sql); err != nil {
 		return err
 	}
-	return createSecret(ctx, "nextcloud-db", map[string]string{
-		"username": dbUser,
-		"password": pw,
-	})
+	entree["username"] = dbUser
+	entree["password"] = pw
+	return secrets.EcrireDansCoffre(ctx, coffre, "nextcloud", "db", entree)
 }
 
+// ensureAdminSecret garantit le compte d'administration DANS LE COFFRE.
 func ensureAdminSecret(ctx context.Context) error {
-	if secretExists(ctx, "nextcloud-admin") {
+	coffre := secrets.DepuisEnvironnement()
+	entree := map[string]string{"username": "admin"}
+	actuelle, err := secrets.LireEntreeCoffre(ctx, coffre, "nextcloud", "admin")
+	switch {
+	case err == nil:
+		for k, v := range actuelle {
+			entree[k] = v
+		}
+	case secrets.EntreeAbsente(err):
+	default:
+		return fmt.Errorf("coffre illisible pour nextcloud/admin : %w", err)
+	}
+	if entree["password"] != "" {
 		return nil
 	}
-	fmt.Println("∙ secret admin Nextcloud (généré)")
+	fmt.Println("∙ mot de passe admin Nextcloud généré (absent du coffre)")
 	pw, err := genSecret(16)
 	if err != nil {
 		return err
 	}
-	return createSecret(ctx, "nextcloud-admin", map[string]string{
-		"username": "admin",
-		"password": pw,
-	})
+	entree["password"] = pw
+	return secrets.EcrireDansCoffre(ctx, coffre, "nextcloud", "admin", entree)
+}
+
+// ensureServiceAccount pose l'identité que le rôle du coffre désigne. Sans elle, le
+// pod ne démarre pas : la référence ne résout pas.
+//
+// ELLE EST POSÉE SÉPARÉMENT, et pas ajoutée au grand manifeste : chaque document
+// ajouté à une chaîne de format décale tous les arguments suivants, et c'est
+// exactement l'erreur qui a déjà coûté un déploiement silencieusement cassé.
+func ensureServiceAccount(ctx context.Context) error {
+	return apply(ctx, fmt.Sprintf(`apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nextcloud
+  namespace: %s
+`, ns))
 }
 
 func applyWorkload(ctx context.Context) error {
 	fmt.Println("∙ Nextcloud " + nextcloudImage)
+	// TROIS SOURCES POUR UN SEUL FICHIER : les identifiants de base, le compte
+	// d'administration, et le relais d'expédition. Le conteneur n'a pas à savoir
+	// d'où vient chaque valeur ; il charge un fichier, l'injecteur le compose.
+	annotations := vault.AnnotationsAgent(8, "nextcloud", "kv/data/ceffio/nextcloud/db",
+		vault.GabaritMulti([]vault.Source{
+			{Chemin: "kv/data/ceffio/nextcloud/db", Paires: [][2]string{
+				{"POSTGRES_USER", vault.ChampCoffre("username")},
+				{"POSTGRES_PASSWORD", vault.ChampCoffre("password")},
+			}},
+			{Chemin: "kv/data/ceffio/nextcloud/admin", Paires: [][2]string{
+				{"NEXTCLOUD_ADMIN_USER", vault.ChampCoffre("username")},
+				{"NEXTCLOUD_ADMIN_PASSWORD", vault.ChampCoffre("password")},
+			}},
+		}))
+
 	manifest := fmt.Sprintf(`apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -124,39 +185,33 @@ spec:
     metadata:
       labels:
         app: nextcloud
+      # LES SECRETS SONT POSÉS PAR L'INJECTEUR D'OPENBAO (vault.AnnotationsAgent).
+      annotations:
+%s
     spec:
+      # C'EST CE ServiceAccount QUE LE RÔLE DU COFFRE DÉSIGNE.
+      serviceAccountName: nextcloud
       containers:
         - name: nextcloud
           image: %s
+          # LE SCRIPT D'ENTRÉE D'ORIGINE EST PRÉSERVÉ : c'est lui qui prépare
+          # l'instance. On charge seulement le fichier rendu avant de le lancer.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -a
+              . /secrets/env
+              set +a
+              exec /entrypoint.sh apache2-foreground
           env:
             - name: POSTGRES_HOST
               value: %s
             - name: POSTGRES_DB
               value: %s
-            - name: POSTGRES_USER
-              valueFrom:
-                secretKeyRef:
-                  name: nextcloud-db
-                  key: username
-            - name: POSTGRES_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: nextcloud-db
-                  key: password
             - name: REDIS_HOST
               value: %s
             - name: REDIS_HOST_PORT
               value: "%s"
-            - name: NEXTCLOUD_ADMIN_USER
-              valueFrom:
-                secretKeyRef:
-                  name: nextcloud-admin
-                  key: username
-            - name: NEXTCLOUD_ADMIN_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: nextcloud-admin
-                  key: password
             - name: NEXTCLOUD_TRUSTED_DOMAINS
               value: "cloud.demo.local localhost 10.42.0.0/24"
           ports:
@@ -188,7 +243,7 @@ spec:
     - name: http
       port: 80
       targetPort: 80
-`, ns, ns, nextcloudImage, dbService, dbName, redisService, redisPort, ns)
+`, ns, ns, annotations, nextcloudImage, dbService, dbName, redisService, redisPort, ns)
 	return apply(ctx, manifest)
 }
 

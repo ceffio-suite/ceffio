@@ -71,6 +71,32 @@ func ChampCoffre(champ string) string {
 	return "{{ .Data.data." + champ + " }}"
 }
 
+// Source désigne une entrée du coffre et les variables à en tirer.
+type Source struct {
+	Chemin string
+	Paires [][2]string
+}
+
+// GabaritMulti compose un gabarit qui lit PLUSIEURS entrées du coffre et écrit un
+// seul fichier.
+//
+// POURQUOI PLUSIEURS ENTRÉES DANS UN MÊME FICHIER : un service tire souvent ses
+// valeurs de comptes distincts — Nextcloud prend ses identifiants de base dans
+// « nextcloud/db », son compte d'administration dans « nextcloud/admin », et son
+// relais d'expédition ailleurs encore. Le conteneur n'a pas à connaître cette
+// répartition : il charge UN fichier, et l'injecteur le compose.
+func GabaritMulti(sources []Source) string {
+	var b strings.Builder
+	for _, s := range sources {
+		b.WriteString("{{ with secret \"" + s.Chemin + "\" }}\n")
+		for _, p := range s.Paires {
+			b.WriteString("export " + p[0] + "='" + p[1] + "'\n")
+		}
+		b.WriteString("{{ end }}\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 // GabaritExports rend un gabarit qui écrit des affectations shell, chargeables par
 // « set -a; . /secrets/env; set +a » — la façon documentée de servir une
 // application qui n'attend que des variables d'environnement.
@@ -79,11 +105,5 @@ func ChampCoffre(champ string) string {
 // un ChampCoffre, mais elle peut être composée — « admin: » suivi du mot de passe,
 // par exemple, car Stalwart attend « utilisateur:motdepasse » dans UNE SEULE chaîne.
 func GabaritExports(chemin string, paires ...[2]string) string {
-	var b strings.Builder
-	b.WriteString("{{- with secret \"" + chemin + "\" -}}\n")
-	for _, p := range paires {
-		b.WriteString("export " + p[0] + "='" + p[1] + "'\n")
-	}
-	b.WriteString("{{- end -}}")
-	return b.String()
+	return GabaritMulti([]Source{{Chemin: chemin, Paires: paires}})
 }

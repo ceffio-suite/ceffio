@@ -855,6 +855,12 @@ path "sys/internal/ui/mounts/*" { capabilities = ["read"] }`},
 		{"ceffio-talk", `path "kv/data/ceffio/talk/*" { capabilities = ["read","list"] }
 path "kv/metadata/ceffio/talk/*" { capabilities = ["read","list"] }
 path "sys/internal/ui/mounts/*" { capabilities = ["read"] }`},
+		{"ceffio-nextcloud", `path "kv/data/ceffio/nextcloud/*" { capabilities = ["read","list"] }
+path "kv/metadata/ceffio/nextcloud/*" { capabilities = ["read","list"] }
+path "sys/internal/ui/mounts/*" { capabilities = ["read"] }`},
+		{"ceffio-keycloak", `path "kv/data/ceffio/keycloak/*" { capabilities = ["read","list"] }
+path "kv/metadata/ceffio/keycloak/*" { capabilities = ["read","list"] }
+path "sys/internal/ui/mounts/*" { capabilities = ["read"] }`},
 		// ADMINISTRATION : le compte humain unique, celui que l'annuaire désigne
 		// comme administrateur. Il a TOUS les droits sur le coffre — c'est le
 		// sens d'un compte d'administration, et c'est ce qui rend la rotation
@@ -1036,6 +1042,8 @@ func configurerAuthKubernetes(ctx context.Context, cli *k8sapi.Client) error {
 		{nom: "stalwart", sa: "stalwart", ns: "ceffio-mail", politique: "ceffio-stalwart"},
 		{nom: "onlyoffice", sa: "onlyoffice", ns: "ceffio-office", politique: "ceffio-onlyoffice"},
 		{nom: "talk", sa: "talk", ns: "ceffio-video", politique: "ceffio-talk"},
+		{nom: "nextcloud", sa: "nextcloud", ns: "ceffio-files", politique: "ceffio-nextcloud"},
+		{nom: "keycloak", sa: "keycloak", ns: "ceffio-identity", politique: "ceffio-keycloak"},
 	}
 	for _, r := range roles {
 		if _, err := baoAvecJeton(ctx, cli, adm,

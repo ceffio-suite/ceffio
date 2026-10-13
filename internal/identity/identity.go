@@ -12,6 +12,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"github.com/ceffio-suite/ceffio/internal/k8s"
+	"github.com/ceffio-suite/ceffio/internal/secrets"
+	"github.com/ceffio-suite/ceffio/internal/vault"
 	"os"
 	"strings"
 	"time"
@@ -40,6 +42,9 @@ func Deploy(ctx context.Context) error {
 	if err := ensureKeycloakDB(ctx); err != nil {
 		return err
 	}
+	if err := ensureServiceAccount(ctx); err != nil {
+		return err
+	}
 	if err := ensureAdminSecret(ctx); err != nil {
 		return err
 	}
@@ -60,8 +65,22 @@ func Deploy(ctx context.Context) error {
 	return nil
 }
 
+// ensureKeycloakDB garantit le rôle PostgreSQL DANS LE COFFRE, et nulle part ailleurs.
+//
+// Le mot de passe est REPRIS s'il existe : le régénérer laisserait Keycloak avec un
+// mot de passe que la base refuse, et la panne n'apparaîtrait qu'au redémarrage.
 func ensureKeycloakDB(ctx context.Context) error {
-	if secretExists(ctx, "keycloak-db") {
+	coffre := secrets.DepuisEnvironnement()
+	entree := map[string]string{}
+	actuelle, err := secrets.LireEntreeCoffre(ctx, coffre, "keycloak", "db")
+	switch {
+	case err == nil:
+		entree = actuelle
+	case secrets.EntreeAbsente(err):
+	default:
+		return fmt.Errorf("coffre illisible pour keycloak/db : %w", err)
+	}
+	if entree["password"] != "" {
 		return nil
 	}
 	fmt.Println("∙ création du rôle PostgreSQL dédié à Keycloak")
@@ -76,29 +95,64 @@ func ensureKeycloakDB(ctx context.Context) error {
 	if err := psqlExec(ctx, sql); err != nil {
 		return err
 	}
-	return createSecret(ctx, "keycloak-db", map[string]string{
-		"username": dbUser,
-		"password": pw,
-	})
+	entree["username"] = dbUser
+	entree["password"] = pw
+	return secrets.EcrireDansCoffre(ctx, coffre, "keycloak", "db", entree)
 }
 
+// ensureAdminSecret garantit le compte d'administration DANS LE COFFRE.
 func ensureAdminSecret(ctx context.Context) error {
-	if secretExists(ctx, "keycloak-admin") {
+	coffre := secrets.DepuisEnvironnement()
+	entree := map[string]string{"username": "admin"}
+	actuelle, err := secrets.LireEntreeCoffre(ctx, coffre, "keycloak", "admin")
+	switch {
+	case err == nil:
+		for k, v := range actuelle {
+			entree[k] = v
+		}
+	case secrets.EntreeAbsente(err):
+	default:
+		return fmt.Errorf("coffre illisible pour keycloak/admin : %w", err)
+	}
+	if entree["password"] != "" {
 		return nil
 	}
-	fmt.Println("∙ secret admin Keycloak (généré)")
+	fmt.Println("∙ mot de passe admin Keycloak généré (absent du coffre)")
 	pw, err := genSecret(16)
 	if err != nil {
 		return err
 	}
-	return createSecret(ctx, "keycloak-admin", map[string]string{
-		"username": "admin",
-		"password": pw,
-	})
+	entree["password"] = pw
+	return secrets.EcrireDansCoffre(ctx, coffre, "keycloak", "admin", entree)
+}
+
+// ensureServiceAccount pose l'identité que le rôle du coffre désigne (voir la note
+// équivalente côté Nextcloud : posée séparément pour ne pas décaler les arguments
+// d'un manifeste déjà numéroté).
+func ensureServiceAccount(ctx context.Context) error {
+	return apply(ctx, fmt.Sprintf(`apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: keycloak
+  namespace: %s
+`, ns))
 }
 
 func applyWorkload(ctx context.Context) error {
 	fmt.Println("∙ Keycloak " + keycloakImage)
+	// DEUX SOURCES POUR UN SEUL FICHIER : la base et le compte d'administration.
+	annotations := vault.AnnotationsAgent(8, "keycloak", "kv/data/ceffio/keycloak/db",
+		vault.GabaritMulti([]vault.Source{
+			{Chemin: "kv/data/ceffio/keycloak/db", Paires: [][2]string{
+				{"KC_DB_USERNAME", vault.ChampCoffre("username")},
+				{"KC_DB_PASSWORD", vault.ChampCoffre("password")},
+			}},
+			{Chemin: "kv/data/ceffio/keycloak/admin", Paires: [][2]string{
+				{"KC_BOOTSTRAP_ADMIN_USERNAME", vault.ChampCoffre("username")},
+				{"KC_BOOTSTRAP_ADMIN_PASSWORD", vault.ChampCoffre("password")},
+			}},
+		}))
+
 	manifest := fmt.Sprintf(`apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -116,36 +170,29 @@ spec:
     metadata:
       labels:
         app: keycloak
+      # LES SECRETS SONT POSÉS PAR L'INJECTEUR D'OPENBAO (vault.AnnotationsAgent).
+      annotations:
+%s
     spec:
+      # C'EST CE ServiceAccount QUE LE RÔLE DU COFFRE DÉSIGNE.
+      serviceAccountName: keycloak
       containers:
         - name: keycloak
           image: %s
-          args: ["start-dev"]
+          # L'ENTRÉE DE L'IMAGE EST kc.sh : on la rappelle explicitement, avec
+          # les mêmes arguments qu'avant (« start-dev »).
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -a
+              . /secrets/env
+              set +a
+              exec /opt/keycloak/bin/kc.sh start-dev
           env:
             - name: KC_DB
               value: postgres
             - name: KC_DB_URL
               value: jdbc:postgresql://%s:5432/%s
-            - name: KC_DB_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: keycloak-db
-                  key: username
-            - name: KC_DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: keycloak-db
-                  key: password
-            - name: KC_BOOTSTRAP_ADMIN_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: keycloak-admin
-                  key: username
-            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: keycloak-admin
-                  key: password
             - name: KC_HEALTH_ENABLED
               value: "true"
             - name: KC_METRICS_ENABLED
@@ -195,7 +242,7 @@ spec:
     - name: http
       port: 8080
       targetPort: 8080
-`, ns, keycloakImage, dbService, dbName, ns)
+`, ns, annotations, keycloakImage, dbService, dbName, ns)
 	return apply(ctx, manifest)
 }
 
