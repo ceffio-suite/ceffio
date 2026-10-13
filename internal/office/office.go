@@ -7,10 +7,11 @@ package office
 import (
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"github.com/ceffio-suite/ceffio/internal/k8s"
+	"github.com/ceffio-suite/ceffio/internal/secrets"
+	"github.com/ceffio-suite/ceffio/internal/version"
 	"os"
 	"strings"
 	"time"
@@ -52,14 +53,23 @@ func Deploy(ctx context.Context) error {
 }
 
 func ensureJWTSecret(ctx context.Context) error {
-	if secretExists(ctx, "onlyoffice-secret") {
-		return nil
+	// LE COFFRE D'ABORD, le Secret Kubernetes en repli, la génération en dernier.
+	// Même ordre que pour Stalwart, et pour la même raison : une valeur vivante
+	// est REPRISE, jamais refabriquée. Un jeton régénéré casserait la signature
+	// des deux côtés à la fois, et le symptôme serait « Invalid token » — un
+	// message qui ne dit pas lequel des deux a changé.
+	coffre := secrets.DepuisEnvironnement()
+	jwt, err := secrets.LireOuSecret(ctx, coffre, "onlyoffice", "jwt", "jwt",
+		"ceffio-office/onlyoffice-secret", "jwt")
+	if err != nil || jwt == "" {
+		jwt, err = genSecret(24)
+		if err != nil {
+			return err
+		}
+		fmt.Println("∙ jeton JWT ONLYOFFICE généré (absent du coffre et de Kubernetes)")
 	}
-	fmt.Println("∙ secret JWT ONLYOFFICE (généré)")
-	jwt, err := genSecret(24)
-	if err != nil {
-		return err
-	}
+	// Le Secret Kubernetes est TOUJOURS posé : c'est à la fois le repli du pod et
+	// ce que lit le connecteur Nextcloud si le coffre venait à manquer.
 	return createSecret(ctx, "onlyoffice-secret", map[string]string{"jwt": jwt})
 }
 
@@ -76,6 +86,12 @@ spec:
   resources:
     requests:
       storage: 20Gi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: onlyoffice
+  namespace: %s
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -95,21 +111,72 @@ spec:
       labels:
         app: onlyoffice
     spec:
-      containers:
-        - name: onlyoffice
+      # L'IDENTITÉ QUE LE COFFRE VALIDE, et le groupe partagé qui rend le volume
+      # lisible par les deux conteneurs : ils ne tournent pas sous le même
+      # utilisateur, et le fichier écrit par l'un serait sinon illisible pour
+      # l'autre — « Permission denied », en boucle.
+      serviceAccountName: onlyoffice
+      securityContext:
+        fsGroup: 1000
+      # L'INIT-CONTAINER VA CHERCHER LE JETON À L'EXÉCUTION.
+      #
+      # Il présente le jeton de ServiceAccount du pod au coffre, qui le fait
+      # valider par l'API du cluster et rend un jeton de courte durée portant la
+      # politique « ceffio-onlyoffice ». Aucun jeton de signature n'est donc rangé
+      # dans le cluster pour ce pod, et une rotation dans le coffre prend effet au
+      # redémarrage suivant — sans redéployer la suite.
+      initContainers:
+        - name: secret-du-coffre
           image: %s
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              umask 027
+              if [ -n "$COFFRE_ADDR" ]; then
+                export BAO_ADDR="$COFFRE_ADDR"
+                JWT=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+                if bao login -method=kubernetes role=onlyoffice jwt=$JWT >/dev/null 2>&1; then
+                  J=$(bao kv get -field=jwt kv/ceffio/onlyoffice/jwt)
+                  printf 'JWT_ENABLED=true\n' > /secrets/env
+                  printf 'JWT_SECRET=%%s\n' "$J" >> /secrets/env
+                  echo "jeton lu dans le coffre (aucune valeur affichee)"
+                  exit 0
+                fi
+                echo "coffre injoignable : repli sur le Secret Kubernetes"
+              fi
+              printf 'JWT_ENABLED=true\n' > /secrets/env
+              printf 'JWT_SECRET=%%s\n' "$JWT_SECRET_REPLI" >> /secrets/env
           env:
-            - name: JWT_ENABLED
-              value: "true"
-            - name: JWT_SECRET
+            - name: COFFRE_ADDR
+              value: "http://openbao.ceffio-vault.svc:8200"
+            - name: JWT_SECRET_REPLI
               valueFrom:
                 secretKeyRef:
                   name: onlyoffice-secret
                   key: jwt
+          volumeMounts:
+            - name: secrets
+              mountPath: /secrets
+      containers:
+        - name: onlyoffice
+          image: %s
+          # LA COMMANDE CHARGE LE FICHIER AVANT DE LANCER LE SERVEUR.
+          #
+          # Un init-container ne peut pas poser de variables dans un autre
+          # conteneur : ils ne partagent que des volumes. Le script d'entrée
+          # d'origine est PRÉSERVÉ — c'est lui qui prépare le serveur, et le
+          # remplacer casserait tout.
+          command: ["/bin/bash", "-c"]
+          args:
+            - "set -a; . /secrets/env; exec /bin/bash /app/ds/run-document-server.sh"
           ports:
             - name: http
               containerPort: 80
           volumeMounts:
+            - name: secrets
+              mountPath: /secrets
+              readOnly: true
             - name: data
               mountPath: /var/www/onlyoffice/Data
           readinessProbe:
@@ -122,6 +189,10 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: onlyoffice-data
+        # Le canal entre l'init-container et le serveur : le seul qu'ils
+        # partagent. Vide au départ, rempli à chaque démarrage — jamais périmé.
+        - name: secrets
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
@@ -135,7 +206,7 @@ spec:
     - name: http
       port: 80
       targetPort: 80
-`, ns, ns, officeImage, ns)
+`, ns, ns, ns, version.ImageDe("openbao"), officeImage, ns)
 	return apply(ctx, manifest)
 }
 
@@ -235,22 +306,21 @@ func runOccOutput(ctx context.Context, args ...string) (string, error) {
 	return string(out), err
 }
 
+// readSecretJWT rend le jeton de signature, DU COFFRE EN PRIORITÉ.
+//
+// C'EST LE POINT DE LA DOUBLE ÉCRITURE, et donc le cœur du sujet ici : le même
+// jeton alimente ONLYOFFICE ET la configuration du connecteur dans Nextcloud. On
+// le lit au même endroit pour les deux — sinon une rotation n'en toucherait
+// qu'un, la signature cesserait de correspondre, et le symptôme serait une erreur
+// d'authentification sur les documents plutôt qu'une rotation à moitié faite.
 func readSecretJWT(ctx context.Context) (string, error) {
-	out, err := k8s.Command(ctx, "kubectl", "get", "secret", "onlyoffice-secret", "-n", ns,
-		"-o", "jsonpath={.data.jwt}").Output()
-	if err != nil {
-		return "", fmt.Errorf("lecture du secret jwt: %w", err)
+	coffre := secrets.DepuisEnvironnement()
+	jwt, err := secrets.LireOuSecret(ctx, coffre, "onlyoffice", "jwt", "jwt",
+		"ceffio-office/onlyoffice-secret", "jwt")
+	if err != nil || jwt == "" {
+		return "", fmt.Errorf("jeton JWT introuvable : ni dans le coffre, ni dans le Secret onlyoffice-secret")
 	}
-	b, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(out)))
-	if err != nil {
-		return "", fmt.Errorf("décodage base64 jwt: %w", err)
-	}
-	return string(b), nil
-}
-
-func secretExists(ctx context.Context, name string) bool {
-	out, err := k8s.Command(ctx, "kubectl", "get", "secret", name, "-n", ns).CombinedOutput()
-	return err == nil && strings.Contains(string(out), name)
+	return jwt, nil
 }
 
 func createSecret(ctx context.Context, name string, kv map[string]string) error {

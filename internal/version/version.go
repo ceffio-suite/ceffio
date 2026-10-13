@@ -118,6 +118,23 @@ func ParNom(nom string) (Composant, bool) {
 	return Composant{}, false
 }
 
+// ImageDe rend la référence d'image d'un composant du registre.
+//
+// POURQUOI CE POINT D'ENTRÉE UNIQUE : plusieurs modules ont besoin de l'image du
+// COFFRE — pas pour le déployer, mais pour y exécuter un client dont la version
+// doit correspondre EXACTEMENT à celle du serveur. Deux références écrites à deux
+// endroits divergent à la première mise à jour, et la divergence se manifeste par
+// un échec d'authentification, pas par un message qui dit quoi corriger.
+//
+// Rend une chaîne vide si le composant est inconnu : l'appelant décide quoi en
+// faire, plutôt que de recevoir une référence inventée qui échouerait plus tard.
+func ImageDe(nom string) string {
+	if c, ok := ParNom(nom); ok {
+		return c.Image
+	}
+	return ""
+}
+
 // Noms renvoie les noms de composants, triés (pour l'affichage et les tests).
 func Noms() []string {
 	out := make([]string, 0, len(Registry))
