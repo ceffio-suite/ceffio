@@ -818,6 +818,20 @@ path "sys/internal/ui/mounts/*" { capabilities = ["read"] }`},
 		{"ceffio-lecture", `path "kv/data/ceffio/*" { capabilities = ["read","list"] }
 path "kv/metadata/ceffio/*" { capabilities = ["read","list"] }
 path "sys/internal/ui/mounts/*" { capabilities = ["read"] }`},
+		// ADMINISTRATION : le compte humain unique, celui que l'annuaire désigne
+		// comme administrateur. Il a TOUS les droits sur le coffre — c'est le
+		// sens d'un compte d'administration, et c'est ce qui rend la rotation
+		// centralisée possible depuis un seul endroit.
+		//
+		// LA SEULE CHOSE QU'IL NE PEUT PAS FAIRE : obtenir le jeton racine. Il
+		// ne s'obtient qu'avec les clés de récupération, et c'est délibéré — un
+		// jeton qui ne peut rien refuser n'a pas à être accessible depuis un
+		// navigateur.
+		//
+		// LES SERVICES N'ONT PAS CETTE POLITIQUE, et c'est tout l'intérêt : un
+		// service compromis ne peut ni monter de moteur, ni élargir sa propre
+		// politique, ni fabriquer de jeton.
+		{"ceffio-administration", `path "*" { capabilities = ["create","read","update","delete","list","sudo"] }`},
 		// INSTALLATION : ce qu'exige la mise en place et les passages suivants.
 		// Le KV y figure aussi, pour que le diagnostic de bout en bout tourne
 		// avec ce jeton sans dépendre d'un autre.
@@ -1114,7 +1128,7 @@ func configurerOIDC(ctx context.Context, cli *k8sapi.Client, domaine string) err
 		"role_type":             "oidc",
 		"user_claim":            "email",
 		"bound_claims":          map[string]any{"email": []string{"adminceffio@ceffio.local"}},
-		"policies":              "ceffio-console",
+		"policies":              "ceffio-administration",
 		"allowed_redirect_uris": retours,
 		"oidc_scopes":           []string{"email", "profile"},
 		"ttl":                   "2h",
