@@ -464,6 +464,22 @@ func (c *Client) NodePortDuService(ctx context.Context, ns, nom, port string) (i
 	return 0, nil
 }
 
+// WebhookEstPret dit si un webhook mutateur a publié sa graine de confiance.
+//
+// C'EST LE SEUL SIGNAL QUI PROUVE QUE L'INJECTION FONCTIONNERA : l'injecteur écrit
+// ce caBundle lui-même, une fois son certificat généré. Un pod « Ready » ne le
+// prouve pas — il peut être prêt avant d'avoir patché son webhook.
+func (c *Client) WebhookEstPret(ctx context.Context, nom string) (bool, error) {
+	wh, err := c.cs.AdmissionregistrationV1().MutatingWebhookConfigurations().Get(ctx, nom, metav1.GetOptions{})
+	if err != nil {
+		return false, err
+	}
+	if len(wh.Webhooks) == 0 {
+		return false, nil
+	}
+	return len(wh.Webhooks[0].ClientConfig.CABundle) > 0, nil
+}
+
 // AttendrePodInstalle attend que le pod soit affecté à un nœud.
 //
 // Le message dit CE QU'ON A VU : un contrôle muet qui se trompe fait perdre des

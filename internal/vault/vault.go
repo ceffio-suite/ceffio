@@ -161,6 +161,16 @@ func Deploy(ctx context.Context, domaine string) *Resultat {
 		fmt.Printf("  ∙ coffre non déployé (charge de travail) : %v\n", err)
 		return &Resultat{}
 	}
+	// L'AGENT-INJECTEUR EST POSÉ ICI, ET SON ÉCHEC EST BLOQUANT.
+	//
+	// Les charges migrées ne contiennent plus l'init-container qui allait chercher
+	// les secrets : elles portent des annotations que seul l'injecteur sait lire.
+	// Continuer sans lui produirait des pods SANS secrets et sans erreur
+	// d'admission — un silence, pas une panne visible.
+	if err := poserInjecteur(ctx, cli); err != nil {
+		fmt.Printf("  ∙ coffre non déployé (agent-injecteur) : %v\n", err)
+		return &Resultat{}
+	}
 
 	// Le pod doit être INSTALLÉ SUR UN NŒUD avant qu'une exécution soit possible.
 	// Le contrôle est typé : son échec ne peut plus ressembler à un résultat.
