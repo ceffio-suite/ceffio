@@ -34,7 +34,22 @@ import (
 
 	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
+	"github.com/ceffio-suite/ceffio/internal/version"
 )
+
+// imageCoffre rend l'image du coffre telle que déclarée au registre des versions.
+//
+// POURQUOI ON LA LIT AU REGISTRE PLUTÔT QUE DE L'ÉCRIRE ICI : l'init-container se
+// sert du client `bao`, et ce client doit être EXACTEMENT celui du coffre
+// déployé. Deux références écrites à deux endroits divergent à la première mise à
+// jour — et la divergence se manifeste par un échec d'authentification, pas par
+// un message qui dit quoi corriger. Le registre, lui, est vérifié par un test.
+func imageCoffre() string {
+	if c, ok := version.ParNom("openbao"); ok {
+		return c.Image
+	}
+	return "docker.io/openbao/openbao:2.7.1"
+}
 
 // Version réelle constatée sur Docker Hub (pas inventée).
 const (
@@ -182,6 +197,12 @@ data:
   config.json: |
     {"@type":"RocksDb","path":"/var/lib/stalwart"}
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: stalwart
+  namespace: %[1]s
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -195,26 +216,89 @@ spec:
   template:
     metadata: {labels: {app: stalwart}}
     spec:
+      # LE POD PORTE SA PROPRE IDENTITÉ : c'est elle que le coffre valide pour
+      # lui rendre ses secrets. Sans ce ServiceAccount, l'init-container n'a rien
+      # à présenter, et le rôle côté coffre ne correspond à personne.
+      serviceAccountName: stalwart
+      # LE GROUPE PARTAGÉ EST INDISPENSABLE : l'init-container et Stalwart ne
+      # tournent pas sous le même utilisateur. fsGroup fait appartenir le volume
+      # partagé à un groupe commun, et Kubernetes ajoute ce groupe à TOUS les
+      # conteneurs du pod — sans quoi le fichier écrit par l'un est illisible
+      # pour l'autre, et le pod boucle sur « Permission denied ».
+      securityContext:
+        fsGroup: 1000
+      # L'INIT-CONTAINER VA CHERCHER LES SECRETS À L'EXÉCUTION.
+      #
+      # Il présente le jeton de ServiceAccount DU POD au coffre, qui le fait
+      # valider par l'API du cluster, et rend un jeton de courte durée portant la
+      # politique du rôle. Conséquence : AUCUN mot de passe de Stalwart n'est
+      # rangé dans le cluster pour ce pod, et une rotation dans le coffre prend
+      # effet au redémarrage suivant — sans redéployer la suite.
+      #
+      # LE REPLI EXISTE, ET IL S'ANNONCE : si le coffre ne répond pas, on repart
+      # des valeurs du Secret Kubernetes. Une installation sans OpenBao doit
+      # continuer de fonctionner — mais un repli muet donnerait l'illusion que
+      # les secrets viennent du coffre, ce qui est la panne la plus trompeuse.
+      initContainers:
+      - name: secrets-du-coffre
+        image: %[4]s
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          set -e
+          # 027 ET NON 077 : le fichier doit être lisible PAR LE GROUPE, puisque
+          # Stalwart ne tourne pas sous le même utilisateur que cet
+          # init-container. En 077, il serait lisible de lui seul — et le
+          # conteneur principal bouclerait sur « Permission denied ».
+          umask 027
+          if [ -n "$COFFRE_ADDR" ]; then
+            export BAO_ADDR="$COFFRE_ADDR"
+            JWT=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+            if bao login -method=kubernetes role=stalwart jwt=$JWT >/dev/null 2>&1; then
+              P=$(bao kv get -field=password kv/ceffio/stalwart/admin)
+              S=$(bao kv get -field=storage  kv/ceffio/stalwart/admin)
+              printf 'STALWART_ADMIN_PASSWORD=%%s\n' "$P" > /secrets/env
+              printf 'STALWART_RECOVERY_ADMIN=admin:%%s\n' "$P" >> /secrets/env
+              printf 'STALWART_ENCRYPTION_KEY=%%s\n' "$S" >> /secrets/env
+              echo "secrets lus dans le coffre (aucune valeur affichee)"
+              exit 0
+            fi
+            echo "coffre injoignable : repli sur le Secret Kubernetes"
+          fi
+          printf 'STALWART_ADMIN_PASSWORD=%%s\n' "$STALWART_ADMIN_PASSWORD_REPLI" > /secrets/env
+          printf 'STALWART_RECOVERY_ADMIN=admin:%%s\n' "$STALWART_ADMIN_PASSWORD_REPLI" >> /secrets/env
+          printf 'STALWART_ENCRYPTION_KEY=%%s\n' "$STALWART_ENCRYPTION_KEY_REPLI" >> /secrets/env
+        env:
+        - {name: COFFRE_ADDR, value: "http://openbao.ceffio-vault.svc:8200"}
+        - {name: STALWART_ADMIN_PASSWORD_REPLI, valueFrom: {secretKeyRef: {name: stalwart-admin, key: password}}}
+        - {name: STALWART_ENCRYPTION_KEY_REPLI, valueFrom: {secretKeyRef: {name: stalwart-admin, key: storage}}}
+        volumeMounts:
+        - {name: secrets, mountPath: /secrets}
       containers:
       - name: stalwart
         image: %[3]s
-        args: ["--config", "/etc/stalwart/config.json"]
+        # LA COMMANDE CHARGE LE FICHIER AVANT DE LANCER STALWART.
+        #
+        # POURQUOI UN FICHIER, ET PAS DES VARIABLES : un init-container ne peut
+        # pas poser de variables dans un autre conteneur — il ne partage que des
+        # volumes. Le fichier est le seul canal possible, et « set -a » exporte
+        # tout ce qu'il contient.
+        #
+        # LE FORMAT DE STALWART EST PRÉSERVÉ : STALWART_RECOVERY_ADMIN attend
+        # « utilisateur:motdepasse » dans UNE SEULE valeur. Deux variables
+        # séparées ne créent AUCUN compte : l'API répond 401 et rien ne
+        # l'explique. Vérifié dans UPGRADING/v0_16.md.
+        command: ["/bin/sh", "-c"]
+        args:
+        - "set -a; . /secrets/env; exec stalwart --config /etc/stalwart/config.json"
         ports:
         - {name: smtp,     containerPort: 25}
         - {name: submission, containerPort: 587}
         - {name: imap,     containerPort: 143}
         - {name: imaps,    containerPort: 993}
         - {name: http,     containerPort: 8080}
-        env:
-        # FORMAT EXACT : STALWART_RECOVERY_ADMIN attend « utilisateur:motdepasse »
-        # dans UNE SEULE valeur. Deux variables séparées (admin d'un côté, mot
-        # de passe de l'autre) ne créent AUCUN compte : l'API répond 401 et
-        # rien n'explique pourquoi. Vérifié dans UPGRADING/v0_16.md.
-        - {name: STALWART_ADMIN_PASSWORD, valueFrom: {secretKeyRef: {name: stalwart-admin, key: password}}}
-        - name: STALWART_RECOVERY_ADMIN
-          value: admin:$(STALWART_ADMIN_PASSWORD)
-        - {name: STALWART_ENCRYPTION_KEY, valueFrom: {secretKeyRef: {name: stalwart-admin, key: storage}}}
         volumeMounts:
+        - {name: secrets, mountPath: /secrets, readOnly: true}
         # Chemins de l'image officielle : /etc/stalwart (config) et
         # /var/lib/stalwart (données). Monter ailleurs laissait les données
         # DANS le conteneur — perdues au moindre redémarrage du pod.
@@ -236,6 +320,10 @@ spec:
         persistentVolumeClaim: {claimName: stalwart-data}
       - name: config
         configMap: {name: stalwart-config}
+      # Le canal entre l'init-container et Stalwart : le seul qu'ils partagent.
+      # Vide au départ, rempli à chaque démarrage du pod — donc jamais périmé.
+      - name: secrets
+        emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
@@ -279,7 +367,7 @@ spec:
           service:
             name: stalwart
             port: {number: 8080}
-`, ns, domaine, stalwartImage)
+`, ns, domaine, stalwartImage, imageCoffre())
 
 	return apply(ctx, manifest)
 }

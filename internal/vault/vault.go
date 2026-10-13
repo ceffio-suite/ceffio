@@ -832,6 +832,13 @@ path "sys/internal/ui/mounts/*" { capabilities = ["read"] }`},
 		{"ceffio-lecture", `path "kv/data/ceffio/*" { capabilities = ["read","list"] }
 path "kv/metadata/ceffio/*" { capabilities = ["read","list"] }
 path "sys/internal/ui/mounts/*" { capabilities = ["read"] }`},
+		// LECTURE PAR COMPOSANT : un service ne lit QUE ce qui le concerne. La
+		// politique large ci-dessus existe pour les cas à venir ; un composant
+		// précis reçoit la sienne. C'est elle qui borne les dégâts quand un rôle
+		// est compromis — pas le namespace, qui ne dit rien des droits.
+		{"ceffio-stalwart", `path "kv/data/ceffio/stalwart/*" { capabilities = ["read","list"] }
+path "kv/metadata/ceffio/stalwart/*" { capabilities = ["read","list"] }
+path "sys/internal/ui/mounts/*" { capabilities = ["read"] }`},
 		// ADMINISTRATION : le compte humain unique, celui que l'annuaire désigne
 		// comme administrateur. Il a TOUS les droits sur le coffre — c'est le
 		// sens d'un compte d'administration, et c'est ce qui rend la rotation
@@ -1006,6 +1013,11 @@ func configurerAuthKubernetes(ctx context.Context, cli *k8sapi.Client) error {
 		// viendront s'ajouter un par un, en Phase 3, avec la politique de lecture
 		// seule.
 		{nom: "console", sa: "ceffio-admin", ns: "ceffio-system", politique: "ceffio-console"},
+		// LES COMPOSANTS LISENT LEURS PROPRES SECRETS À L'EXÉCUTION. C'est le
+		// ServiceAccount DU POD qui s'authentifie, via un init-container : aucun
+		// jeton n'est rangé quelque part, et une rotation dans le coffre prend
+		// effet au redémarrage suivant du pod — sans redéployer la suite.
+		{nom: "stalwart", sa: "stalwart", ns: "ceffio-mail", politique: "ceffio-stalwart"},
 	}
 	for _, r := range roles {
 		if _, err := baoAvecJeton(ctx, cli, adm,
