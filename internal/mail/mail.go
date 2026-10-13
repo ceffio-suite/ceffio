@@ -198,6 +198,73 @@ data:
     {"@type":"RocksDb","path":"/var/lib/stalwart"}
 ---
 apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: stalwart-agent
+  namespace: %[1]s
+data:
+  # LA CONFIGURATION DE L'AGENT, DÉCLARATIVE ET RELISIBLE.
+  #
+  # Elle remplace une chaîne de commandes « bao » écrites à la main. Trois
+  # raisons, toutes vérifiées à l'usage : plus de manipulation de secret dans un
+  # shell (donc plus de guillemets à empiler, de « % » à doubler, de fichier
+  # illisible par l'autre conteneur), l'agent RENOUVELLE son jeton tout seul, et
+  # un gabarit est quelque chose qu'on relit — pas une commande qu'on relance.
+  agent.hcl: |
+    pid_file = "/tmp/bao-agent.pid"
+
+    vault {
+      address = "http://openbao.ceffio-vault.svc:8200"
+      retry { num_retries = 2 }
+    }
+
+    # L'AGENT S'AUTHENTIFIE PAR KUBERNETES : le jeton du ServiceAccount du pod
+    # est présenté au coffre, qui le fait valider par l'API du cluster.
+    auto_auth {
+      method "kubernetes" {
+        mount_path = "auth/kubernetes"
+        config = {
+          role       = "stalwart"
+          token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+        }
+      }
+    }
+
+    # ÉCHEC BRUYANT : si un gabarit échoue, l'agent s'arrête au lieu de rendre
+    # une valeur vide. Un mot de passe vide est bien plus dangereux qu'un pod
+    # qui ne démarre pas — il donnerait un service qui tourne et refuse tout.
+    template_config {
+      exit_on_retry_failure = true
+    }
+
+    # LES GABARITS. Le chemin est celui de l'API (kv/data/...), comme pour la
+    # politique ; les commandes « kv » de la ligne de commande, elles, prennent
+    # le chemin logique. C'est la confusion qui coûte du temps.
+    env_template "STALWART_ADMIN_PASSWORD" {
+      contents             = "{{ with secret \"kv/data/ceffio/stalwart/admin\" }}{{ .Data.data.password }}{{ end }}"
+      error_on_missing_key = true
+    }
+
+    # LE FORMAT DE STALWART EST PRÉSERVÉ : cette variable attend
+    # « utilisateur:motdepasse » dans UNE SEULE valeur.
+    env_template "STALWART_RECOVERY_ADMIN" {
+      contents             = "{{ with secret \"kv/data/ceffio/stalwart/admin\" }}admin:{{ .Data.data.password }}{{ end }}"
+      error_on_missing_key = true
+    }
+
+    env_template "STALWART_ENCRYPTION_KEY" {
+      contents             = "{{ with secret \"kv/data/ceffio/stalwart/admin\" }}{{ .Data.data.storage }}{{ end }}"
+      error_on_missing_key = true
+    }
+
+    # L'AGENT LANCE LE SERVICE. C'est le seul moyen d'injecter des variables dans
+    # un conteneur : un init-container ne partage que des volumes, jamais
+    # d'environnement.
+    exec {
+      command = ["/usr/local/bin/stalwart", "--config", "/etc/stalwart/config.json"]
+    }
+---
+apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: stalwart
@@ -227,83 +294,65 @@ spec:
       # pour l'autre, et le pod boucle sur « Permission denied ».
       securityContext:
         fsGroup: 1000
-      # L'INIT-CONTAINER VA CHERCHER LES SECRETS À L'EXÉCUTION.
+      # LE BINAIRE DE L'AGENT EST COPIÉ DEPUIS L'IMAGE DU COFFRE.
       #
-      # Il présente le jeton de ServiceAccount DU POD au coffre, qui le fait
-      # valider par l'API du cluster, et rend un jeton de courte durée portant la
-      # politique du rôle. Conséquence : AUCUN mot de passe de Stalwart n'est
-      # rangé dans le cluster pour ce pod, et une rotation dans le coffre prend
-      # effet au redémarrage suivant — sans redéployer la suite.
-      #
-      # LE REPLI EXISTE, ET IL S'ANNONCE : si le coffre ne répond pas, on repart
-      # des valeurs du Secret Kubernetes. Une installation sans OpenBao doit
-      # continuer de fonctionner — mais un repli muet donnerait l'illusion que
-      # les secrets viennent du coffre, ce qui est la panne la plus trompeuse.
+      # Pourquoi le copier plutôt que d'utiliser cette image comme conteneur :
+      # le mode superviseur exige que l'agent et le service vivent dans le MÊME
+      # conteneur, puisque c'est l'agent qui lance le service. Copier le binaire
+      # est donc la seule façon d'avoir les deux — et il est copié à l'identique,
+      # donc de la même version que le serveur qui lui répond.
       initContainers:
-      - name: secrets-du-coffre
+      - name: binaire-de-l-agent
         image: %[4]s
+        command: ["/bin/sh", "-c"]
+        args: ["cp /usr/bin/bao /bao-bin/bao && chmod 0555 /bao-bin/bao"]
+        volumeMounts:
+        - {name: bao-bin, mountPath: /bao-bin}
+      containers:
+      - name: stalwart
+        image: %[3]s
+        # LA GARDE, PUIS L'AGENT.
+        #
+        # « bao status » est un test de vie rapide : le coffre répond-il, et
+        # est-il descellé ? Sinon on repart du Secret Kubernetes — la suite doit
+        # continuer de fonctionner sans OpenBao, ET le repli doit s'annoncer,
+        # sinon il donne l'illusion que les secrets viennent du coffre.
+        #
+        # Si le coffre répond, l'agent prend la main : il s'authentifie, va
+        # chercher les secrets, et LANCE STALWART en lui injectant les variables.
+        # Plus aucune manipulation de secret dans un shell.
         command: ["/bin/sh", "-c"]
         args:
         - |
           set -e
-          # 027 ET NON 077 : le fichier doit être lisible PAR LE GROUPE, puisque
-          # Stalwart ne tourne pas sous le même utilisateur que cet
-          # init-container. En 077, il serait lisible de lui seul — et le
-          # conteneur principal bouclerait sur « Permission denied ».
-          umask 027
-          if [ -n "$COFFRE_ADDR" ]; then
-            export BAO_ADDR="$COFFRE_ADDR"
-            JWT=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
-            if bao login -method=kubernetes role=stalwart jwt=$JWT >/dev/null 2>&1; then
-              P=$(bao kv get -field=password kv/ceffio/stalwart/admin)
-              S=$(bao kv get -field=storage  kv/ceffio/stalwart/admin)
-              printf 'STALWART_ADMIN_PASSWORD=%%s\n' "$P" > /secrets/env
-              printf 'STALWART_RECOVERY_ADMIN=admin:%%s\n' "$P" >> /secrets/env
-              printf 'STALWART_ENCRYPTION_KEY=%%s\n' "$S" >> /secrets/env
-              echo "secrets lus dans le coffre (aucune valeur affichee)"
-              exit 0
-            fi
-            echo "coffre injoignable : repli sur le Secret Kubernetes"
+          if BAO_ADDR="$COFFRE_ADDR" /bao-bin/bao status >/dev/null 2>&1; then
+            exec /bao-bin/bao agent -config=/etc/agent/agent.hcl
           fi
-          printf 'STALWART_ADMIN_PASSWORD=%%s\n' "$STALWART_ADMIN_PASSWORD_REPLI" > /secrets/env
-          printf 'STALWART_RECOVERY_ADMIN=admin:%%s\n' "$STALWART_ADMIN_PASSWORD_REPLI" >> /secrets/env
-          printf 'STALWART_ENCRYPTION_KEY=%%s\n' "$STALWART_ENCRYPTION_KEY_REPLI" >> /secrets/env
+          echo "coffre injoignable : repli sur le Secret Kubernetes"
+          export STALWART_ADMIN_PASSWORD="$STALWART_ADMIN_PASSWORD_REPLI"
+          export STALWART_RECOVERY_ADMIN="admin:$STALWART_ADMIN_PASSWORD_REPLI"
+          export STALWART_ENCRYPTION_KEY="$STALWART_ENCRYPTION_KEY_REPLI"
+          exec /usr/local/bin/stalwart --config /etc/stalwart/config.json
         env:
         - {name: COFFRE_ADDR, value: "http://openbao.ceffio-vault.svc:8200"}
         - {name: STALWART_ADMIN_PASSWORD_REPLI, valueFrom: {secretKeyRef: {name: stalwart-admin, key: password}}}
         - {name: STALWART_ENCRYPTION_KEY_REPLI, valueFrom: {secretKeyRef: {name: stalwart-admin, key: storage}}}
         volumeMounts:
-        - {name: secrets, mountPath: /secrets}
-      containers:
-      - name: stalwart
-        image: %[3]s
-        # LA COMMANDE CHARGE LE FICHIER AVANT DE LANCER STALWART.
-        #
-        # POURQUOI UN FICHIER, ET PAS DES VARIABLES : un init-container ne peut
-        # pas poser de variables dans un autre conteneur — il ne partage que des
-        # volumes. Le fichier est le seul canal possible, et « set -a » exporte
-        # tout ce qu'il contient.
-        #
-        # LE FORMAT DE STALWART EST PRÉSERVÉ : STALWART_RECOVERY_ADMIN attend
-        # « utilisateur:motdepasse » dans UNE SEULE valeur. Deux variables
-        # séparées ne créent AUCUN compte : l'API répond 401 et rien ne
-        # l'explique. Vérifié dans UPGRADING/v0_16.md.
-        command: ["/bin/sh", "-c"]
-        args:
-        - "set -a; . /secrets/env; exec stalwart --config /etc/stalwart/config.json"
+        # Le binaire de l'agent, copié depuis l'image du coffre.
+        - {name: bao-bin, mountPath: /bao-bin}
+        # Les gabarits de l'agent : un fichier qu'on relit.
+        - {name: agent-config, mountPath: /etc/agent, readOnly: true}
+        # Chemins de l'image officielle : /etc/stalwart (config) et
+        # /var/lib/stalwart (données). Monter ailleurs laissait les données
+        # DANS le conteneur — perdues au moindre redémarrage du pod.
+        - {name: data, mountPath: /var/lib/stalwart}
+        - {name: config, mountPath: /etc/stalwart}
         ports:
         - {name: smtp,     containerPort: 25}
         - {name: submission, containerPort: 587}
         - {name: imap,     containerPort: 143}
         - {name: imaps,    containerPort: 993}
         - {name: http,     containerPort: 8080}
-        volumeMounts:
-        - {name: secrets, mountPath: /secrets, readOnly: true}
-        # Chemins de l'image officielle : /etc/stalwart (config) et
-        # /var/lib/stalwart (données). Monter ailleurs laissait les données
-        # DANS le conteneur — perdues au moindre redémarrage du pod.
-        - {name: data, mountPath: /var/lib/stalwart}
-        - {name: config, mountPath: /etc/stalwart}
         # Sonde sur /healthz/live : c'est l'endpoint que le Dockerfile officiel
         # de Stalwart déclare lui-même (STALWART_HEALTHCHECK_URL). Il répond
         # sans authentification, contrairement à /api/account (401).
@@ -320,10 +369,12 @@ spec:
         persistentVolumeClaim: {claimName: stalwart-data}
       - name: config
         configMap: {name: stalwart-config}
-      # Le canal entre l'init-container et Stalwart : le seul qu'ils partagent.
-      # Vide au départ, rempli à chaque démarrage du pod — donc jamais périmé.
-      - name: secrets
+      # Le binaire de l'agent, copié à chaque démarrage depuis l'image du coffre.
+      - name: bao-bin
         emptyDir: {}
+      # La configuration de l'agent : un gabarit qu'on relit, pas une commande.
+      - name: agent-config
+        configMap: {name: stalwart-agent}
 ---
 apiVersion: v1
 kind: Service

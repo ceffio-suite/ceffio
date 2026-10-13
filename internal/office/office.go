@@ -88,6 +88,56 @@ spec:
       storage: 20Gi
 ---
 apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: onlyoffice-agent
+  namespace: %s
+data:
+  # LA CONFIGURATION DE L'AGENT, DÉCLARATIVE. Elle remplace les commandes
+  # « bao » écrites à la main dans le conteneur : plus de manipulation de secret
+  # dans un shell, jeton renouvelé par l'agent, et un gabarit qu'on relit.
+  agent.hcl: |
+    pid_file = "/tmp/bao-agent.pid"
+
+    vault {
+      address = "http://openbao.ceffio-vault.svc:8200"
+      retry { num_retries = 2 }
+    }
+
+    auto_auth {
+      method "kubernetes" {
+        mount_path = "auth/kubernetes"
+        config = {
+          role       = "onlyoffice"
+          token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+        }
+      }
+    }
+
+    # ÉCHEC BRUYANT plutôt qu'un jeton vide : un serveur de documents qui tourne
+    # avec une signature vide n'est pas un serveur qui marche, c'est un serveur
+    # qui accepte n'importe quoi — ou qui refuse tout, sans le dire.
+    template_config {
+      exit_on_retry_failure = true
+    }
+
+    env_template "JWT_ENABLED" {
+      contents = "true"
+    }
+
+    # LE CHEMIN EST CELUI DE L'API (kv/data/...), comme pour la politique.
+    env_template "JWT_SECRET" {
+      contents             = "{{ with secret \"kv/data/ceffio/onlyoffice/jwt\" }}{{ .Data.data.jwt }}{{ end }}"
+      error_on_missing_key = true
+    }
+
+    # L'AGENT LANCE LE SCRIPT D'ENTRÉE D'ORIGINE — celui de l'image, qui prépare
+    # le serveur. Le remplacer casserait tout ; c'est lui qui doit tourner.
+    exec {
+      command = ["/bin/bash", "/app/ds/run-document-server.sh"]
+    }
+---
+apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: onlyoffice
@@ -118,35 +168,35 @@ spec:
       serviceAccountName: onlyoffice
       securityContext:
         fsGroup: 1000
-      # L'INIT-CONTAINER VA CHERCHER LE JETON À L'EXÉCUTION.
-      #
-      # Il présente le jeton de ServiceAccount du pod au coffre, qui le fait
-      # valider par l'API du cluster et rend un jeton de courte durée portant la
-      # politique « ceffio-onlyoffice ». Aucun jeton de signature n'est donc rangé
-      # dans le cluster pour ce pod, et une rotation dans le coffre prend effet au
-      # redémarrage suivant — sans redéployer la suite.
+      # LE BINAIRE DE L'AGENT EST COPIÉ DEPUIS L'IMAGE DU COFFRE : le mode superviseur
+      # exige que l'agent et le service vivent dans le MÊME conteneur, puisque
+      # c'est l'agent qui lance le service.
       initContainers:
-        - name: secret-du-coffre
+        - name: binaire-de-l-agent
           image: %s
           command: ["/bin/sh", "-c"]
+          args: ["cp /usr/bin/bao /bao-bin/bao && chmod 0555 /bao-bin/bao"]
+          volumeMounts:
+            - name: bao-bin
+              mountPath: /bao-bin
+      containers:
+        - name: onlyoffice
+          image: %s
+          # LA GARDE, PUIS L'AGENT. « bao status » est un test de vie rapide ; s'il
+          # échoue, on repart du Secret Kubernetes — la suite doit tenir sans
+          # OpenBao, et le repli doit s'annoncer, sinon il donne l'illusion que
+          # les secrets viennent du coffre.
+          command: ["/bin/bash", "-c"]
           args:
             - |
               set -e
-              umask 027
-              if [ -n "$COFFRE_ADDR" ]; then
-                export BAO_ADDR="$COFFRE_ADDR"
-                JWT=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
-                if bao login -method=kubernetes role=onlyoffice jwt=$JWT >/dev/null 2>&1; then
-                  J=$(bao kv get -field=jwt kv/ceffio/onlyoffice/jwt)
-                  printf 'JWT_ENABLED=true\n' > /secrets/env
-                  printf 'JWT_SECRET=%%s\n' "$J" >> /secrets/env
-                  echo "jeton lu dans le coffre (aucune valeur affichee)"
-                  exit 0
-                fi
-                echo "coffre injoignable : repli sur le Secret Kubernetes"
+              if BAO_ADDR="$COFFRE_ADDR" /bao-bin/bao status >/dev/null 2>&1; then
+                exec /bao-bin/bao agent -config=/etc/agent/agent.hcl
               fi
-              printf 'JWT_ENABLED=true\n' > /secrets/env
-              printf 'JWT_SECRET=%%s\n' "$JWT_SECRET_REPLI" >> /secrets/env
+              echo "coffre injoignable : repli sur le Secret Kubernetes"
+              export JWT_ENABLED="true"
+              export JWT_SECRET="$JWT_SECRET_REPLI"
+              exec /bin/bash /app/ds/run-document-server.sh
           env:
             - name: COFFRE_ADDR
               value: "http://openbao.ceffio-vault.svc:8200"
@@ -155,27 +205,14 @@ spec:
                 secretKeyRef:
                   name: onlyoffice-secret
                   key: jwt
-          volumeMounts:
-            - name: secrets
-              mountPath: /secrets
-      containers:
-        - name: onlyoffice
-          image: %s
-          # LA COMMANDE CHARGE LE FICHIER AVANT DE LANCER LE SERVEUR.
-          #
-          # Un init-container ne peut pas poser de variables dans un autre
-          # conteneur : ils ne partagent que des volumes. Le script d'entrée
-          # d'origine est PRÉSERVÉ — c'est lui qui prépare le serveur, et le
-          # remplacer casserait tout.
-          command: ["/bin/bash", "-c"]
-          args:
-            - "set -a; . /secrets/env; exec /bin/bash /app/ds/run-document-server.sh"
           ports:
             - name: http
               containerPort: 80
           volumeMounts:
-            - name: secrets
-              mountPath: /secrets
+            - name: bao-bin
+              mountPath: /bao-bin
+            - name: agent-config
+              mountPath: /etc/agent
               readOnly: true
             - name: data
               mountPath: /var/www/onlyoffice/Data
@@ -189,10 +226,13 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: onlyoffice-data
-        # Le canal entre l'init-container et le serveur : le seul qu'ils
-        # partagent. Vide au départ, rempli à chaque démarrage — jamais périmé.
-        - name: secrets
+        # Le binaire de l'agent, copié à chaque démarrage depuis l'image du coffre.
+        - name: bao-bin
           emptyDir: {}
+        # La configuration de l'agent : un gabarit qu'on relit, pas une commande.
+        - name: agent-config
+          configMap:
+            name: onlyoffice-agent
 ---
 apiVersion: v1
 kind: Service
@@ -206,7 +246,7 @@ spec:
     - name: http
       port: 80
       targetPort: 80
-`, ns, ns, ns, version.ImageDe("openbao"), officeImage, ns)
+`, ns, ns, ns, ns, version.ImageDe("openbao"), officeImage, ns)
 	return apply(ctx, manifest)
 }
 
