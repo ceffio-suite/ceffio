@@ -35,7 +35,7 @@ import (
 
 	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
-	"github.com/ceffio-suite/ceffio/internal/version"
+	"github.com/ceffio-suite/ceffio/internal/vault"
 )
 
 // Versions épinglées. Rien ne suit `latest` : un composant qui suit un tag
@@ -96,7 +96,7 @@ func Deploy(ctx context.Context) error {
 	if err := ensureSecrets(ctx); err != nil {
 		return err
 	}
-	if err := deployAgent(ctx); err != nil {
+	if err := deployServiceAccount(ctx); err != nil {
 		return err
 	}
 	if err := deployNATS(ctx); err != nil {
@@ -185,57 +185,12 @@ func ensureSecrets(ctx context.Context) error {
 // lisent la MÊME entrée du coffre, donc leurs gabarits sont identiques. Un
 // fichier dupliqué finirait par diverger de l'autre — et la divergence, ici,
 // ferait que le signaling et Nextcloud ne partageraient plus le même secret.
-func deployAgent(ctx context.Context) error {
+func deployServiceAccount(ctx context.Context) error {
 	manifeste := fmt.Sprintf(`apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: talk
   namespace: %[1]s
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: talk-agent
-  namespace: %[1]s
-data:
-  # L'AGENT S'ARRÊTE APRÈS AVOIR RENDU — c'est ce qui en fait un init-container.
-  # « index » EST OBLIGATOIRE POUR LES CLÉS À TIRET : « .Data.data.hash-key »
-  # n'est pas une expression valide en syntaxe Go, le tiret étant un opérateur.
-  # L'erreur de rendu ne dit pas cela ; elle parle de gabarit invalide.
-  agent.hcl: |
-    pid_file = "/tmp/bao-agent.pid"
-
-    exit_after_auth = true
-
-    vault {
-      address = "http://openbao.ceffio-vault.svc:8200"
-      retry { num_retries = 2 }
-    }
-
-    auto_auth {
-      method "kubernetes" {
-        mount_path = "auth/kubernetes"
-        config = {
-          role       = "talk"
-          token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
-        }
-      }
-    }
-
-    template_config {
-      exit_on_retry_failure = true
-    }
-
-    template {
-      destination          = "/secrets/env"
-      error_on_missing_key = true
-      contents             = <<EOT
-    export HASH_KEY='{{ with secret "kv/data/ceffio/talk/signaling" }}{{ index .Data.data "hash-key" }}{{ end }}'
-    export BLOCK_KEY='{{ with secret "kv/data/ceffio/talk/signaling" }}{{ index .Data.data "block-key" }}{{ end }}'
-    export SHARED_SECRET='{{ with secret "kv/data/ceffio/talk/signaling" }}{{ index .Data.data "partage" }}{{ end }}'
-    export TURN_SECRET='{{ with secret "kv/data/ceffio/talk/signaling" }}{{ index .Data.data "turn-secret" }}{{ end }}'
-    EOT
-    }
 `, ns)
 	return appliquer(ctx, manifeste)
 }
@@ -352,6 +307,13 @@ exec turnserver \
     $ARG_EXTERNE
 `, stunPort, stunPublic, "talk."+domaineDe(ctx), portTurn)
 
+	// LES SECRETS SONT POSÉS PAR L'INJECTEUR D'OPENBAO : coturn n'a besoin que du
+	// secret TURN, celui que Nextcloud détient aussi.
+	annCoturn := vault.AnnotationsAgent(8, "talk", "kv/data/ceffio/talk/signaling",
+		vault.GabaritExports("kv/data/ceffio/talk/signaling",
+			[2]string{"TURN_SECRET", vault.ChampCoffre("turn-secret")},
+		))
+
 	manifeste := fmt.Sprintf(`apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -365,32 +327,19 @@ spec:
   replicas: 1
   selector: {matchLabels: {app: coturn}}
   template:
-    metadata: {labels: {app: coturn}}
+    metadata:
+      labels: {app: coturn}
+      # LES SECRETS SONT POSÉS PAR L'INJECTEUR D'OPENBAO.
+      annotations:
+%[6]s
     spec:
       # hostNetwork : même raison que Janus — la plage de relais TURN
       # (49152-49200) ne peut pas s'exprimer en NodePort, qui n'accepte qu'un
       # port unique. Le pod écoute donc directement sur l'IP de la VM.
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
-      # L'IDENTITÉ QUE LE COFFRE VALIDE, et le groupe partagé qui rend le fichier
-      # rendu lisible par le conteneur applicatif — les deux ne tournent pas sous
-      # le même utilisateur.
+      # C'EST CE ServiceAccount QUE LE RÔLE DU COFFRE DÉSIGNE.
       serviceAccountName: talk
-      securityContext:
-        fsGroup: 1000
-      # L'AGENT REND TURN_SECRET, PUIS DISPARAÎT (exit_after_auth). Aucun repli :
-      # c'est le coffre ou rien, et le pod ne démarre pas si le coffre ne répond
-      # pas — visible, plutôt qu'un service qui tourne avec un secret vide.
-      initContainers:
-      - name: agent-du-coffre
-        image: %[6]s
-        # L'ENTRÉE DE CETTE IMAGE EST bao : on ne remplace QUE ses arguments.
-        args: ["agent", "-config=/etc/agent/agent.hcl"]
-        env:
-        - {name: BAO_ADDR, value: "http://openbao.ceffio-vault.svc:8200"}
-        volumeMounts:
-        - {name: agent-config, mountPath: /etc/agent, readOnly: true}
-        - {name: secrets, mountPath: /secrets}
       containers:
       - name: coturn
         image: %[2]s
@@ -403,19 +352,11 @@ spec:
           . /secrets/env
           set +a
 %[3]s
-        volumeMounts:
-        - {name: secrets, mountPath: /secrets, readOnly: true}
         ports:
         - {name: turn, containerPort: %[4]d, protocol: UDP}
         - {name: turn-tcp, containerPort: %[4]d, protocol: TCP}
         - {name: turns, containerPort: %[5]d, protocol: TCP}
         resources: {limits: {memory: 1Gi, cpu: "1"}}
-      volumes:
-      # Le fichier rendu par l'agent : le seul lien entre les deux conteneurs.
-      - name: secrets
-        emptyDir: {}
-      - name: agent-config
-        configMap: {name: talk-agent}
 ---
 # NodePort, PAS ClusterIP : ces ports doivent être joignables depuis Internet,
 # via les règles de redirection du pare-feu vers l'IP de la VM. Un ClusterIP
@@ -432,7 +373,7 @@ spec:
   - {name: turn, port: %[4]d, targetPort: %[4]d, protocol: UDP}
   - {name: turn-tcp, port: %[4]d, targetPort: %[4]d, protocol: TCP}
   - {name: turns, port: %[5]d, targetPort: %[5]d, protocol: TCP}
-`, ns, coturnImage, indentYaml(script, 10), portTurn, portTurnTLS, version.ImageDe("openbao"))
+`, ns, coturnImage, indentYaml(script, 10), portTurn, portTurnTLS, annCoturn)
 	return appliquer(ctx, manifeste)
 }
 
@@ -677,6 +618,14 @@ secret = $(TURN_SECRET)
 servers = %[2]s
 `, portSignaling, turnURL(domaineDe(ctx)), domaineDe(ctx))
 
+	annSignaling := vault.AnnotationsAgent(8, "talk", "kv/data/ceffio/talk/signaling",
+		vault.GabaritExports("kv/data/ceffio/talk/signaling",
+			[2]string{"HASH_KEY", vault.ChampCoffre("hash-key")},
+			[2]string{"BLOCK_KEY", vault.ChampCoffre("block-key")},
+			[2]string{"SHARED_SECRET", vault.ChampCoffre("partage")},
+			[2]string{"TURN_SECRET", vault.ChampCoffre("turn-secret")},
+		))
+
 	manifeste := fmt.Sprintf(`apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -696,30 +645,14 @@ spec:
   replicas: 1
   selector: {matchLabels: {app: talk-signaling}}
   template:
-    metadata: {labels: {app: talk-signaling}}
+    metadata:
+      labels: {app: talk-signaling}
+      # LES SECRETS SONT POSÉS PAR L'INJECTEUR D'OPENBAO.
+      annotations:
+%[5]s
     spec:
-      # L'IDENTITÉ QUE LE COFFRE VALIDE, et le groupe partagé qui rend le fichier
-      # rendu lisible — les deux conteneurs ne tournent pas sous le même
-      # utilisateur.
+      # C'EST CE ServiceAccount QUE LE RÔLE DU COFFRE DÉSIGNE.
       serviceAccountName: talk
-      securityContext:
-        fsGroup: 1000
-      # L'AGENT REND LES SECRETS DU SIGNALING, PUIS DISPARAÎT.
-      #
-      # Le signaling attend quatre variables — HASH_KEY, BLOCK_KEY, SHARED_SECRET,
-      # TURN_SECRET — dont les deux dernières doivent être IDENTIQUES à celles que
-      # Nextcloud détient. Une seule source, donc : le coffre. Le raccordement
-      # Nextcloud lit la même entrée.
-      initContainers:
-      - name: agent-du-coffre
-        image: %[5]s
-        # L'ENTRÉE DE CETTE IMAGE EST bao : on ne remplace QUE ses arguments.
-        args: ["agent", "-config=/etc/agent/agent.hcl"]
-        env:
-        - {name: BAO_ADDR, value: "http://openbao.ceffio-vault.svc:8200"}
-        volumeMounts:
-        - {name: agent-config, mountPath: /etc/agent, readOnly: true}
-        - {name: secrets, mountPath: /secrets}
       containers:
       - name: signaling
         image: %[3]s
@@ -734,7 +667,6 @@ spec:
           set +a
           exec /usr/bin/nextcloud-spreed-signaling -config /config/server.conf
         volumeMounts:
-        - {name: secrets, mountPath: /secrets, readOnly: true}
         - {name: config, mountPath: /config}
         ports:
         - {name: http, containerPort: %[4]d, protocol: TCP}
@@ -742,11 +674,6 @@ spec:
       volumes:
       - name: config
         configMap: {name: talk-signaling-config}
-      # Le fichier rendu par l'agent : le seul lien entre les deux conteneurs.
-      - name: secrets
-        emptyDir: {}
-      - name: agent-config
-        configMap: {name: talk-agent}
 ---
 apiVersion: v1
 kind: Service
@@ -757,7 +684,7 @@ spec:
   selector: {app: talk-signaling}
   ports:
   - {name: http, port: %[4]d, targetPort: %[4]d, protocol: TCP}
-`, ns, indentYaml(config, 4), signalingImage, portSignaling, version.ImageDe("openbao"))
+`, ns, indentYaml(config, 4), signalingImage, portSignaling, annSignaling)
 
 	return appliquer(ctx, manifeste)
 }

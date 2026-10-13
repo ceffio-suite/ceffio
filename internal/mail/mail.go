@@ -34,22 +34,8 @@ import (
 
 	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
-	"github.com/ceffio-suite/ceffio/internal/version"
+	"github.com/ceffio-suite/ceffio/internal/vault"
 )
-
-// imageCoffre rend l'image du coffre telle que déclarée au registre des versions.
-//
-// POURQUOI ON LA LIT AU REGISTRE PLUTÔT QUE DE L'ÉCRIRE ICI : l'init-container se
-// sert du client `bao`, et ce client doit être EXACTEMENT celui du coffre
-// déployé. Deux références écrites à deux endroits divergent à la première mise à
-// jour — et la divergence se manifeste par un échec d'authentification, pas par
-// un message qui dit quoi corriger. Le registre, lui, est vérifié par un test.
-func imageCoffre() string {
-	if c, ok := version.ParNom("openbao"); ok {
-		return c.Image
-	}
-	return "docker.io/openbao/openbao:2.7.1"
-}
 
 // Version réelle constatée sur Docker Hub (pas inventée).
 const (
@@ -201,6 +187,16 @@ func applyWorkload(ctx context.Context, domaine string) error {
 
 	// Le stockage : un PVC pour les boîtes et l'index. Sans lui, tout est perdu
 	// au redémarrage du pod.
+	// LES SECRETS SONT POSÉS PAR L'INJECTEUR D'OPENBAO. Ce bloc d'annotations
+	// remplace l'init-container, sa ConfigMap, son volume et ses montages.
+	annotations := vault.AnnotationsAgent(8, "stalwart", "kv/data/ceffio/stalwart/admin",
+		vault.GabaritExports("kv/data/ceffio/stalwart/admin",
+			[2]string{"STALWART_ADMIN_PASSWORD", vault.ChampCoffre("password")},
+			// Stalwart attend « utilisateur:motdepasse » dans UNE SEULE valeur.
+			[2]string{"STALWART_RECOVERY_ADMIN", "admin:" + vault.ChampCoffre("password")},
+			[2]string{"STALWART_ENCRYPTION_KEY", vault.ChampCoffre("storage")},
+		))
+
 	manifest := fmt.Sprintf(`apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -228,66 +224,6 @@ data:
     {"@type":"RocksDb","path":"/var/lib/stalwart"}
 ---
 apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: stalwart-agent
-  namespace: %[1]s
-data:
-  # LA CONFIGURATION DE L'AGENT, TEL QUE LA DOCUMENTATION LE DÉCRIT POUR UN
-  # INIT-CONTAINER. L'agent vit ici, pas dans le conteneur applicatif : il
-  # s'authentifie, rend les secrets dans le volume partagé, et s'arrête.
-  agent.hcl: |
-    pid_file = "/tmp/bao-agent.pid"
-
-    # L'AGENT S'ARRÊTE APRÈS AVOIR RENDU. Sans cette ligne, il reste en vie et le
-    # conteneur suivant n'est JAMAIS lancé — le pod attend indéfiniment, sans
-    # message d'erreur. C'est le réglage qui distingue le mode init-container du
-    # mode sidecar, et il va au niveau racine, pas dans auto_auth.
-    exit_after_auth = true
-
-    vault {
-      address = "http://openbao.ceffio-vault.svc:8200"
-      retry { num_retries = 2 }
-    }
-
-    # L'AGENT S'AUTHENTIFIE PAR KUBERNETES : le jeton du ServiceAccount du pod
-    # est présenté au coffre, qui le fait valider par l'API du cluster.
-    auto_auth {
-      method "kubernetes" {
-        mount_path = "auth/kubernetes"
-        config = {
-          role       = "stalwart"
-          token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
-        }
-      }
-    }
-
-    # ÉCHEC BRUYANT : si un gabarit échoue, l'agent s'arrête au lieu de rendre
-    # une valeur vide. Un mot de passe vide est pire qu'un pod qui ne démarre
-    # pas — il donne un service qui tourne et refuse tout, sans rien dire.
-    template_config {
-      exit_on_retry_failure = true
-    }
-
-    # LE GABARIT REND UN FICHIER QUE LE CONTENEUR PRINCIPAL « SOURCE ».
-    # C'est la façon documentée de servir une application qui n'attend que des
-    # variables d'environnement : le fichier contient des « export », et le
-    # conteneur le charge au démarrage.
-    #
-    # Le chemin passé à « secret » est celui de l'API (kv/data/...), comme pour
-    # la politique — les commandes « kv » de la ligne de commande, elles,
-    # prennent le chemin logique. C'est cette confusion qui coûte du temps.
-    template {
-      destination          = "/secrets/env"
-      error_on_missing_key = true
-      contents             = <<EOT
-    export STALWART_ADMIN_PASSWORD='{{ with secret "kv/data/ceffio/stalwart/admin" }}{{ .Data.data.password }}{{ end }}'
-    export STALWART_RECOVERY_ADMIN='admin:{{ with secret "kv/data/ceffio/stalwart/admin" }}{{ .Data.data.password }}{{ end }}'
-    export STALWART_ENCRYPTION_KEY='{{ with secret "kv/data/ceffio/stalwart/admin" }}{{ .Data.data.storage }}{{ end }}'
-    EOT
-    }
----
-apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: stalwart
@@ -304,43 +240,23 @@ spec:
   strategy: {type: Recreate}   # un seul écrivain sur RocksDB
   selector: {matchLabels: {app: stalwart}}
   template:
-    metadata: {labels: {app: stalwart}}
+    metadata:
+      labels: {app: stalwart}
+      # LES SECRETS SONT POSÉS PAR L'INJECTEUR D'OPENBAO, à partir de ce bloc.
+      # Il ajoute lui-même l'init-container qui les rend, avec le bon couple
+      # utilisateur/groupe et un volume EN MÉMOIRE. Mon init-container écrit à la
+      # main faisait cela en quarante lignes, permissions comprises — et c'est
+      # précisément là que je me suis trompé.
+      #
+      # AUCUN REPLI : le coffre est la source unique, et il n'existe plus de
+      # Secret Kubernetes pour ce composant. Un repli masquerait une panne du
+      # coffre au lieu de la montrer.
+      annotations:
+%[4]s
     spec:
-      # LE POD PORTE SA PROPRE IDENTITÉ : c'est elle que le coffre valide pour
-      # lui rendre ses secrets. Sans ce ServiceAccount, l'init-container n'a rien
-      # à présenter, et le rôle côté coffre ne correspond à personne.
+      # C'EST CE ServiceAccount QUE LE RÔLE DU COFFRE DÉSIGNE, et c'est lui que
+      # l'agent présente pour s'authentifier.
       serviceAccountName: stalwart
-      # LE GROUPE PARTAGÉ EST INDISPENSABLE : l'init-container et Stalwart ne
-      # tournent pas sous le même utilisateur. fsGroup fait appartenir le volume
-      # partagé à un groupe commun, et Kubernetes ajoute ce groupe à TOUS les
-      # conteneurs du pod — sans quoi le fichier écrit par l'un est illisible
-      # pour l'autre, et le pod boucle sur « Permission denied ».
-      securityContext:
-        fsGroup: 1000
-      # L'AGENT REND LES SECRETS, PUIS DISPARAÎT.
-      #
-      # C'est le motif que la documentation décrit pour un init-container : il
-      # tourne avec l'image du COFFRE, s'authentifie par Kubernetes, écrit le
-      # résultat dans le volume partagé, et s'arrête (exit_after_auth).
-      #
-      # AUCUN REPLI : le coffre est la source unique. Il n'existe plus de Secret
-      # Kubernetes pour ce composant, donc il n'y a rien sur quoi se rabattre —
-      # et c'est voulu. Un repli masquerait une panne du coffre au lieu de la
-      # montrer, et ferait tourner le service sur une valeur que personne ne
-      # mettrait plus à jour.
-      initContainers:
-      - name: agent-du-coffre
-        image: %[4]s
-        # L'ENTRÉE DE CETTE IMAGE EST bao : on ne remplace QUE ses arguments.
-        # Overrider command pour y mettre un shell ferait perdre l'entrée de
-        # l'image — c'est ce qui a fait boucler le pod en CrashLoop, le script
-        # devenant un argument de bao, qui a affiché son aide.
-        args: ["agent", "-config=/etc/agent/agent.hcl"]
-        env:
-        - {name: BAO_ADDR, value: "http://openbao.ceffio-vault.svc:8200"}
-        volumeMounts:
-        - {name: agent-config, mountPath: /etc/agent, readOnly: true}
-        - {name: secrets, mountPath: /secrets}
       containers:
       - name: stalwart
         image: %[3]s
@@ -357,11 +273,10 @@ spec:
           set +a
           exec /usr/local/bin/stalwart --config /etc/stalwart/config.json
         volumeMounts:
-        # Le seul lien entre les deux conteneurs : le fichier rendu.
-        - {name: secrets, mountPath: /secrets, readOnly: true}
         # Chemins de l'image officielle : /etc/stalwart (config) et
         # /var/lib/stalwart (données). Monter ailleurs laissait les données
         # DANS le conteneur — perdues au moindre redémarrage du pod.
+        # L'injecteur ajoute de lui-même le montage des secrets à /secrets.
         - {name: data, mountPath: /var/lib/stalwart}
         - {name: config, mountPath: /etc/stalwart}
         ports:
@@ -386,13 +301,6 @@ spec:
         persistentVolumeClaim: {claimName: stalwart-data}
       - name: config
         configMap: {name: stalwart-config}
-      # LE RÉSULTAT DE L'AGENT, ET RIEN D'AUTRE : le conteneur principal lit ce
-      # fichier. C'est le seul lien entre les deux conteneurs.
-      - name: secrets
-        emptyDir: {}
-      # La configuration de l'agent : un gabarit qu'on relit, pas une commande.
-      - name: agent-config
-        configMap: {name: stalwart-agent}
 ---
 apiVersion: v1
 kind: Service
@@ -436,7 +344,7 @@ spec:
           service:
             name: stalwart
             port: {number: 8080}
-`, ns, domaine, stalwartImage, imageCoffre())
+`, ns, domaine, stalwartImage, annotations)
 
 	return apply(ctx, manifest)
 }

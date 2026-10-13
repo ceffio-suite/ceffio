@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
-	"github.com/ceffio-suite/ceffio/internal/version"
+	"github.com/ceffio-suite/ceffio/internal/vault"
 	"os"
 	"strings"
 	"time"
@@ -87,6 +87,13 @@ func ensureJWTSecret(ctx context.Context) error {
 
 func applyWorkload(ctx context.Context) error {
 	fmt.Println("∙ ONLYOFFICE Docs Server " + officeImage)
+	// LES SECRETS SONT POSÉS PAR L'INJECTEUR D'OPENBAO.
+	annotations := vault.AnnotationsAgent(8, "onlyoffice", "kv/data/ceffio/onlyoffice/jwt",
+		vault.GabaritExports("kv/data/ceffio/onlyoffice/jwt",
+			[2]string{"JWT_ENABLED", "true"},
+			[2]string{"JWT_SECRET", vault.ChampCoffre("jwt")},
+		))
+
 	manifest := fmt.Sprintf(`apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -98,57 +105,6 @@ spec:
   resources:
     requests:
       storage: 20Gi
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: onlyoffice-agent
-  namespace: %s
-data:
-  # LA CONFIGURATION DE L'AGENT, TEL QUE LA DOCUMENTATION LE DÉCRIT POUR UN
-  # INIT-CONTAINER : il s'authentifie, rend les secrets dans le volume partagé,
-  # puis s'arrête. Le conteneur applicatif ne fait que lire un fichier.
-  agent.hcl: |
-    pid_file = "/tmp/bao-agent.pid"
-
-    # L'AGENT S'ARRÊTE APRÈS AVOIR RENDU. Sans cette ligne il reste en vie, et le
-    # conteneur suivant n'est jamais lancé : le pod attend indéfiniment, sans
-    # message d'erreur. Ce réglage va au niveau racine, pas dans auto_auth.
-    exit_after_auth = true
-
-    vault {
-      address = "http://openbao.ceffio-vault.svc:8200"
-      retry { num_retries = 2 }
-    }
-
-    auto_auth {
-      method "kubernetes" {
-        mount_path = "auth/kubernetes"
-        config = {
-          role       = "onlyoffice"
-          token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
-        }
-      }
-    }
-
-    # ÉCHEC BRUYANT plutôt qu'un jeton vide : un serveur de documents qui tourne
-    # avec une signature vide n'est pas un serveur qui marche, c'est un serveur
-    # qui accepte n'importe quoi — ou qui refuse tout, sans le dire.
-    template_config {
-      exit_on_retry_failure = true
-    }
-
-    # LE GABARIT REND UN FICHIER QUE LE CONTENEUR PRINCIPAL « SOURCE ».
-    # Le chemin passé à « secret » est celui de l'API (kv/data/...), comme pour
-    # la politique.
-    template {
-      destination          = "/secrets/env"
-      error_on_missing_key = true
-      contents             = <<EOT
-    export JWT_ENABLED='true'
-    export JWT_SECRET='{{ with secret "kv/data/ceffio/onlyoffice/jwt" }}{{ .Data.data.jwt }}{{ end }}'
-    EOT
-    }
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -173,35 +129,13 @@ spec:
     metadata:
       labels:
         app: onlyoffice
+      # LES SECRETS SONT POSÉS PAR L'INJECTEUR D'OPENBAO, qui ajoute lui-même
+      # l'init-container, le volume EN MÉMOIRE et le bon couple utilisateur/groupe.
+      annotations:
+%s
     spec:
-      # L'IDENTITÉ QUE LE COFFRE VALIDE, et le groupe partagé qui rend le volume
-      # lisible par les deux conteneurs : ils ne tournent pas sous le même
-      # utilisateur, et le fichier écrit par l'un serait sinon illisible pour
-      # l'autre — « Permission denied », en boucle.
+      # C'EST CE ServiceAccount QUE LE RÔLE DU COFFRE DÉSIGNE.
       serviceAccountName: onlyoffice
-      securityContext:
-        fsGroup: 1000
-      # L'AGENT REND LES SECRETS, PUIS DISPARAÎT. Il tourne avec l'image du COFFRE,
-      # s'authentifie par Kubernetes, écrit le résultat dans le volume partagé et
-      # s'arrête (exit_after_auth).
-      #
-      # AUCUN REPLI : le coffre est la source unique, et il n'existe plus de Secret
-      # Kubernetes pour ce composant. Un repli masquerait une panne du coffre au
-      # lieu de la montrer.
-      initContainers:
-        - name: agent-du-coffre
-          image: %s
-          # L'ENTRÉE DE CETTE IMAGE EST bao : on ne remplace QUE ses arguments.
-          args: ["agent", "-config=/etc/agent/agent.hcl"]
-          env:
-            - name: BAO_ADDR
-              value: "http://openbao.ceffio-vault.svc:8200"
-          volumeMounts:
-            - name: agent-config
-              mountPath: /etc/agent
-              readOnly: true
-            - name: secrets
-              mountPath: /secrets
       containers:
         - name: onlyoffice
           image: %s
@@ -218,10 +152,7 @@ spec:
             - name: http
               containerPort: 80
           volumeMounts:
-            # Le seul lien entre les deux conteneurs : le fichier rendu.
-            - name: secrets
-              mountPath: /secrets
-              readOnly: true
+            # L'injecteur ajoute de lui-même le montage des secrets à /secrets.
             - name: data
               mountPath: /var/www/onlyoffice/Data
           readinessProbe:
@@ -234,14 +165,6 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: onlyoffice-data
-        # LE RÉSULTAT DE L'AGENT, ET RIEN D'AUTRE : le conteneur principal lit ce
-        # fichier. C'est le seul lien entre les deux conteneurs.
-        - name: secrets
-          emptyDir: {}
-        # La configuration de l'agent : un gabarit qu'on relit, pas une commande.
-        - name: agent-config
-          configMap:
-            name: onlyoffice-agent
 ---
 apiVersion: v1
 kind: Service
@@ -255,7 +178,7 @@ spec:
     - name: http
       port: 80
       targetPort: 80
-`, ns, ns, ns, ns, version.ImageDe("openbao"), officeImage, ns)
+`, ns, ns, ns, annotations, officeImage, ns)
 	return apply(ctx, manifest)
 }
 
