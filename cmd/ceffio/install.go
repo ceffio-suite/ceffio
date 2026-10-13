@@ -182,7 +182,7 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	//
 	// Le nom est coffreBao et non coffre : la suite du fichier nomme déjà
 	// « coffre » la configuration lue depuis l'environnement.
-	coffreBao := vault.Deploy(ctx)
+	coffreBao := vault.Deploy(ctx, o.domain)
 	if coffreBao.Pret {
 		os.Setenv("BAO_ADDR", coffreBao.Adresse)
 		os.Setenv("BAO_TOKEN", coffreBao.Jeton)

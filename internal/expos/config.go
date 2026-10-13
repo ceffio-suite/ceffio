@@ -33,7 +33,13 @@ func LireConfig(chemin string) (Config, error) {
 		cfg.PortInterne = "80"
 	}
 	if len(cfg.SousDomaines) == 0 {
-		cfg.SousDomaines = []string{"cloud", "keycloak", "office", "admin"}
+		// « bao » fait partie de la suite au même titre que les autres : le coffre
+		// a besoin d'une adresse PUBLIQUE parce que l'authentification OIDC
+		// renvoie le navigateur vers une adresse de retour. Sans cette entrée, le
+		// DNS répond et le certificat est valide, mais rien n'arrive au cluster :
+		// le pare-feu rend une réponse vide, ce qui ressemble à une panne du
+		// service alors que seule la route manque.
+		cfg.SousDomaines = []string{"cloud", "keycloak", "office", "admin", "bao"}
 	}
 	return cfg, nil
 }

@@ -586,6 +586,11 @@ func ingressesManifest(domain string) string {
 		// Talk : le signaling server est joint par le NAVIGATEUR (pas seulement
 		// en interne) — il doit donc être exposé, et en WebSocket.
 		{sub: "spreed", namespace: "ceffio-video", service: "talk-signaling", port: 8081},
+		// Le coffre a besoin d'une adresse PUBLIQUE, et pas pour l'affichage :
+		// l'authentification OIDC renvoie le navigateur vers une adresse de
+		// retour, qui doit être joignable et en TLS. Un coffre accessible
+		// seulement par un port en clair ne peut pas authentifier d'humain.
+		{sub: "bao", namespace: "ceffio-vault", service: "openbao", port: 8200},
 	}
 	var sb strings.Builder
 	for _, r := range routes {

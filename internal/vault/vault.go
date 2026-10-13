@@ -115,12 +115,17 @@ type Resultat struct {
 // avertissement est imprimé et Resultat{Pret:false} est rendu, pour que le
 // déploiement se poursuive avec les Secrets Kubernetes.
 //
-// PAS DE PARAMÈTRE DE DOMAINE, VOLONTAIREMENT : le coffre n'en a pas besoin
-// aujourd'hui. Le jour où il sera exposé en https://bao.<domaine>, l'entrée
-// publique demandera le domaine — et c'est à ce moment-là qu'il faudra ajouter
-// le paramètre, pas avant. Un paramètre que rien n'utilise finit par être rempli
-// au hasard, puis lu par erreur.
-func Deploy(ctx context.Context) *Resultat {
+// PAS DE PARAMÈTRE DE DOMAINE... JUSQU'ICI. La première version n'en prenait
+// aucun, avec cette justification : « le jour où le coffre sera exposé en
+// https://bao.<domaine>, l'entrée publique demandera le domaine — et c'est à ce
+// moment-là qu'il faudra ajouter le paramètre, pas avant ».
+//
+// Ce jour est arrivé avec la Phase 2, et pour une raison précise : l'OIDC a
+// besoin de connaître l'adresse publique du coffre, parce que c'est elle qui
+// construit l'adresse de retour vers laquelle le navigateur est redirigé. Sans
+// elle, OpenBao renvoie le navigateur vers un nom de service interne, que le
+// navigateur ne sait pas joindre.
+func Deploy(ctx context.Context, domaine string) *Resultat {
 	fmt.Println("\nDéploiement du coffre de secrets (OpenBao)...")
 
 	cli, err := k8sapi.Nouveau()
@@ -142,7 +147,7 @@ func Deploy(ctx context.Context) *Resultat {
 		fmt.Printf("  ∙ coffre non déployé (clé de descellement) : %v\n", err)
 		return &Resultat{}
 	}
-	empreinte, err := applyConfig(ctx, cli)
+	empreinte, err := applyConfig(ctx, cli, domaine)
 	if err != nil {
 		fmt.Printf("  ∙ coffre non déployé (configuration) : %v\n", err)
 		return &Resultat{}
@@ -318,7 +323,7 @@ func ensureCleDescellement(ctx context.Context, cli *k8sapi.Client) error {
 //
 //   - LE DESCELlement EST AUTOMATIQUE, par le sceau statique. Voir l'entête du
 //     paquet pour le compromis.
-func configManifest() string {
+func configManifest(domaine string) string {
 	return fmt.Sprintf(`apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -350,9 +355,29 @@ data:
       }
     }
 
-    api_addr     = "http://%[5]s.%[1]s.svc:8200"
+    api_addr     = "%[7]s"
     cluster_addr = "http://%[5]s.%[1]s.svc:8201"
-`, ns, cheminDonnees, cheminCle, cheminAudit, service, pod)
+`, ns, cheminDonnees, cheminCle, cheminAudit, service, pod, adressePublique(domaine))
+}
+
+// adressePublique rend l'adresse par laquelle le coffre est joint.
+//
+// ELLE COMPTE POUR L'OIDC, et pas seulement pour l'affichage : c'est à partir
+// d'elle qu'OpenBao construit l'adresse de retour vers laquelle le navigateur
+// est redirigé après authentification. Laissée sur le nom de service interne,
+// elle produirait une redirection vers un nom que le navigateur ne sait pas
+// joindre — et l'échec apparaîtrait côté navigateur, donc loin de la cause.
+//
+// LE REPLI EST EXPLICITE : sans domaine, on rend l'adresse interne, qui suffit
+// aux appels venant du cluster. Le dire plutôt que de rendre une chaîne vide.
+func adressePublique(domaine string) string {
+	if domaine == "" {
+		return "http://" + service + "." + ns + ".svc:8200"
+	}
+	// L'ingress termine le TLS ; la traversée jusqu'au coffre, à l'intérieur du
+	// cluster, reste en clair — c'est le même compromis que pour les autres
+	// composants, et il est borné au réseau des pods.
+	return "https://bao." + domaine
 }
 
 // applyConfig pose la configuration et rend son empreinte.
@@ -367,8 +392,8 @@ data:
 // En reportant l'empreinte dans une annotation du gabarit, toute modification
 // devient un changement de pod : le StatefulSet roule, et la nouvelle
 // configuration est réellement appliquée.
-func applyConfig(ctx context.Context, cli *k8sapi.Client) (string, error) {
-	manifeste := configManifest()
+func applyConfig(ctx context.Context, cli *k8sapi.Client, domaine string) (string, error) {
+	manifeste := configManifest(domaine)
 	if err := cli.Appliquer(ctx, manifeste); err != nil {
 		return "", err
 	}

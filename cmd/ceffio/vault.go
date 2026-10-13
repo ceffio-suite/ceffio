@@ -53,7 +53,8 @@ coffre : qui obtient la machine obtient le coffre. C'est le compromis du
 descellement automatique, assumé et écrit ici plutôt que découvert plus tard.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			res := vault.Deploy(cmd.Context())
+			domaine, _ := cmd.Flags().GetString("domain")
+			res := vault.Deploy(cmd.Context(), domaine)
 
 			fmt.Println()
 			if !res.Pret {
@@ -73,5 +74,9 @@ descellement automatique, assumé et écrit ici plutôt que découvert plus tard
 			return nil
 		},
 	}
+	// MÊME DÉFAUT QUE `install`, ET POUR LA MÊME RAISON : le domaine de
+	// production est *.ceffio.mandem-it.com jusqu'à nouvel ordre. Surchargeable
+	// pour un autre environnement.
+	c.Flags().String("domain", "ceffio.mandem-it.com", "Domaine de base (ex. company.fr)")
 	return c
 }
