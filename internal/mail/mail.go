@@ -402,7 +402,7 @@ func configurerRelais(ctx context.Context, hote string, port int, utilisateur, m
 	// lu DANS le pod : il ne transite jamais par la ligne de commande, où il
 	// serait visible dans la table des processus.
 	script := `curl -s -o /dev/null -w "%{http_code}" --max-time 10 -u "$STALWART_RECOVERY_ADMIN" http://localhost:8080/api/account`
-	out, err := k8s.Command(ctx, "kubectl", "-n", ns, "exec", "deploy/stalwart", "--",
+	out, err := k8s.Command(ctx, "kubectl", "-n", ns, "exec", "deploy/stalwart", "-c", "stalwart", "--",
 		"sh", "-c", script).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("appel à Stalwart : %w: %s", err, tronquer(string(out), 200))

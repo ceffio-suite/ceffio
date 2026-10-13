@@ -36,6 +36,8 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
+
+	"github.com/ceffio-suite/ceffio/internal/secrets"
 )
 
 // SmtpConfig est la configuration SMTP telle que l'interface la manipule.
@@ -293,44 +295,28 @@ func (s *Server) ecrireSmtp(r *http.Request, hote string, port int, securite,
 	return nil
 }
 
-// ecrireSecretSmtp pose les identifiants dans un Secret du namespace Nextcloud.
+// ecrireSecretSmtp range les identifiants du relais DANS LE COFFRE.
+//
+// PLUS AUCUN SECRET KUBERNETES : le relais SMTP est un réglage d'application, pas une
+// ressource du cluster. Nextcloud reçoit déjà sa configuration via occ ; garder une
+// copie dans Kubernetes aurait seulement créé une seconde source à faire diverger.
 func (s *Server) ecrireSecretSmtp(r *http.Request, utilisateur, motdepasse string) error {
-	if s.kube == nil {
-		return fmt.Errorf("client Kubernetes indisponible")
-	}
-	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "nextcloud-smtp",
-			Namespace: "ceffio-files",
-			Labels:    map[string]string{"app.kubernetes.io/part-of": "ceffio"},
-		},
-		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{
-			"username": []byte(utilisateur),
-			"password": []byte(motdepasse),
-		},
-	}
-	// Create-or-update : on tente la création, et si le secret existe on le met
-	// à jour. Deux appels plutôt qu'un « apply » : la console n'a pas de client
-	// kubectl, elle parle directement à l'API.
-	if _, err := s.kube.CoreV1().Secrets("ceffio-files").Create(r.Context(), sec, metav1.CreateOptions{}); err != nil {
-		if _, err2 := s.kube.CoreV1().Secrets("ceffio-files").Update(r.Context(), sec, metav1.UpdateOptions{}); err2 != nil {
-			return err2
-		}
-	}
-	return nil
+	return secrets.EcrireDansCoffre(r.Context(), secrets.DepuisEnvironnement(), "smtp", "relais",
+		map[string]string{"username": utilisateur, "password": motdepasse})
 }
 
 func (s *Server) motDePasseSmtp(r *http.Request) (string, error) {
 	if s.kube == nil {
 		return "", fmt.Errorf("client Kubernetes indisponible")
 	}
-	sec, err := s.kube.CoreV1().Secrets("ceffio-files").Get(r.Context(),
-		"nextcloud-smtp", metav1.GetOptions{})
+	// LE MOT DE PASSE EST LU AU COFFRE, comme tout le reste de la suite. Le repli
+	// vers le Secret Kubernetes a disparu avec lui : laisser les deux sources
+	// revenait à garantir qu'elles divergent un jour.
+	entree, err := secrets.LireEntreeCoffre(r.Context(), secrets.DepuisEnvironnement(), "smtp", "relais")
 	if err != nil {
 		return "", err
 	}
-	return string(sec.Data["password"]), nil
+	return entree["password"], nil
 }
 
 // occSortie exécute occ dans le pod Nextcloud.

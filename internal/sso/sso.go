@@ -14,7 +14,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/ceffio-suite/ceffio/internal/k8s"
+	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"os"
+	"os/exec"
 	"regexp"
 	"strings"
 )
@@ -96,13 +98,29 @@ func EnsureOIDCClients(ctx context.Context, domain string) error {
 // déploiement du coffre seul. Recopier ces quatre étapes aurait suffi à ce que
 // les deux chemins divergent à la première correction.
 func assurerUnClient(ctx context.Context, c client) error {
-	sec := c.app + "-oidc"
 	uuid, err := ensureClient(ctx, c.id, c.redirects)
 	if err != nil {
 		return fmt.Errorf("client OIDC %s: %w", c.id, err)
 	}
 	// Réutilise le secret existant (les apps pointent dessus), sinon génère.
-	secretVal, ok := readSecretVal(ctx, sec, "client-secret")
+	//
+	// LA VALEUR EST REPRISE DU COFFRE, ET ELLE NE CHANGE PAS : ce secret est connu de
+	// Keycloak ET de l'application qui s'y connecte. En régénérer un casserait
+	// l'authentification entre les deux, et le symptôme serait un échec de connexion
+	// parfaitement muet sur la cause.
+	//
+	// L'ORDRE DES SOURCES COMPTE, et il n'est pas arbitraire : le coffre d'abord,
+	// puis KEYCLOAK LUI-MÊME — c'est lui qui fait autorité sur le secret de son
+	// propre client, et le relire là évite d'en inventer un nouveau alors que
+	// l'application se connecte encore avec l'ancien. Générer n'est que le dernier
+	// recours, quand ni le coffre ni Keycloak ne savent.
+	secretVal, ok := lireClientOIDC(ctx, c.app)
+	if !ok {
+		if depuisKeycloak, errKC := lireSecretClientKeycloak(ctx, uuid); errKC == nil && depuisKeycloak != "" {
+			secretVal, ok = depuisKeycloak, true
+			fmt.Printf("∙ client OIDC %s : secret repris depuis Keycloak (absent du coffre)\n", c.id)
+		}
+	}
 	if !ok {
 		secretVal, err = genSecret(24)
 		if err != nil {
@@ -112,10 +130,43 @@ func assurerUnClient(ctx context.Context, c client) error {
 	if err := setClientSecret(ctx, uuid, secretVal); err != nil {
 		return fmt.Errorf("secret client %s: %w", c.id, err)
 	}
-	return createSecretS(ctx, sec, map[string]string{
-		"client-id":     c.id,
-		"client-secret": secretVal,
-	})
+	return ecrireClientOIDC(ctx, c.app, c.id, secretVal)
+}
+
+// lireClientOIDC lit le client OIDC dans le COFFRE.
+func lireClientOIDC(ctx context.Context, app string) (string, bool) {
+	entree, err := secrets.LireEntreeCoffre(ctx, secrets.DepuisEnvironnement(), app, "oidc")
+	if err != nil {
+		return "", false
+	}
+	v := entree["client-secret"]
+	return v, v != ""
+}
+
+// lireSecretClientKeycloak relit le secret d'un client AUPRÈS DE KEYCLOAK.
+//
+// POURQUOI CETTE SOURCE EXISTE : le coffre peut être en retard sur Keycloak — il est
+// une copie de référence, pas le registre d'authentification. Quand les deux ont
+// divergé, c'est Keycloak qui dit juste, puisque c'est avec lui que les applications
+// s'authentifient.
+func lireSecretClientKeycloak(ctx context.Context, uuid string) (string, error) {
+	out, err := runKcadm(ctx, "get", "clients/"+uuid+"/client-secret")
+	if err != nil {
+		return "", err
+	}
+	var reponse struct {
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal([]byte(out), &reponse); err != nil {
+		return "", fmt.Errorf("réponse de Keycloak illisible : %w", err)
+	}
+	return reponse.Value, nil
+}
+
+// ecrireClientOIDC range le client OIDC au coffre, à l'emplacement du composant.
+func ecrireClientOIDC(ctx context.Context, app, id, secret string) error {
+	return secrets.EcrireDansCoffre(ctx, secrets.DepuisEnvironnement(), app, "oidc",
+		map[string]string{"client-id": id, "client-secret": secret})
 }
 
 // AssurerClientCoffre garantit le client OIDC du coffre, et lui seul.
@@ -185,9 +236,27 @@ func parseID(out string) string {
 	return re.FindString(out)
 }
 
-// runKcadm exécute kcadm.sh dans le pod Keycloak (credentials admin relus depuis
-// l'env du pod) et renvoie la sortie combinée.
+// runKcadm exécute kcadm.sh dans le pod Keycloak et renvoie la sortie combinée.
+//
+// LES IDENTIFIANTS D'ADMINISTRATION VIENNENT DU COFFRE, plus de l'environnement du
+// pod. La migration de Keycloak vers l'injecteur d'OpenBao a retiré KC_BOOTSTRAP_ADMIN_*
+// du déploiement : ils ne vivent plus que dans le fichier rendu, que seule la commande
+// de démarrage source. TOUT CE QUI S'EXÉCUTE ENSUITE dans le conteneur ne les voit
+// donc plus — kcadm compris. La connexion partait avec un utilisateur VIDE et
+// répondait « Invalid user credentials », un message qui ne dit rien de la cause.
+//
+// LE MOT DE PASSE PASSE PAR L'ENTRÉE STANDARD, jamais par la ligne de commande : un
+// argument se lit dans /proc/<pid>/cmdline, et inspecter un processus ne doit pas
+// suffire à révéler un secret.
 func runKcadm(ctx context.Context, args ...string) (string, error) {
+	entree, err := secrets.LireEntreeCoffre(ctx, secrets.DepuisEnvironnement(), "keycloak", "admin")
+	if err != nil {
+		return "", fmt.Errorf("identifiants d'administration Keycloak illisibles au coffre : %w", err)
+	}
+	utilisateur, motdepasse := entree["username"], entree["password"]
+	if utilisateur == "" || motdepasse == "" {
+		return "", fmt.Errorf("entrée keycloak/admin incomplète au coffre (username et password requis)")
+	}
 	// Injecte -r <realm> après le verbe : les clients OIDC vivent dans le realm
 	// applicatif (ceffio), PAS master (realm admin de config credentials).
 	quoted := make([]string, 0, len(args)+3)
@@ -197,9 +266,23 @@ func runKcadm(ctx context.Context, args ...string) (string, error) {
 			quoted = append(quoted, "'-r'", "'"+realm+"'")
 		}
 	}
-	cmd := `/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user "$KC_BOOTSTRAP_ADMIN_USERNAME" --password "$KC_BOOTSTRAP_ADMIN_PASSWORD" >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh ` + strings.Join(quoted, " ")
-	out, err := k8s.Command(ctx, "kubectl", "exec", "-n", ns, keycloakDepl, "--", "sh", "-c", cmd).CombinedOutput()
-	return strings.TrimSpace(string(out)), err
+	script := `IFS= read -r motdepasse; ` +
+		`/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master ` +
+		`--user '` + utilisateur + `' --password "$motdepasse" >/dev/null 2>&1 && ` +
+		`/opt/keycloak/bin/kcadm.sh ` + strings.Join(quoted, " ")
+
+	cmd := exec.CommandContext(ctx, "kubectl", "exec", "-i", "-n", ns, keycloakDepl, "-c", "keycloak", "--", "sh", "-c", script)
+	cmd.Env = k8s.Env()
+	cmd.Stdin = strings.NewReader(motdepasse + "\n")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		// L'ERREUR DOIT PORTER CE QUE LA COMMANDE A DIT. Un « exit status 1 » seul
+		// ne dit rien : kcadm écrit la cause dans sa sortie, et la jeter oblige à
+		// reproduire la commande à la main pour la lire — ce qui a coûté une heure.
+		return strings.TrimSpace(string(out)),
+			fmt.Errorf("kcadm %s : %w — %s", args[0], err, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func secretExists(ctx context.Context, name string) bool {
@@ -257,13 +340,8 @@ func SupprimerClientOIDC(ctx context.Context, clientID string) error {
 			return fmt.Errorf("suppression client %s: %w: %s", clientID, err, out)
 		}
 	}
-	// Secret Kubernetes du client (<app>-oidc), s'il existe.
-	sec := clientID + "-oidc"
-	if secretExists(ctx, sec) {
-		if err := k8s.Command(ctx, "kubectl", "delete", "secret", sec, "-n", ns,
-			"--ignore-not-found").Run(); err != nil {
-			return fmt.Errorf("suppression secret %s: %w", sec, err)
-		}
-	}
+	// PLUS DE SECRET KUBERNETES À RETIRER : le client vit au coffre, à
+	// kv/ceffio/<composant>/oidc. Rien à effacer ici — et surtout pas le coffre,
+	// qui doit survivre à la suppression d'un client qu'on recréera peut-être.
 	return nil
 }

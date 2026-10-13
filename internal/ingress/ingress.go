@@ -419,7 +419,7 @@ func ssoRedirect(ctx context.Context, domain string) error {
 // --- helpers ---
 
 func occSet(ctx context.Context, args ...string) error {
-	full := append([]string{"exec", "-n", "ceffio-files", "deploy/nextcloud", "--", "php", "occ"}, args...)
+	full := append([]string{"exec", "-n", "ceffio-files", "deploy/nextcloud", "-c", "nextcloud", "--", "php", "occ"}, args...)
 	cmd := k8s.Command(ctx, "kubectl", full...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -492,7 +492,7 @@ func runKcadm(ctx context.Context, args ...string) (string, error) {
 		}
 	}
 	cmdStr := `/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user "$KC_BOOTSTRAP_ADMIN_USERNAME" --password "$KC_BOOTSTRAP_ADMIN_PASSWORD" >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh ` + strings.Join(quoted, " ")
-	full := []string{"exec", "-n", "ceffio-identity", "deploy/keycloak", "--", "sh", "-c", cmdStr}
+	full := []string{"exec", "-n", "ceffio-identity", "deploy/keycloak", "-c", "keycloak", "--", "sh", "-c", cmdStr}
 	out, err := k8s.Command(ctx, "kubectl", full...).CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }

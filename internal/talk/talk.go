@@ -753,7 +753,7 @@ func brancherNextcloud(ctx context.Context) error {
 
 // occ exécute une commande occ dans le pod Nextcloud.
 func occ(ctx context.Context, args ...string) error {
-	complet := append([]string{"exec", "-n", "ceffio-files", "deploy/nextcloud", "--",
+	complet := append([]string{"exec", "-n", "ceffio-files", "deploy/nextcloud", "-c", "nextcloud", "--",
 		"php", "occ"}, args...)
 	cmd := k8s.Command(ctx, "kubectl", complet...)
 	cmd.Env = k8s.Env()

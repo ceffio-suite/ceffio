@@ -165,7 +165,7 @@ func ConfigurerSSO(ctx context.Context, domaineMessagerie string, o SSO) error {
 	compte := o.CompteAdmin + "@" + o.DomaineAdmin
 	var dernier string
 	for essai := 0; essai < 6; essai++ {
-		out, err := k8s.Command(ctx, "kubectl", "-n", ns, "exec", "deploy/stalwart", "--",
+		out, err := k8s.Command(ctx, "kubectl", "-n", ns, "exec", "deploy/stalwart", "-c", "stalwart", "--",
 			"sh", "-c", `curl -s --max-time 15 -u "$STALWART_RECOVERY_ADMIN" `+
 				`"http://localhost:8080/api/discover/`+compte+`"`).CombinedOutput()
 		if err == nil {
@@ -368,7 +368,7 @@ func appelJMAP(ctx context.Context, méthode string, args map[string]any) (map[s
 	}
 	script := `curl -s --max-time 20 -u "$STALWART_RECOVERY_ADMIN" ` +
 		`-H "Content-Type: application/json" -X POST http://localhost:8080/jmap --data @-`
-	cmd := k8s.Command(ctx, "kubectl", "-n", ns, "exec", "-i", "deploy/stalwart", "--",
+	cmd := k8s.Command(ctx, "kubectl", "-n", ns, "exec", "-i", "deploy/stalwart", "-c", "stalwart", "--",
 		"sh", "-c", script)
 	cmd.Stdin = strings.NewReader(string(brut))
 	sortie, err := cmd.CombinedOutput()

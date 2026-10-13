@@ -68,7 +68,6 @@ var Secrets = []struct{ Name, Namespace string }{
 	// identité
 	{"keycloak-admin", "ceffio-identity"},
 	{"keycloak-db", "ceffio-identity"},
-	{"nextcloud-oidc", "ceffio-identity"},
 	// fichiers
 	{"nextcloud-admin", "ceffio-files"},
 	{"nextcloud-db", "ceffio-files"},

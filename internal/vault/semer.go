@@ -44,6 +44,10 @@ var semences = []semence{
 		cles: []string{"hash-key", "block-key", "partage", "turn-secret"}},
 	{composant: "console", nom: "api", ns: "ceffio-system", secret: "ceffio-console-key",
 		cles: []string{"key"}},
+	{composant: "nextcloud", nom: "oidc", ns: "ceffio-identity", secret: "nextcloud-oidc",
+		cles: []string{"client-id", "client-secret"}},
+	{composant: "openbao", nom: "oidc", ns: "ceffio-identity", secret: "openbao-oidc",
+		cles: []string{"client-id", "client-secret"}},
 	{composant: "smtp", nom: "relais", ns: "ceffio-files", secret: "nextcloud-smtp",
 		cles: []string{"username", "password"}},
 

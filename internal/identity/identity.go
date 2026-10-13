@@ -268,7 +268,7 @@ func ensureRealm(ctx context.Context) error {
 		return nil
 	}
 	fmt.Println("∙ création du realm ceffio (kcadm)")
-	cmd := k8s.Command(ctx, "kubectl", "exec", "-n", ns, "deploy/keycloak", "--",
+	cmd := k8s.Command(ctx, "kubectl", "exec", "-n", ns, "deploy/keycloak", "-c", "keycloak", "--",
 		"sh", "-c",
 		`/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user "$KC_BOOTSTRAP_ADMIN_USERNAME" --password "$KC_BOOTSTRAP_ADMIN_PASSWORD" >/dev/null && /opt/keycloak/bin/kcadm.sh create realms -s "realm=ceffio" -s enabled=true -s registrationAllowed=false -s loginWithEmailAllowed=true -s duplicateEmailsAllowed=false -s resetPasswordAllowed=true -s editUsernameAllowed=false -s sslRequired=external`)
 	cmd.Stdout = os.Stdout

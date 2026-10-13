@@ -198,7 +198,7 @@ func waitOfficeReady(ctx context.Context) error {
 func waitHealthcheck(ctx context.Context) error {
 	deadline := time.Now().Add(180 * time.Second)
 	for time.Now().Before(deadline) {
-		out, err := k8s.Command(ctx, "kubectl", "exec", "-n", ns, "deploy/onlyoffice", "--",
+		out, err := k8s.Command(ctx, "kubectl", "exec", "-n", ns, "deploy/onlyoffice", "-c", "onlyoffice", "--",
 			"sh", "-c", `curl -s http://localhost/healthcheck`).CombinedOutput()
 		if err == nil && strings.Contains(string(out), "true") {
 			return nil
@@ -252,7 +252,7 @@ func connectNextcloud(ctx context.Context) error {
 }
 
 func runOcc(ctx context.Context, args ...string) error {
-	occArgs := append([]string{"exec", "-n", nextcloudNS, "deploy/nextcloud", "--", "php", "occ"}, args...)
+	occArgs := append([]string{"exec", "-n", nextcloudNS, "deploy/nextcloud", "-c", "nextcloud", "--", "php", "occ"}, args...)
 	cmd := k8s.Command(ctx, "kubectl", occArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -273,7 +273,7 @@ func ensureOccApp(ctx context.Context, app string) error {
 }
 
 func runOccOutput(ctx context.Context, args ...string) (string, error) {
-	occArgs := append([]string{"exec", "-n", nextcloudNS, "deploy/nextcloud", "--", "php", "occ"}, args...)
+	occArgs := append([]string{"exec", "-n", nextcloudNS, "deploy/nextcloud", "-c", "nextcloud", "--", "php", "occ"}, args...)
 	out, err := k8s.Command(ctx, "kubectl", occArgs...).CombinedOutput()
 	return string(out), err
 }

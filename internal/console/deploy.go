@@ -451,10 +451,6 @@ rules:
 - apiGroups: [""]
   resources: [pods/exec]
   verbs: [create]
-- apiGroups: [""]
-  resources: [secrets]
-  resourceNames: [nextcloud-smtp]
-  verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

@@ -338,14 +338,14 @@ func ConfigureOIDC(ctx context.Context, domain string) error {
 	if err := ensureOccApp(ctx, "user_oidc"); err != nil {
 		return err
 	}
-	clientID, err := readSecretValue(ctx, "ceffio-identity", "nextcloud-oidc", "client-id")
+	// IDENTIFIANT ET SECRET VIENNENT DE LA MÊME ENTRÉE DU COFFRE : les séparer
+	// ouvrirait la porte à un identifiant d'un client et un secret d'un autre.
+	entreeOIDC, err := secrets.LireEntreeCoffre(ctx, secrets.DepuisEnvironnement(), "nextcloud", "oidc")
 	if err != nil {
-		return fmt.Errorf("secret nextcloud-oidc: %w", err)
+		return fmt.Errorf("client OIDC nextcloud: %w", err)
 	}
-	clientSecret, err := readSecretValue(ctx, "ceffio-identity", "nextcloud-oidc", "client-secret")
-	if err != nil {
-		return fmt.Errorf("secret nextcloud-oidc: %w", err)
-	}
+	clientID := entreeOIDC["client-id"]
+	clientSecret := entreeOIDC["client-secret"]
 	// Le point de découverte doit être le nom PUBLIC, pas l'adresse interne du
 	// cluster. Nextcloud reprend les endpoints annoncés par Keycloak : interrogé
 	// en interne, il recevait « http://keycloak.ceffio-identity.svc:8080 » et
@@ -388,7 +388,7 @@ func ensureOccApp(ctx context.Context, app string) error {
 }
 
 func runOccOutput(ctx context.Context, args ...string) (string, error) {
-	occArgs := append([]string{"exec", "-n", ns, "deploy/nextcloud", "--", "php", "occ"}, args...)
+	occArgs := append([]string{"exec", "-n", ns, "deploy/nextcloud", "-c", "nextcloud", "--", "php", "occ"}, args...)
 	out, err := k8s.Command(ctx, "kubectl", occArgs...).CombinedOutput()
 	return string(out), err
 }

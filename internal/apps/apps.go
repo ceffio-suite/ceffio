@@ -284,7 +284,7 @@ func occ(ctx context.Context, args ...string) error {
 // occSortie exécute occ et rend la sortie standard.
 func occSortie(ctx context.Context, args ...string) (string, error) {
 	complet := append([]string{
-		"exec", "-n", "ceffio-files", "deploy/nextcloud", "--",
+		"exec", "-n", "ceffio-files", "deploy/nextcloud", "-c", "nextcloud", "--",
 		"php", "occ",
 	}, args...)
 	cmd := k8s.Command(ctx, "kubectl", complet...)

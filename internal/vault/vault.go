@@ -76,6 +76,7 @@ import (
 	"time"
 
 	"github.com/ceffio-suite/ceffio/internal/k8sapi"
+	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"github.com/ceffio-suite/ceffio/internal/sso"
 )
 
@@ -212,6 +213,18 @@ func Deploy(ctx context.Context, domaine string) *Resultat {
 	// LES PERSONNES APRÈS LES SERVICES : l'OIDC dépend d'un client Keycloak, donc
 	// d'une partie de la pile qui doit déjà être debout. Le configurer avant ne
 	// ferait qu'échouer plus tôt, sur une cause moins claire.
+	// LES HELPERS PARTAGÉS LISENT LE COFFRE PAR L'ENVIRONNEMENT, pas par un Secret
+	// Kubernetes : c'est le cas des clients OIDC et du semis. On passe donc par la
+	// MÊME fonction que les autres modules (Acces) au lieu d'ouvrir ici une seconde
+	// voie qui finirait par diverger de la première.
+	if adresse, jetonEnv, errA := Acces(ctx, cli); errA == nil {
+		os.Setenv("BAO_ADDR", adresse)
+		os.Setenv("BAO_TOKEN", jetonEnv)
+		os.Setenv("BAO_MOTEUR", "kv")
+	} else {
+		fmt.Printf("  ∙ environnement du coffre non posé (%v) — les clients OIDC ne pourront pas s'y lire\n", errA)
+	}
+
 	if err := configurerOIDC(ctx, cli, domaine); err != nil {
 		fmt.Printf("  ∙ authentification des personnes non configurée : %v\n", err)
 		return &Resultat{}
@@ -1113,8 +1126,10 @@ func configurerOIDC(ctx context.Context, cli *k8sapi.Client, domaine string) err
 	if err := sso.AssurerClientCoffre(ctx, domaine); err != nil {
 		return fmt.Errorf("client OIDC du coffre : %w", err)
 	}
-	id, _ := cli.LireSecret(ctx, "ceffio-identity", "openbao-oidc", "client-id")
-	secret, _ := cli.LireSecret(ctx, "ceffio-identity", "openbao-oidc", "client-secret")
+	// LES IDENTIFIANTS VIENNENT DU COFFRE, plus d'un Secret Kubernetes : le client
+	// OIDC du coffre y est rangé comme celui des autres composants.
+	entreeOIDC, _ := secrets.LireEntreeCoffre(ctx, secrets.DepuisEnvironnement(), "openbao", "oidc")
+	id, secret := entreeOIDC["client-id"], entreeOIDC["client-secret"]
 	if id == "" || secret == "" {
 		return fmt.Errorf("Secret openbao-oidc absent ou incomplet dans ceffio-identity")
 	}
