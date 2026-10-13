@@ -384,10 +384,8 @@ spec:
       initContainers:
       - name: agent-du-coffre
         image: %[6]s
-        command: ["/bin/sh", "-c"]
-        args:
-        - |
-          exec /usr/bin/bao agent -config=/etc/agent/agent.hcl
+        # L'ENTRÉE DE CETTE IMAGE EST bao : on ne remplace QUE ses arguments.
+        args: ["agent", "-config=/etc/agent/agent.hcl"]
         env:
         - {name: BAO_ADDR, value: "http://openbao.ceffio-vault.svc:8200"}
         volumeMounts:
@@ -715,10 +713,8 @@ spec:
       initContainers:
       - name: agent-du-coffre
         image: %[5]s
-        command: ["/bin/sh", "-c"]
-        args:
-        - |
-          exec /usr/bin/bao agent -config=/etc/agent/agent.hcl
+        # L'ENTRÉE DE CETTE IMAGE EST bao : on ne remplace QUE ses arguments.
+        args: ["agent", "-config=/etc/agent/agent.hcl"]
         env:
         - {name: BAO_ADDR, value: "http://openbao.ceffio-vault.svc:8200"}
         volumeMounts:

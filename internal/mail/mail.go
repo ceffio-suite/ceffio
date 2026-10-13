@@ -331,10 +331,11 @@ spec:
       initContainers:
       - name: agent-du-coffre
         image: %[4]s
-        command: ["/bin/sh", "-c"]
-        args:
-        - |
-          exec /usr/bin/bao agent -config=/etc/agent/agent.hcl
+        # L'ENTRÉE DE CETTE IMAGE EST bao : on ne remplace QUE ses arguments.
+        # Overrider command pour y mettre un shell ferait perdre l'entrée de
+        # l'image — c'est ce qui a fait boucler le pod en CrashLoop, le script
+        # devenant un argument de bao, qui a affiché son aide.
+        args: ["agent", "-config=/etc/agent/agent.hcl"]
         env:
         - {name: BAO_ADDR, value: "http://openbao.ceffio-vault.svc:8200"}
         volumeMounts:
