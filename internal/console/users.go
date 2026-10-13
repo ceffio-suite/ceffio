@@ -16,6 +16,21 @@ type KCUser struct {
 	Username string `json:"username"`
 	Email    string `json:"email"`
 	Enabled  bool   `json:"enabled"`
+	// Protege marque le compte d'administration de la plateforme. L'interface
+	// s'en sert pour le SORTIR de la liste des comptes ordinaires : il ne se
+	// gère pas comme un utilisateur, il administre.
+	Protege bool `json:"protege,omitempty"`
+}
+
+// estCompteProtege dit si un identifiant désigne le compte d'administration de
+// la plateforme — celui qu'on ne désactive pas et qu'on ne supprime pas.
+//
+// LA COMPARAISON IGNORE LA CASSE : Keycloak traite « AdminCeffio » et
+// « adminceffio » comme le même compte. Comparer à l'identique laisserait
+// passer une variante de casse, et la protection serait contournable en
+// changeant une majuscule.
+func estCompteProtege(identifiant string) bool {
+	return strings.EqualFold(strings.TrimSpace(identifiant), compteAdmin)
 }
 
 // ---------------------------------------------------------------------------
@@ -97,20 +112,40 @@ func (s *Server) kcReq(r *http.Request, method, path, body string) (*http.Respon
 	return resp, nil
 }
 
+// ListUsers renvoie les comptes du realm, le compte d'administration marqué.
+//
+// POURQUOI LE MARQUAGE SE FAIT ICI ET PAS DANS L'INTERFACE : le nom du compte
+// d'administration est une règle du SERVEUR (c'est lui qui refuse de le
+// désactiver). La laisser à la page obligerait à la connaître des deux côtés,
+// et le jour où l'une des deux change, l'autre protège un compte qui n'existe
+// plus — en silence.
+func (s *Server) listUsers(r *http.Request) ([]KCUser, error) {
+	resp, err := s.kcReq(r, http.MethodGet, "/admin/realms/"+realm+"/users", "")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var users []KCUser
+	if err := json.NewDecoder(resp.Body).Decode(&users); err != nil {
+		return nil, err
+	}
+	for i := range users {
+		users[i].Protege = estCompteProtege(users[i].Username)
+	}
+	return users, nil
+}
+
 // ---------------------------------------------------------------------------
 // GET /api/users → liste ; POST /api/users → création (mot de passe non-temporaire).
 
 func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		resp, err := s.kcReq(r, http.MethodGet, "/admin/realms/"+realm+"/users", "")
+		users, err := s.listUsers(r)
 		if err != nil {
 			apiErr(w, 502, "list users: "+err.Error())
 			return
 		}
-		defer resp.Body.Close()
-		var users []KCUser
-		_ = json.NewDecoder(resp.Body).Decode(&users)
 		writeJSON(w, 200, map[string]any{"users": users})
 
 	case http.MethodPost:
@@ -135,7 +170,40 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// estUtilisateurProtege dit si l'identifiant envoyé par le client désigne le
+// compte d'administration de la plateforme.
+//
+// ON ACCEPTE DEUX FORMES : le nom (« adminceffio ») et l'id Keycloak (un UUID).
+// L'interface envoie l'id, un appel direct pourrait envoyer l'un ou l'autre —
+// ne vérifier que le nom laisserait passer l'id, et inversement.
+//
+// En cas de doute — identifiant inconnu, Keycloak injoignable — on répond NON
+// protégé : refuser une action légitime parce qu'une vérification a échoué
+// serait aussi gênant que l'inverse, et le contrôle porte sur un compte dont
+// l'identifiant se lit d'abord dans la réponse de Keycloak.
+func (s *Server) estUtilisateurProtege(r *http.Request, idOuNom string) bool {
+	if estCompteProtege(idOuNom) {
+		return true
+	}
+	users, err := s.listUsers(r)
+	if err != nil {
+		return false
+	}
+	for _, u := range users {
+		if u.ID == idOuNom {
+			return estCompteProtege(u.Username)
+		}
+	}
+	return false
+}
+
 func (s *Server) createUser(r *http.Request, username, email, password string) (string, error) {
+	// ON NE FABRIQUE PAS UN SECOND COMPTE D'ADMINISTRATION par mégarde : le nom
+	// est réservé, et une création qui le reprend échouerait sur un conflit peu
+	// lisible. Le refus est explicite.
+	if estCompteProtege(username) {
+		return "", fmt.Errorf("« %s » est réservé au compte d'administration de la plateforme", compteAdmin)
+	}
 	payload := map[string]any{"username": username, "enabled": true}
 	if email != "" {
 		payload["email"] = email
@@ -191,6 +259,21 @@ func (s *Server) handleUsersByID(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, 405, "méthode non supportée")
 		return
 	}
+
+	// LE COMPTE D'ADMINISTRATION N'EST PAS UN UTILISATEUR : on refuse AVANT
+	// d'agir, et on le dit. Sans ce contrôle, l'interface pourrait cacher les
+	// boutons sans que l'API cesse d'obéir — un appel direct désactiverait le
+	// compte administrateur de la plateforme, et plus personne n'administrerait
+	// Nextcloud ni le mail.
+	//
+	// On résout le nom par l'IDENTIFIANT : le client pourrait envoyer l'id
+	// Keycloak seul, et comparer l'action au nom n'aurait alors aucun effet.
+	if s.estUtilisateurProtege(r, id) {
+		apiErr(w, 403, "« "+compteAdmin+" » est le compte d'administration de la plateforme : "+
+			"il ne peut être ni désactivé, ni modifié ici. Utilisez la page Administration.")
+		return
+	}
+
 	switch action {
 	case "deactivate":
 		payload, _ := json.Marshal(map[string]any{"enabled": false})
@@ -201,6 +284,18 @@ func (s *Server) handleUsersByID(w http.ResponseWriter, r *http.Request) {
 		}
 		resp.Body.Close()
 		writeJSON(w, 200, map[string]any{"deactivated": true, "id": id})
+	// RÉACTIVER est l'INVERSE de désactiver, et n'existait pas : désactiver un
+	// compte par erreur laissait sans recours depuis l'interface, alors que
+	// Keycloak n'oublie rien. Une action sans son inverse est une impasse.
+	case "reactivate":
+		payload, _ := json.Marshal(map[string]any{"enabled": true})
+		resp, err := s.kcReq(r, http.MethodPut, "/admin/realms/"+realm+"/users/"+id, string(payload))
+		if err != nil {
+			apiErr(w, 502, "réactivation: "+err.Error())
+			return
+		}
+		resp.Body.Close()
+		writeJSON(w, 200, map[string]any{"reactivated": true, "id": id})
 	case "password":
 		var body struct {
 			Password string `json:"password"`

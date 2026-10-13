@@ -27,7 +27,7 @@ const (
 	// Bump OBLIGATOIRE à chaque changement de la page ou du code console :
 	// buildAndImportImage saute la reconstruction si le tag existe déjà dans
 	// containerd. Sans bump, l'ancienne image continue de servir.
-	imageTag = "1.32.2"
+	imageTag = "1.32.4"
 	imageRef = imageName + ":" + imageTag
 )
 

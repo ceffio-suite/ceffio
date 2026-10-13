@@ -209,7 +209,23 @@
       <section class="section" id="tab-users">
         <h2 class="section-title">Comptes du SSO</h2>
         <p class="section-sub">Realm Keycloak « ceffio » — un compte créé ici fonctionne sur Nextcloud, Element et Jitsi.</p>
+
+        <!-- LE COMPTE D'ADMINISTRATION EST SÉPARÉ, ET EN TÊTE : il ne se gère pas
+             comme un utilisateur (pas de désactivation, pas de suppression, pas
+             de réinitialisation depuis ici — sa rotation vit dans Administration).
+             Le laisser dans la liste ci-dessous laissait croire le contraire. -->
+        <div class="card" id="adminCard" style="display:none">
+          <h3>Compte d'administration</h3>
+          <p class="section-sub" style="margin-top:0">Ce compte administre la plateforme :
+          il ne peut être ni désactivé, ni supprimé. Son mot de passe se régénère
+          depuis la page <b>Administration</b>, d'où la rotation se propage à tous les services.</p>
+          <div id="adminUserEtat"></div>
+        </div>
+
+        <div style="height:14px" id="adminCardSpacer" ></div>
+
         <div class="card">
+          <h3>Créer un compte</h3>
           <div class="form-row">
             <input id="u_name" placeholder="Identifiant">
             <input id="u_email" placeholder="Email">
@@ -344,11 +360,18 @@
 <div class="overlay" id="keyOverlay">
   <div class="modal">
     <h2>Clé d'administration</h2>
-    <p>La clé se trouve dans le Secret Kubernetes <span class="mono">ceffio-console-key</span>.
+    <p>La clé d'administration vit dans le coffre de secrets (OpenBao), à l'entrée
+    <span class="mono">kv/ceffio/console/api</span> — et nulle part ailleurs.
     Elle n'est stockée que dans votre navigateur.</p>
     <p class="mono" style="font-size:11px;background:var(--bg2);padding:8px 10px;border-radius:6px;margin:10px 0">
-      kubectl get secret ceffio-console-key -n ceffio-system -o jsonpath='{.data.key}' | base64 -d
+      kubectl exec -n ceffio-vault openbao-0 -- sh -c 'BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$(cat /tmp/bao-token)" bao kv get -field=key kv/ceffio/console/api'
     </p>
+    <p class="section-sub" style="font-size:11.5px">Le jeton d'administration se lit d'abord
+    dans le Secret <span class="mono">openbao-installation</span> (namespace
+    <span class="mono">ceffio-vault</span>) et se dépose dans le pod. C'est le jeton
+    d'<b>installation</b> qui administre le coffre ; celui nommé
+    <span class="mono">openbao-token</span> est réservé aux services et ne donne pas
+    accès à cette entrée.</p>
     <input id="keyInput" type="password" placeholder="Clé admin" autocomplete="off">
     <div class="form-row">
       <button class="btn" onclick="saveKey()" style="flex:1">Connexion</button>
@@ -491,15 +514,45 @@
 
   async function renderUsers() {
     const d = await api('/api/users');
-    const rows = (d.users || []).map(u => `<tr>
+    const tous = d.users || [];
+
+    // SÉPARATION : le compte d'administration sort de la liste. Le drapeau vient
+    // du SERVEUR (`protege`) — c'est lui qui refuse les actions, la page ne fait
+    // que refléter sa règle. Décider ici quel nom est protégé créerait deux
+    // vérités, et le jour où elles divergent, la page cacherait des boutons que
+    // l'API exécuterait quand même.
+    const admin = tous.filter(u => u.protege);
+    const users = tous.filter(u => !u.protege);
+
+    const carte = $('adminCard');
+    if (admin.length) {
+      carte.style.display = '';
+      $('adminUserEtat').innerHTML = admin.map(u => `
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <span class="mono" style="font-weight:600">${esc(u.username)}</span>
+          <span class="muted mono">${esc(u.email || '—')}</span>
+          ${u.enabled ? '<span class="badge ok"><span class="bdot"></span>actif</span>' : '<span class="badge ko"><span class="bdot"></span>désactivé</span>'}
+          <span class="badge mut">compte d\'administration</span>
+        </div>
+        <div class="note" style="margin-top:10px">Aucune action de désactivation ni de
+        suppression n\'est proposée sur ce compte : elle couperait l\'administration de
+        la plateforme. Le mot de passe se change depuis <b>Administration → Rotation</b>.</div>
+      `).join('');
+    } else {
+      carte.style.display = 'none';
+    }
+
+    const rows = users.map(u => `<tr>
       <td style="font-weight:600">${esc(u.username)}</td>
       <td class="muted">${esc(u.email || '—')}</td>
       <td>${u.enabled ? '<span class="badge ok"><span class="bdot"></span>actif</span>' : '<span class="badge ko"><span class="bdot"></span>désactivé</span>'}</td>
       <td style="text-align:right;white-space:nowrap">
         <button class="btn-ghost" onclick="resetPwd('${esc(u.id)}')">Réinit. mdp</button>
-        ${u.enabled ? `<button class="btn-danger" onclick="deact('${esc(u.id)}','${esc(u.username)}')">Désactiver</button>` : ''}
+        ${u.enabled
+          ? `<button class="btn-danger" onclick="deact('${esc(u.id)}','${esc(u.username)}')">Désactiver</button>`
+          : `<button class="btn" onclick="react('${esc(u.id)}','${esc(u.username)}')">Réactiver</button>`}
       </td></tr>`).join('');
-    $('usersTable').querySelector('tbody').innerHTML = rows || `<tr><td colspan="4"><div class="empty">Aucun utilisateur — créez le premier compte ci-dessus.</div></td></tr>`;
+    $('usersTable').querySelector('tbody').innerHTML = rows || `<tr><td colspan="4"><div class="empty">Aucun autre compte — créez le premier ci-dessus.</div></td></tr>`;
   }
 
   window.createUser = async () => {
@@ -519,6 +572,11 @@
   window.deact = async (id, name) => {
     if (!confirm('Désactiver « ' + name + ' » ?')) return;
     try { await api('/api/users/' + id + '/deactivate', { method: 'POST' }); toast(name + ' désactivé'); await renderUsers(); }
+    catch (e) { toast('Erreur : ' + e.message, 'ko'); }
+  };
+
+  window.react = async (id, name) => {
+    try { await api('/api/users/' + id + '/reactivate', { method: 'POST' }); toast(name + ' réactivé'); await renderUsers(); }
     catch (e) { toast('Erreur : ' + e.message, 'ko'); }
   };
 
