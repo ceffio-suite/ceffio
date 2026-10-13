@@ -47,13 +47,10 @@ func Deploy(ctx context.Context, domain string) error {
 	if err := ensureConsoleKey(ctx); err != nil {
 		return err
 	}
-	// Les identifiants Keycloak vivent dans ceffio-identity ; la console tourne
-	// dans ceffio-system et un secretKeyRef ne traverse PAS les namespaces. On
-	// copie donc le secret chez la console : sans cette copie les variables
-	// seraient vides et la console repondrait « credentials absents ».
-	if err := copierSecret(ctx, "ceffio-identity", "keycloak-admin", deployNS); err != nil {
-		return err
-	}
+	// Les identifiants Keycloak sont lus DANS LE COFFRE par l'injecteur, comme
+	// tous les autres composants. La console est le SEUL service dont l'image ne
+	// contient pas de shell : elle ne peut pas « sourcer » /secrets/env, elle le
+	// lit elle-même au démarrage (secrets.ChargerDepuisFichier).
 	if err := applyConsoleManifest(ctx, domain); err != nil {
 		return err
 	}
