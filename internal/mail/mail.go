@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/ceffio-suite/ceffio/internal/k8s"
+	"github.com/ceffio-suite/ceffio/internal/secrets"
 )
 
 // Version réelle constatée sur Docker Hub (pas inventée).
@@ -106,28 +107,48 @@ func domaineMail(domain string) string {
 // au mauvais endroit.
 func DomaineMessagerie(domain string) string { return domaineMail(domain) }
 
+// ensureSecrets garantit le secret d'administration de Stalwart.
+//
+// TROIS SOURCES, DANS CET ORDRE : le COFFRE, puis le Secret Kubernetes, puis la
+// génération. C'est cet ordre qui permet de basculer sans interruption — une
+// valeur déjà vivante est REPRISE, jamais refabriquée. La régénérer rendrait les
+// données de Stalwart illisibles, puisque « storage » est la clé d'encryption de
+// son stockage interne.
+//
+// LE COFFRE PASSE EN PREMIER parce qu'il est la source de vérité quand il est là,
+// et parce que c'est ce qui rend une rotation possible : tourner un secret dans
+// le coffre, puis redéployer, suffit à le propager — sans toucher au cluster. Le
+// repli sur Kubernetes garde une installation sans OpenBao parfaitement
+// fonctionnelle, ce qui est la règle du module de secrets.
+//
+// LA GÉNÉRATION NE SE DÉCLENCHE QUE SI LES DEUX SONT MUETS, et elle le dit : un
+// secret refabriqué à l'aveugle est la panne la plus coûteuse, parce qu'elle ne
+// se voit qu'au moment où le service ne comprend plus ses propres données.
 func ensureSecrets(ctx context.Context) error {
-	if secretExists(ctx, "stalwart-admin") {
-		return nil
+	coffre := secrets.DepuisEnvironnement()
+
+	donnees := map[string]string{"username": "admin"}
+	for _, a := range []struct {
+		cle      string
+		longueur int
+	}{
+		{"password", 24},
+		{"storage", 32},
+	} {
+		v, err := secrets.LireOuSecret(ctx, coffre, "stalwart", "admin", a.cle,
+			"ceffio-mail/stalwart-admin", a.cle)
+		if err == nil && v != "" {
+			donnees[a.cle] = v
+			continue
+		}
+		g, err := genSecret(a.longueur)
+		if err != nil {
+			return err
+		}
+		donnees[a.cle] = g
+		fmt.Printf("∙ %s de Stalwart généré (absent du coffre et de Kubernetes)\n", a.cle)
 	}
-	fmt.Println("∙ secret admin Stalwart (généré)")
-	// Deux secrets distincts :
-	//   - admin  : le mot de passe du compte administrateur
-	//   - storage : la clé d'encryption du stockage interne de Stalwart
-	// Les régénérer à chaque déploiement rendrait les données illisibles.
-	admin, err := genSecret(24)
-	if err != nil {
-		return err
-	}
-	storage, err := genSecret(32)
-	if err != nil {
-		return err
-	}
-	return createSecret(ctx, "stalwart-admin", map[string]string{
-		"username": "admin",
-		"password": admin,
-		"storage":  storage,
-	})
+	return createSecret(ctx, "stalwart-admin", donnees)
 }
 
 func applyWorkload(ctx context.Context, domaine string) error {
@@ -337,11 +358,6 @@ func configurerRelais(ctx context.Context, hote string, port int, utilisateur, m
 // ---------------------------------------------------------------------------
 // Utilitaires locaux
 // ---------------------------------------------------------------------------
-
-func secretExists(ctx context.Context, name string) bool {
-	err := k8s.Command(ctx, "kubectl", "-n", ns, "get", "secret", name).Run()
-	return err == nil
-}
 
 func createSecret(ctx context.Context, name string, kv map[string]string) error {
 	var b strings.Builder

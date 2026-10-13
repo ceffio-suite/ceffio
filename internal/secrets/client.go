@@ -42,34 +42,40 @@ func (c *client) entetes(req *http.Request) {
 	}
 }
 
-// Lire rend la valeur d'un secret.
+// LireEntree rend TOUTES les clés d'une entrée du coffre.
 //
-// La lecture se fait sur le chemin `data/` (KV versionné) : c'est le chemin qui
+// POURQUOI PAR ENTRÉE ET NON PAR CLÉ : la première version lisait une clé par
+// chemin (« ceffio/nextcloud/password »). Un coffre rangé ainsi ne se parcourt
+// pas — on y trouve « un mot de passe » sans savoir à quoi il ouvre, et chercher
+// un compte ne donne rien. Une entrée par COMPTE porte ses clés ensemble, et se
+// lit d'un coup d'œil.
+//
+// La lecture se fait sur le chemin `data/` (KV versionné) : c'est celui qui
 // porte les VALEURS, alors que `metadata/` ne sert qu'à lister. Confondre les
-// deux donne `data: null` et fait croire à un chemin vide.
-func (c *client) Lire(ctx context.Context, composant, nom string) (string, error) {
+// deux donne `data: null` et fait croire à une entrée vide.
+func (c *client) LireEntree(ctx context.Context, composant, nom string) (map[string]string, error) {
 	chemin := fmt.Sprintf("%s/v1/%s/data/%s",
 		strings.TrimRight(c.cfg.Adresse, "/"), c.cfg.Moteur,
 		c.cfg.Chemin(composant, nom))
 
 	req, err := http.NewRequestWithContext(ctx, "GET", chemin, nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	c.entetes(req)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	brut, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode == http.StatusNotFound {
-		return "", fmt.Errorf("secret absent du coffre : %s", c.cfg.Chemin(composant, nom))
+		return nil, fmt.Errorf("entrée absente du coffre : %s", c.cfg.Chemin(composant, nom))
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("coffre a refusé (HTTP %d) : %.150s",
+		return nil, fmt.Errorf("coffre a refusé (HTTP %d) : %.150s",
 			resp.StatusCode, string(brut))
 	}
 
@@ -84,14 +90,12 @@ func (c *client) Lire(ctx context.Context, composant, nom string) (string, error
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(brut, &corps); err != nil {
-		return "", fmt.Errorf("réponse illisible du coffre : %w", err)
+		return nil, fmt.Errorf("réponse illisible du coffre : %w", err)
 	}
-
-	v, ok := corps.Data.Data[nom]
-	if !ok {
-		return "", fmt.Errorf("clé « %s » absente dans %s", nom, c.cfg.Chemin(composant, nom))
+	if len(corps.Data.Data) == 0 {
+		return nil, fmt.Errorf("entrée vide dans le coffre : %s", c.cfg.Chemin(composant, nom))
 	}
-	return v, nil
+	return corps.Data.Data, nil
 }
 
 // Ecrire pose une valeur dans le coffre.
@@ -99,14 +103,12 @@ func (c *client) Lire(ctx context.Context, composant, nom string) (string, error
 // Idempotent au sens utile : réécrire la même valeur crée une nouvelle version,
 // ce qui est le comportement voulu — l'historique est conservé, et un secret
 // écrasé par erreur reste récupérable.
-func (c *client) Ecrire(ctx context.Context, composant, nom, valeur string) error {
+func (c *client) EcrireEntree(ctx context.Context, composant, nom string, donnees map[string]string) error {
 	chemin := fmt.Sprintf("%s/v1/%s/data/%s",
 		strings.TrimRight(c.cfg.Adresse, "/"), c.cfg.Moteur,
 		c.cfg.Chemin(composant, nom))
 
-	poids, err := json.Marshal(map[string]any{
-		"data": map[string]string{nom: valeur},
-	})
+	poids, err := json.Marshal(map[string]any{"data": donnees})
 	if err != nil {
 		return err
 	}
@@ -188,19 +190,28 @@ func (c *client) Lister(ctx context.Context, composant string) ([]string, error)
 // Ordre de priorité : coffre d'abord (c'est la source de vérité quand il est
 // là), Kubernetes en repli. C'est ce qui permet de faire tourner un secret en
 // l'écrivant dans le coffre, sans toucher au cluster.
-func LireOuSecret(ctx context.Context, cfg *Coffre, composant, nom, nsSecret, cle string) (string, error) {
+func LireOuSecret(ctx context.Context, cfg *Coffre, composant, nom, cle, nsSecret, cleSecret string) (string, error) {
 	if cfg.Dispo() {
 		c := nouveauClient(cfg)
-		v, err := c.Lire(ctx, composant, nom)
+		entree, err := c.LireEntree(ctx, composant, nom)
 		if err == nil {
-			return v, nil
+			if v, ok := entree[cle]; ok && v != "" {
+				return v, nil
+			}
+			// L'ENTRÉE EXISTE MAIS LA CLÉ MANQUE : on le dit, puis on se rabat.
+			// Ce n'est pas la même chose qu'une entrée absente — confondre les
+			// deux ferait passer un coffre incomplet pour un coffre vide, et la
+			// cause disparaîtrait du compte rendu.
+			fmt.Printf("  ∙ coffre : clé « %s » absente dans %s — repli sur le Secret Kubernetes\n",
+				cle, cfg.Chemin(composant, nom))
+		} else {
+			// Un coffre configuré mais injoignable n'est pas une panne du
+			// déploiement : on prévient et on continue.
+			fmt.Printf("  ∙ coffre injoignable pour %s (%v) — repli sur le Secret Kubernetes\n",
+				cfg.Chemin(composant, nom), err)
 		}
-		// Un coffre configuré mais injoignable n'est pas une panne du
-		// déploiement : on prévient et on continue.
-		fmt.Printf("  ∙ coffre injoignable pour %s/%s (%v) — repli sur le Secret Kubernetes\n",
-			composant, nom, err)
 	}
-	return lireSecretK8s(ctx, nsSecret, cle)
+	return lireSecretK8s(ctx, nsSecret, cleSecret)
 }
 
 // EcrireDansCoffre pose un secret dans le coffre, si configuré.
@@ -208,17 +219,17 @@ func LireOuSecret(ctx context.Context, cfg *Coffre, composant, nom, nsSecret, cl
 // Si aucun coffre n'est configuré, on ne fait RIEN et on le dit : le secret
 // reste dans Kubernetes, et c'est le comportement nominal d'une installation sans
 // OpenBao.
-func EcrireDansCoffre(ctx context.Context, cfg *Coffre, composant, nom, valeur string) error {
+func EcrireDansCoffre(ctx context.Context, cfg *Coffre, composant, nom string, donnees map[string]string) error {
 	if !cfg.Dispo() {
 		return nil
 	}
 	c := nouveauClient(cfg)
-	if err := c.Ecrire(ctx, composant, nom, valeur); err != nil {
+	if err := c.EcrireEntree(ctx, composant, nom, donnees); err != nil {
 		return fmt.Errorf("écriture dans le coffre impossible (%s/%s) : %w",
 			composant, nom, err)
 	}
-	// On n'affiche JAMAIS la valeur — seulement son chemin et sa longueur.
-	fmt.Printf("  ∙ coffre : %s écrit (len=%d)\n", cfg.Chemin(composant, nom), len(valeur))
+	// On n'affiche JAMAIS les valeurs — seulement le chemin et le nombre de clés.
+	fmt.Printf("  ∙ coffre : %s écrit (%d clé(s))\n", cfg.Chemin(composant, nom), len(donnees))
 	return nil
 }
 
