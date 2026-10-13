@@ -34,6 +34,8 @@ import (
 	"strings"
 
 	"github.com/ceffio-suite/ceffio/internal/k8s"
+	"github.com/ceffio-suite/ceffio/internal/secrets"
+	"github.com/ceffio-suite/ceffio/internal/version"
 )
 
 // Versions épinglées. Rien ne suit `latest` : un composant qui suit un tag
@@ -94,6 +96,9 @@ func Deploy(ctx context.Context) error {
 	if err := ensureSecrets(ctx); err != nil {
 		return err
 	}
+	if err := deployAgent(ctx); err != nil {
+		return err
+	}
 	if err := deployNATS(ctx); err != nil {
 		return err
 	}
@@ -123,46 +128,115 @@ func Deploy(ctx context.Context) error {
 // Secrets
 // ---------------------------------------------------------------------------
 
-// ensureSecrets génère les secrets du HPB s'ils n'existent pas.
+// ensureSecrets garantit les secrets du HPB DANS LE COFFRE, ET NULLE PART AILLEURS.
 //
-// Ils ne sont JAMAIS dans les manifests ni dans Git : générés au déploiement,
-// stockés dans des Secrets Kubernetes.
+// Ils ne sont JAMAIS dans les manifests ni dans Git. Depuis que le coffre est la
+// source unique, ils ne sont plus non plus dans un Secret Kubernetes : les deux
+// charges qui les consomment — coturn et le signaling — les lisent par leur agent
+// au démarrage. Une valeur recopiée à deux endroits finit par diverger, et la
+// divergence se paie au moment où le service ne comprend plus ses propres données.
 func ensureSecrets(ctx context.Context) error {
-	if secretExiste(ctx, "talk-secrets") {
-		return nil
-	}
-	fmt.Println("∙ secrets Talk générés (signaling, TURN)")
+	coffre := secrets.DepuisEnvironnement()
 
-	hashKey, err := genSecret(32)
-	if err != nil {
-		return err
-	}
-	blockKey, err := genSecret(16)
-	if err != nil {
-		return err
-	}
-	partage, err := genSecret(32)
-	if err != nil {
-		return err
-	}
-	turn, err := genSecret(32)
-	if err != nil {
-		return err
+	donnees := map[string]string{}
+	existant, err := secrets.LireEntreeCoffre(ctx, coffre, "talk", "signaling")
+	switch {
+	case err == nil:
+		donnees = existant
+	case secrets.EntreeAbsente(err):
+		// Première installation : la génération ci-dessous s'en charge.
+	default:
+		// Un coffre injoignable n'est pas une raison de fabriquer des valeurs
+		// neuves : les clients raccordés continueraient avec les anciennes, et
+		// plus rien ne se comprendrait.
+		return fmt.Errorf("coffre illisible pour talk/signaling : %w", err)
 	}
 
+	for _, a := range []struct {
+		cle      string
+		longueur int
+	}{
+		{"hash-key", 32},
+		{"block-key", 16},
+		{"partage", 32},
+		{"turn-secret", 32},
+	} {
+		if donnees[a.cle] != "" {
+			continue
+		}
+		g, err := genSecret(a.longueur)
+		if err != nil {
+			return err
+		}
+		donnees[a.cle] = g
+		fmt.Printf("∙ secret Talk « %s » généré (absent du coffre)\n", a.cle)
+	}
+	return secrets.EcrireDansCoffre(ctx, coffre, "talk", "signaling", donnees)
+}
+
+// ---------------------------------------------------------------------------
+// Agent du coffre
+// ---------------------------------------------------------------------------
+
+// deployAgent pose ce qui est commun aux deux charges qui lisent le coffre : le
+// ServiceAccount que le coffre valide, et la configuration de l'agent.
+//
+// POURQUOI UNE SEULE CONFIGURATION POUR DEUX CHARGES : coturn et le signaling
+// lisent la MÊME entrée du coffre, donc leurs gabarits sont identiques. Un
+// fichier dupliqué finirait par diverger de l'autre — et la divergence, ici,
+// ferait que le signaling et Nextcloud ne partageraient plus le même secret.
+func deployAgent(ctx context.Context) error {
 	manifeste := fmt.Sprintf(`apiVersion: v1
-kind: Secret
+kind: ServiceAccount
 metadata:
-  name: talk-secrets
-  namespace: %s
-type: Opaque
-stringData:
-  hash-key: %q
-  block-key: %q
-  partage: %q
-  turn-secret: %q
-`, ns, hashKey, blockKey, partage, turn)
+  name: talk
+  namespace: %[1]s
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: talk-agent
+  namespace: %[1]s
+data:
+  # L'AGENT S'ARRÊTE APRÈS AVOIR RENDU — c'est ce qui en fait un init-container.
+  # « index » EST OBLIGATOIRE POUR LES CLÉS À TIRET : « .Data.data.hash-key »
+  # n'est pas une expression valide en syntaxe Go, le tiret étant un opérateur.
+  # L'erreur de rendu ne dit pas cela ; elle parle de gabarit invalide.
+  agent.hcl: |
+    pid_file = "/tmp/bao-agent.pid"
 
+    exit_after_auth = true
+
+    vault {
+      address = "http://openbao.ceffio-vault.svc:8200"
+      retry { num_retries = 2 }
+    }
+
+    auto_auth {
+      method "kubernetes" {
+        mount_path = "auth/kubernetes"
+        config = {
+          role       = "talk"
+          token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+        }
+      }
+    }
+
+    template_config {
+      exit_on_retry_failure = true
+    }
+
+    template {
+      destination          = "/secrets/env"
+      error_on_missing_key = true
+      contents             = <<EOT
+    export HASH_KEY='{{ with secret "kv/data/ceffio/talk/signaling" }}{{ index .Data.data "hash-key" }}{{ end }}'
+    export BLOCK_KEY='{{ with secret "kv/data/ceffio/talk/signaling" }}{{ index .Data.data "block-key" }}{{ end }}'
+    export SHARED_SECRET='{{ with secret "kv/data/ceffio/talk/signaling" }}{{ index .Data.data "partage" }}{{ end }}'
+    export TURN_SECRET='{{ with secret "kv/data/ceffio/talk/signaling" }}{{ index .Data.data "turn-secret" }}{{ end }}'
+    EOT
+    }
+`, ns)
 	return appliquer(ctx, manifeste)
 }
 
@@ -298,23 +372,52 @@ spec:
       # port unique. Le pod écoute donc directement sur l'IP de la VM.
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
-      containers:
-      - name: coturn
-        image: %[2]s
-        # Enveloppe de démarrage : elle découvre l'adresse publique, puis la
-        # transmet à coturn. Le remplacement se fait ici, pas dans l'installation.
+      # L'IDENTITÉ QUE LE COFFRE VALIDE, et le groupe partagé qui rend le fichier
+      # rendu lisible par le conteneur applicatif — les deux ne tournent pas sous
+      # le même utilisateur.
+      serviceAccountName: talk
+      securityContext:
+        fsGroup: 1000
+      # L'AGENT REND TURN_SECRET, PUIS DISPARAÎT (exit_after_auth). Aucun repli :
+      # c'est le coffre ou rien, et le pod ne démarre pas si le coffre ne répond
+      # pas — visible, plutôt qu'un service qui tourne avec un secret vide.
+      initContainers:
+      - name: agent-du-coffre
+        image: %[6]s
         command: ["/bin/sh", "-c"]
         args:
         - |
-%[3]s
+          exec /usr/bin/bao agent -config=/etc/agent/agent.hcl
         env:
-        - name: TURN_SECRET
-          valueFrom: {secretKeyRef: {name: talk-secrets, key: turn-secret}}
+        - {name: BAO_ADDR, value: "http://openbao.ceffio-vault.svc:8200"}
+        volumeMounts:
+        - {name: agent-config, mountPath: /etc/agent, readOnly: true}
+        - {name: secrets, mountPath: /secrets}
+      containers:
+      - name: coturn
+        image: %[2]s
+        # Enveloppe de démarrage : elle charge les secrets rendus par l'agent,
+        # découvre l'adresse publique, puis la transmet à coturn.
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          set -a
+          . /secrets/env
+          set +a
+%[3]s
+        volumeMounts:
+        - {name: secrets, mountPath: /secrets, readOnly: true}
         ports:
         - {name: turn, containerPort: %[4]d, protocol: UDP}
         - {name: turn-tcp, containerPort: %[4]d, protocol: TCP}
         - {name: turns, containerPort: %[5]d, protocol: TCP}
         resources: {limits: {memory: 1Gi, cpu: "1"}}
+      volumes:
+      # Le fichier rendu par l'agent : le seul lien entre les deux conteneurs.
+      - name: secrets
+        emptyDir: {}
+      - name: agent-config
+        configMap: {name: talk-agent}
 ---
 # NodePort, PAS ClusterIP : ces ports doivent être joignables depuis Internet,
 # via les règles de redirection du pare-feu vers l'IP de la VM. Un ClusterIP
@@ -331,7 +434,7 @@ spec:
   - {name: turn, port: %[4]d, targetPort: %[4]d, protocol: UDP}
   - {name: turn-tcp, port: %[4]d, targetPort: %[4]d, protocol: TCP}
   - {name: turns, port: %[5]d, targetPort: %[5]d, protocol: TCP}
-`, ns, coturnImage, indentYaml(script, 10), portTurn, portTurnTLS)
+`, ns, coturnImage, indentYaml(script, 10), portTurn, portTurnTLS, version.ImageDe("openbao"))
 	return appliquer(ctx, manifeste)
 }
 
@@ -350,13 +453,19 @@ spec:
 // Le token est fourni par variable d'environnement au moment du déploiement
 // (GHCR_TOKEN) — il n'est JAMAIS écrit dans le code ni dans un manifeste.
 func ensurePullSecret(ctx context.Context) error {
+	// L'EXISTENCE DU SECRET SE REGARDE AVANT LE JETON, pas après.
+	//
+	// Sinon toute ré-exécution sans la variable d'environnement échoue, alors que
+	// le secret est déjà en place et suffit — et l'échec coupe le déploiement à
+	// cet endroit : les composants suivants ne sont jamais appliqués, sans que
+	// rien ne le dise. C'est exactement ce qui est arrivé au signaling de Talk.
+	if secretExiste(ctx, "ghcr-pull") {
+		return nil
+	}
 	token := os.Getenv("GHCR_TOKEN")
 	if token == "" {
 		return fmt.Errorf("GHCR_TOKEN absent : l'image Janus est sur GHCR (privé) et " +
 			"le cluster doit pouvoir la tirer. Fournir un token avec read:packages")
-	}
-	if secretExiste(ctx, "ghcr-pull") {
-		return nil
 	}
 	fmt.Println("∙ secret de tirage GHCR créé")
 
@@ -591,19 +700,45 @@ spec:
   template:
     metadata: {labels: {app: talk-signaling}}
     spec:
+      # L'IDENTITÉ QUE LE COFFRE VALIDE, et le groupe partagé qui rend le fichier
+      # rendu lisible — les deux conteneurs ne tournent pas sous le même
+      # utilisateur.
+      serviceAccountName: talk
+      securityContext:
+        fsGroup: 1000
+      # L'AGENT REND LES SECRETS DU SIGNALING, PUIS DISPARAÎT.
+      #
+      # Le signaling attend quatre variables — HASH_KEY, BLOCK_KEY, SHARED_SECRET,
+      # TURN_SECRET — dont les deux dernières doivent être IDENTIQUES à celles que
+      # Nextcloud détient. Une seule source, donc : le coffre. Le raccordement
+      # Nextcloud lit la même entrée.
+      initContainers:
+      - name: agent-du-coffre
+        image: %[5]s
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          exec /usr/bin/bao agent -config=/etc/agent/agent.hcl
+        env:
+        - {name: BAO_ADDR, value: "http://openbao.ceffio-vault.svc:8200"}
+        volumeMounts:
+        - {name: agent-config, mountPath: /etc/agent, readOnly: true}
+        - {name: secrets, mountPath: /secrets}
       containers:
       - name: signaling
         image: %[3]s
-        env:
-        - name: SHARED_SECRET
-          valueFrom: {secretKeyRef: {name: talk-secrets, key: partage}}
-        - name: TURN_SECRET
-          valueFrom: {secretKeyRef: {name: talk-secrets, key: turn-secret}}
-        - name: HASH_KEY
-          valueFrom: {secretKeyRef: {name: talk-secrets, key: hash-key}}
-        - name: BLOCK_KEY
-          valueFrom: {secretKeyRef: {name: talk-secrets, key: block-key}}
+        # Le fichier rendu est chargé AVANT le serveur : le signaling refuse de
+        # démarrer sans ses clés de session (« hash key is not set »), donc un
+        # secret manquant se voit tout de suite.
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          set -a
+          . /secrets/env
+          set +a
+          exec /usr/bin/nextcloud-spreed-signaling -config /config/server.conf
         volumeMounts:
+        - {name: secrets, mountPath: /secrets, readOnly: true}
         - {name: config, mountPath: /config}
         ports:
         - {name: http, containerPort: %[4]d, protocol: TCP}
@@ -611,6 +746,11 @@ spec:
       volumes:
       - name: config
         configMap: {name: talk-signaling-config}
+      # Le fichier rendu par l'agent : le seul lien entre les deux conteneurs.
+      - name: secrets
+        emptyDir: {}
+      - name: agent-config
+        configMap: {name: talk-agent}
 ---
 apiVersion: v1
 kind: Service
@@ -621,7 +761,7 @@ spec:
   selector: {app: talk-signaling}
   ports:
   - {name: http, port: %[4]d, targetPort: %[4]d, protocol: TCP}
-`, ns, indentYaml(config, 4), signalingImage, portSignaling)
+`, ns, indentYaml(config, 4), signalingImage, portSignaling, version.ImageDe("openbao"))
 
 	return appliquer(ctx, manifeste)
 }
@@ -652,10 +792,16 @@ func brancherNextcloud(ctx context.Context) error {
 		return fmt.Errorf("URL du signaling : %w", err)
 	}
 
-	// 3. Le secret partagé, identique dans server.conf du signaling.
-	secret, err := lireSecret(ctx, "talk-secrets", "partage")
+	// 3. Les secrets du signaling, LUS AU COFFRE — source unique depuis que les
+	//    Secrets Kubernetes ont disparu. Le signaling lit la même entrée par son
+	//    agent : les deux côtés ne peuvent pas diverger.
+	entree, err := secrets.LireEntreeCoffre(ctx, secrets.DepuisEnvironnement(), "talk", "signaling")
 	if err != nil {
-		return err
+		return fmt.Errorf("secrets Talk illisibles au coffre : %w", err)
+	}
+	secret := entree["partage"]
+	if secret == "" {
+		return fmt.Errorf("secret partagé absent de l'entrée talk/signaling du coffre")
 	}
 	if err := occ(ctx, "config:app:set", "spreed", "signaling_server_secret", "--value", secret); err != nil {
 		return fmt.Errorf("secret du signaling : %w", err)
@@ -667,9 +813,9 @@ func brancherNextcloud(ctx context.Context) error {
 	if err := occ(ctx, "config:app:set", "spreed", "turn_servers", "--value", serveurs); err != nil {
 		return fmt.Errorf("serveurs TURN : %w", err)
 	}
-	turnSecret, err := lireSecret(ctx, "talk-secrets", "turn-secret")
-	if err != nil {
-		return err
+	turnSecret := entree["turn-secret"]
+	if turnSecret == "" {
+		return fmt.Errorf("secret TURN absent de l'entrée talk/signaling du coffre")
 	}
 	if err := occ(ctx, "config:app:set", "spreed", "turn_secret", "--value", turnSecret); err != nil {
 		return fmt.Errorf("secret TURN : %w", err)

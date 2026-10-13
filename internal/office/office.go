@@ -53,24 +53,36 @@ func Deploy(ctx context.Context) error {
 }
 
 func ensureJWTSecret(ctx context.Context) error {
-	// LE COFFRE D'ABORD, le Secret Kubernetes en repli, la génération en dernier.
-	// Même ordre que pour Stalwart, et pour la même raison : une valeur vivante
-	// est REPRISE, jamais refabriquée. Un jeton régénéré casserait la signature
-	// des deux côtés à la fois, et le symptôme serait « Invalid token » — un
-	// message qui ne dit pas lequel des deux a changé.
 	coffre := secrets.DepuisEnvironnement()
-	jwt, err := secrets.LireOuSecret(ctx, coffre, "onlyoffice", "jwt", "jwt",
-		"ceffio-office/onlyoffice-secret", "jwt")
-	if err != nil || jwt == "" {
-		jwt, err = genSecret(24)
+
+	// LE COFFRE EST LA SOURCE UNIQUE — plus aucune copie dans Kubernetes.
+	// Le Secret « onlyoffice-secret » n'est plus créé : une valeur qui vit à deux
+	// endroits finit par diverger, et la double écriture vers Nextcloud rendrait
+	// cette divergence invisible jusqu'au jour où la signature ne correspond plus.
+	donnees := map[string]string{}
+	existant, err := secrets.LireEntreeCoffre(ctx, coffre, "onlyoffice", "jwt")
+	switch {
+	case err == nil:
+		donnees = existant
+	case secrets.EntreeAbsente(err):
+		// Première installation : on génère ci-dessous.
+	default:
+		return fmt.Errorf("coffre illisible pour onlyoffice/jwt : %w", err)
+	}
+	jwt := donnees["jwt"]
+	if jwt == "" {
+		// Une valeur vivante est REPRISE, jamais refabriquée : un jeton régénéré
+		// ferait cesser la signature côté serveur et côté connecteur à la fois, et
+		// le symptôme — « Invalid token » — ne dit pas lequel des deux a changé.
+		genere, err := genSecret(24)
 		if err != nil {
 			return err
 		}
-		fmt.Println("∙ jeton JWT ONLYOFFICE généré (absent du coffre et de Kubernetes)")
+		jwt = genere
+		donnees = map[string]string{"jwt": jwt}
+		fmt.Println("∙ jeton JWT ONLYOFFICE généré (absent du coffre)")
 	}
-	// Le Secret Kubernetes est TOUJOURS posé : c'est à la fois le repli du pod et
-	// ce que lit le connecteur Nextcloud si le coffre venait à manquer.
-	return createSecret(ctx, "onlyoffice-secret", map[string]string{"jwt": jwt})
+	return secrets.EcrireDansCoffre(ctx, coffre, "onlyoffice", "jwt", donnees)
 }
 
 func applyWorkload(ctx context.Context) error {
@@ -169,20 +181,20 @@ spec:
       serviceAccountName: onlyoffice
       securityContext:
         fsGroup: 1000
-      # L'AGENT REND LES SECRETS, PUIS DISPARAÎT. Il tourne avec l'image du COFFRE —
-      # aucun binaire à copier —, s'authentifie par Kubernetes, écrit le résultat
-      # dans le volume partagé et s'arrête. Le conteneur applicatif ne fait plus
-      # que LIRE un fichier.
+      # L'AGENT REND LES SECRETS, PUIS DISPARAÎT. Il tourne avec l'image du COFFRE,
+      # s'authentifie par Kubernetes, écrit le résultat dans le volume partagé et
+      # s'arrête (exit_after_auth).
+      #
+      # AUCUN REPLI : le coffre est la source unique, et il n'existe plus de Secret
+      # Kubernetes pour ce composant. Un repli masquerait une panne du coffre au
+      # lieu de la montrer.
       initContainers:
         - name: agent-du-coffre
           image: %s
           command: ["/bin/sh", "-c"]
           args:
             - |
-              if /usr/bin/bao status >/dev/null 2>&1; then
-                exec /usr/bin/bao agent -config=/etc/agent/agent.hcl
-              fi
-              echo "coffre injoignable : aucun secret rendu, le conteneur principal se rabattra"
+              exec /usr/bin/bao agent -config=/etc/agent/agent.hcl
           env:
             - name: BAO_ADDR
               value: "http://openbao.ceffio-vault.svc:8200"
@@ -196,30 +208,14 @@ spec:
         - name: onlyoffice
           image: %s
           # LE CONTENEUR PRINCIPAL CHARGE LE FICHIER RENDU, PUIS LANCE LE SCRIPT
-          # D'ENTRÉE D'ORIGINE — celui de l'image, qui prépare le serveur. Le
-          # remplacer casserait tout.
-          #
-          # Si l'agent a échoué, le fichier n'existe pas : on retombe alors sur le
-          # Secret Kubernetes, en le disant.
+          # D'ENTRÉE D'ORIGINE — celui de l'image, qui prépare le serveur.
           command: ["/bin/bash", "-c"]
           args:
             - |
-              if [ -s /secrets/env ]; then
-                set -a
-                . /secrets/env
-                set +a
-              else
-                echo "coffre injoignable : repli sur le Secret Kubernetes"
-                export JWT_ENABLED="true"
-                export JWT_SECRET="$JWT_SECRET_REPLI"
-              fi
+              set -a
+              . /secrets/env
+              set +a
               exec /bin/bash /app/ds/run-document-server.sh
-          env:
-            - name: JWT_SECRET_REPLI
-              valueFrom:
-                secretKeyRef:
-                  name: onlyoffice-secret
-                  key: jwt
           ports:
             - name: http
               containerPort: 80
@@ -361,7 +357,7 @@ func runOccOutput(ctx context.Context, args ...string) (string, error) {
 	return string(out), err
 }
 
-// readSecretJWT rend le jeton de signature, DU COFFRE EN PRIORITÉ.
+// readSecretJWT rend le jeton de signature, DEPUIS LE COFFRE, sans aucun repli.
 //
 // C'EST LE POINT DE LA DOUBLE ÉCRITURE, et donc le cœur du sujet ici : le même
 // jeton alimente ONLYOFFICE ET la configuration du connecteur dans Nextcloud. On
@@ -370,10 +366,15 @@ func runOccOutput(ctx context.Context, args ...string) (string, error) {
 // d'authentification sur les documents plutôt qu'une rotation à moitié faite.
 func readSecretJWT(ctx context.Context) (string, error) {
 	coffre := secrets.DepuisEnvironnement()
-	jwt, err := secrets.LireOuSecret(ctx, coffre, "onlyoffice", "jwt", "jwt",
-		"ceffio-office/onlyoffice-secret", "jwt")
-	if err != nil || jwt == "" {
-		return "", fmt.Errorf("jeton JWT introuvable : ni dans le coffre, ni dans le Secret onlyoffice-secret")
+	entree, err := secrets.LireEntreeCoffre(ctx, coffre, "onlyoffice", "jwt")
+	if err != nil {
+		return "", fmt.Errorf("jeton JWT illisible au coffre : %w", err)
+	}
+	jwt := entree["jwt"]
+	if jwt == "" {
+		// Un jeton vide ne se recopie pas « en attendant » : il produirait un
+		// connecteur qui refuse toutes les signatures, sans rien dire.
+		return "", fmt.Errorf("jeton JWT absent de l'entrée onlyoffice/jwt du coffre")
 	}
 	return jwt, nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -50,6 +51,11 @@ func (c *client) entetes(req *http.Request) {
 // un compte ne donne rien. Une entrée par COMPTE porte ses clés ensemble, et se
 // lit d'un coup d'œil.
 //
+// ErrEntreeAbsente distingue « cette entrée n'existe pas (encore) » de « le coffre
+// ne répond pas ». Les confondre ferait générer un secret neuf là où il suffisait
+// d'aller le chercher — exactement le risque qu'on veut éviter.
+var ErrEntreeAbsente = errors.New("entrée absente du coffre")
+
 // La lecture se fait sur le chemin `data/` (KV versionné) : c'est celui qui
 // porte les VALEURS, alors que `metadata/` ne sert qu'à lister. Confondre les
 // deux donne `data: null` et fait croire à une entrée vide.
@@ -72,7 +78,7 @@ func (c *client) LireEntree(ctx context.Context, composant, nom string) (map[str
 
 	brut, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, fmt.Errorf("entrée absente du coffre : %s", c.cfg.Chemin(composant, nom))
+		return nil, fmt.Errorf("%w : %s", ErrEntreeAbsente, c.cfg.Chemin(composant, nom))
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("coffre a refusé (HTTP %d) : %.150s",
@@ -212,6 +218,24 @@ func LireOuSecret(ctx context.Context, cfg *Coffre, composant, nom, cle, nsSecre
 		}
 	}
 	return lireSecretK8s(ctx, nsSecret, cleSecret)
+}
+
+// LireEntreeCoffre lit une entrée ENTIÈRE, et ne se rabat sur RIEN.
+//
+// C'est la seule lecture qu'un composant migré doit utiliser : le coffre est la
+// source unique, et il n'existe plus de copie dans Kubernetes. Rendre l'erreur,
+// plutôt qu'une chaîne vide, permet de distinguer « entrée absente » de « coffre
+// injoignable » — le premier cas appelle une génération, le second un échec franc.
+func LireEntreeCoffre(ctx context.Context, cfg *Coffre, composant, nom string) (map[string]string, error) {
+	if cfg == nil || !cfg.Dispo() {
+		return nil, fmt.Errorf("aucun coffre configuré : impossible de lire %s/%s", composant, nom)
+	}
+	return nouveauClient(cfg).LireEntree(ctx, composant, nom)
+}
+
+// EntreeAbsente dit si l'erreur signifie « cette entrée n'existe pas encore ».
+func EntreeAbsente(err error) bool {
+	return errors.Is(err, ErrEntreeAbsente)
 }
 
 // EcrireDansCoffre pose un secret dans le coffre, si configuré.

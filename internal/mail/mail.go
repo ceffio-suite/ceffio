@@ -142,7 +142,31 @@ func DomaineMessagerie(domain string) string { return domaineMail(domain) }
 func ensureSecrets(ctx context.Context) error {
 	coffre := secrets.DepuisEnvironnement()
 
+	// LE COFFRE EST LA SOURCE UNIQUE — il n'y a PLUS de copie dans Kubernetes.
+	//
+	// Une valeur qui vit à deux endroits finit par diverger, et la divergence se
+	// découvre au pire moment : quand un service redémarre sur la mauvaise
+	// version. Le pod lit le coffre par son agent ; il n'y a donc rien à
+	// recopier, et le repli sur un Secret Kubernetes n'a plus de raison d'être.
 	donnees := map[string]string{"username": "admin"}
+	existant, err := secrets.LireEntreeCoffre(ctx, coffre, "stalwart", "admin")
+	switch {
+	case err == nil:
+		for k, v := range existant {
+			donnees[k] = v
+		}
+	case secrets.EntreeAbsente(err):
+		// Première installation : la génération ci-dessous s'en charge.
+	default:
+		// Un coffre configuré mais injoignable n'est PAS une raison de
+		// fabriquer des valeurs neuves : cela produirait un nouveau mot de
+		// passe pendant que le service tourne avec l'ancien.
+		return fmt.Errorf("coffre illisible pour stalwart/admin : %w", err)
+	}
+	// LA GÉNÉRATION NE SE DÉCLENCHE QUE SI LE COFFRE EST MUET, et elle le dit :
+	// un secret refabriqué à l'aveugle est la panne la plus coûteuse, parce
+	// qu'elle ne se voit qu'au moment où le service ne comprend plus ses propres
+	// données — la clé de stockage de Stalwart en est l'exemple exact.
 	for _, a := range []struct {
 		cle      string
 		longueur int
@@ -150,10 +174,7 @@ func ensureSecrets(ctx context.Context) error {
 		{"password", 24},
 		{"storage", 32},
 	} {
-		v, err := secrets.LireOuSecret(ctx, coffre, "stalwart", "admin", a.cle,
-			"ceffio-mail/stalwart-admin", a.cle)
-		if err == nil && v != "" {
-			donnees[a.cle] = v
+		if donnees[a.cle] != "" {
 			continue
 		}
 		g, err := genSecret(a.longueur)
@@ -161,9 +182,18 @@ func ensureSecrets(ctx context.Context) error {
 			return err
 		}
 		donnees[a.cle] = g
-		fmt.Printf("∙ %s de Stalwart généré (absent du coffre et de Kubernetes)\n", a.cle)
+		fmt.Printf("∙ %s de Stalwart généré (absent du coffre)\n", a.cle)
 	}
-	return createSecret(ctx, "stalwart-admin", donnees)
+	if err := secrets.EcrireDansCoffre(ctx, coffre, "stalwart", "admin", donnees); err != nil {
+		return err
+	}
+	// Le Secret Kubernetes n'est plus créé. S'il traîne encore d'un déploiement
+	// antérieur, c'est une copie morte : le dire, plutôt que la laisser passer
+	// pour la source.
+	if secretExiste(ctx, "stalwart-admin") {
+		fmt.Println("  ! Secret Kubernetes « stalwart-admin » encore présent — copie morte, à retirer")
+	}
+	return nil
 }
 
 func applyWorkload(ctx context.Context, domaine string) error {
@@ -290,25 +320,21 @@ spec:
       # L'AGENT REND LES SECRETS, PUIS DISPARAÎT.
       #
       # C'est le motif que la documentation décrit pour un init-container : il
-      # tourne avec l'image du COFFRE — donc aucun binaire à copier ailleurs —,
-      # s'authentifie par Kubernetes, écrit le résultat dans le volume partagé,
-      # et s'arrête (exit_after_auth). Le conteneur applicatif ne fait plus que
-      # LIRE un fichier : il ne parle jamais au coffre, et ne contient aucun
-      # outil du coffre.
+      # tourne avec l'image du COFFRE, s'authentifie par Kubernetes, écrit le
+      # résultat dans le volume partagé, et s'arrête (exit_after_auth).
       #
-      # La garde : si le coffre ne répond pas, l'agent n'a rien à écrire et
-      # attendrait indéfiniment. On rend alors la main tout de suite, et le
-      # conteneur principal se rabat sur le Secret Kubernetes — en le disant.
+      # AUCUN REPLI : le coffre est la source unique. Il n'existe plus de Secret
+      # Kubernetes pour ce composant, donc il n'y a rien sur quoi se rabattre —
+      # et c'est voulu. Un repli masquerait une panne du coffre au lieu de la
+      # montrer, et ferait tourner le service sur une valeur que personne ne
+      # mettrait plus à jour.
       initContainers:
       - name: agent-du-coffre
         image: %[4]s
         command: ["/bin/sh", "-c"]
         args:
         - |
-          if /usr/bin/bao status >/dev/null 2>&1; then
-            exec /usr/bin/bao agent -config=/etc/agent/agent.hcl
-          fi
-          echo "coffre injoignable : aucun secret rendu, le conteneur principal se rabattra"
+          exec /usr/bin/bao agent -config=/etc/agent/agent.hcl
         env:
         - {name: BAO_ADDR, value: "http://openbao.ceffio-vault.svc:8200"}
         volumeMounts:
@@ -318,28 +344,17 @@ spec:
       - name: stalwart
         image: %[3]s
         # LE CONTENEUR PRINCIPAL CHARGE LE FICHIER RENDU, PUIS LANCE LE SERVICE.
-        #
-        # Ce fichier ne peut pas être vide par accident : si l'agent a échoué, il
-        # n'existe pas, et on retombe sur les valeurs du Secret Kubernetes. Les
-        # deux cas sont distincts — un fichier présent, même court, veut dire que
-        # le coffre a répondu.
+        # Le fichier est TOUJOURS là : l'agent s'arrête en erreur si un gabarit
+        # échoue (exit_on_retry_failure + error_on_missing_key), donc un fichier
+        # absent veut dire un pod qui ne démarre pas — visible — et non un
+        # service qui tourne avec des valeurs vides.
         command: ["/bin/sh", "-c"]
         args:
         - |
-          if [ -s /secrets/env ]; then
-            set -a
-            . /secrets/env
-            set +a
-          else
-            echo "coffre injoignable : repli sur le Secret Kubernetes"
-            export STALWART_ADMIN_PASSWORD="$STALWART_ADMIN_PASSWORD_REPLI"
-            export STALWART_RECOVERY_ADMIN="admin:$STALWART_ADMIN_PASSWORD_REPLI"
-            export STALWART_ENCRYPTION_KEY="$STALWART_ENCRYPTION_KEY_REPLI"
-          fi
+          set -a
+          . /secrets/env
+          set +a
           exec /usr/local/bin/stalwart --config /etc/stalwart/config.json
-        env:
-        - {name: STALWART_ADMIN_PASSWORD_REPLI, valueFrom: {secretKeyRef: {name: stalwart-admin, key: password}}}
-        - {name: STALWART_ENCRYPTION_KEY_REPLI, valueFrom: {secretKeyRef: {name: stalwart-admin, key: storage}}}
         volumeMounts:
         # Le seul lien entre les deux conteneurs : le fichier rendu.
         - {name: secrets, mountPath: /secrets, readOnly: true}
@@ -499,6 +514,14 @@ func configurerRelais(ctx context.Context, hote string, port int, utilisateur, m
 // ---------------------------------------------------------------------------
 // Utilitaires locaux
 // ---------------------------------------------------------------------------
+
+// secretExiste sert à SIGNALER une copie morte, jamais à s'en servir : depuis que
+// le coffre est la source unique, un Secret Kubernetes du même nom n'est plus lu
+// par personne. Le détecter évite qu'on le prenne pour la source.
+func secretExiste(ctx context.Context, nom string) bool {
+	out, err := k8s.Command(ctx, "kubectl", "get", "secret", nom, "-n", ns).CombinedOutput()
+	return err == nil && strings.Contains(string(out), nom)
+}
 
 func createSecret(ctx context.Context, name string, kv map[string]string) error {
 	var b strings.Builder
