@@ -274,12 +274,19 @@ func reporterNodePorts(actuel, voulu *unstructured.Unstructured) {
 	_ = unstructured.SetNestedSlice(voulu.Object, portsVoulus, "spec", "ports")
 }
 
-// ressourceDe traduit un GroupVersionKind en ressource REST.
+// ressourceDe traduit un type d'objet en ressource d'API.
 //
-// La table est ÉCRITE À LA MAIN et VOLONTAIREMENT COURTE : ce paquet ne sert
-// qu'au coffre, qui utilise six types d'objets. Une résolution dynamique par
-// découverte ajouterait un appel réseau et une source de panne pour un besoin
-// qu'on connaît d'avance.
+// DEUX CHEMINS, ET LE SECOND EST LE PLUS IMPORTANT. Le premier est une table
+// locale : elle répond sans appel réseau, pour les types les plus courants. Le
+// second DEMANDE au cluster, et c'est lui qui supprime un défaut que la table
+// seule produisait : chaque nouveau type d'objet — un ServiceAccount, une
+// liaison de rôle — échouait sur « type d'objet non pris en charge ». Ce refus
+// ne parle pas du manifeste qu'on essaie d'appliquer, et il fallait le corriger
+// dans le code plutôt que dans le manifeste. Constaté en service.
+//
+// La table évite un aller-retour dans le cas courant ; le cluster reste la
+// référence pour tout le reste. Une table qui prétendrait couvrir tous les types
+// possibles est une table qu'on oublie de compléter.
 func (c *Client) ressourceDe(gvk schema.GroupVersionKind) (schema.GroupVersionResource, error) {
 	switch gvk.Kind {
 	case "Namespace":
@@ -290,12 +297,51 @@ func (c *Client) ressourceDe(gvk schema.GroupVersionKind) (schema.GroupVersionRe
 		return schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"}, nil
 	case "Secret":
 		return schema.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"}, nil
+	case "ServiceAccount":
+		return schema.GroupVersionResource{Group: "", Version: "v1", Resource: "serviceaccounts"}, nil
 	case "StatefulSet":
 		return schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "statefulsets"}, nil
 	case "Pod":
 		return schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}, nil
 	}
-	return schema.GroupVersionResource{}, fmt.Errorf("type d'objet non pris en charge : %s", gvk.Kind)
+	if r, ok := c.chercherDansCluster(gvk); ok {
+		return r, nil
+	}
+	return schema.GroupVersionResource{},
+		fmt.Errorf("type d'objet introuvable : %s (absent de la table locale, et le cluster ne l'annonce pas)", gvk.Kind)
+}
+
+// chercherDansCluster interroge la découverte du cluster et retient la première
+// ressource dont le Kind correspond.
+func (c *Client) chercherDansCluster(gvk schema.GroupVersionKind) (schema.GroupVersionResource, bool) {
+	listes, err := c.cs.Discovery().ServerPreferredResources()
+	// Une erreur partielle est NORMALE : le cluster annonce parfois des groupes
+	// dont une API est momentanément absente. On continue avec ce qu'on a reçu ;
+	// seul le cas « rien du tout » est un échec.
+	if err != nil && len(listes) == 0 {
+		return schema.GroupVersionResource{}, false
+	}
+	groupe := gvk.GroupVersion().Group
+	for _, l := range listes {
+		gv, err := schema.ParseGroupVersion(l.GroupVersion)
+		if err != nil {
+			continue
+		}
+		// Un Kind peut exister dans plusieurs groupes (« Deployment » autrefois).
+		// Quand le manifeste nomme un groupe, on s'y tient.
+		if groupe != "" && gv.Group != groupe {
+			continue
+		}
+		for _, r := range l.APIResources {
+			// Les sous-ressources (« pods/exec ») ne s'appliquent pas à un
+			// manifeste : les écarter évite de produire une ressource inutilisable.
+			if strings.Contains(r.Name, "/") || r.Kind != gvk.Kind {
+				continue
+			}
+			return gv.WithResource(r.Name), true
+		}
+	}
+	return schema.GroupVersionResource{}, false
 }
 
 // decouper sépare les documents d'un manifeste multi-documents.

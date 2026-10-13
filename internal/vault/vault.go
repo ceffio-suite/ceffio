@@ -152,6 +152,10 @@ func Deploy(ctx context.Context, domaine string) *Resultat {
 		fmt.Printf("  ∙ coffre non déployé (configuration) : %v\n", err)
 		return &Resultat{}
 	}
+	if err := cli.Appliquer(ctx, identiteManifest()); err != nil {
+		fmt.Printf("  ∙ coffre non déployé (identité) : %v\n", err)
+		return &Resultat{}
+	}
 	if err := cli.Appliquer(ctx, workloadManifest(empreinte)); err != nil {
 		fmt.Printf("  ∙ coffre non déployé (charge de travail) : %v\n", err)
 		return &Resultat{}
@@ -185,6 +189,13 @@ func Deploy(ctx context.Context, domaine string) *Resultat {
 	}
 	if err := monterMoteurKV(ctx, cli); err != nil {
 		fmt.Printf("  ∙ moteur KV non monté : %v\n", err)
+		return &Resultat{}
+	}
+	// L'AUTHENTIFICATION VIENT APRÈS LES POLITIQUES, puisqu'un rôle les
+	// référence : poser un rôle avant sa politique ferait échouer la création du
+	// rôle, ou pire, créerait un rôle qui ne donne aucun droit.
+	if err := configurerAuthKubernetes(ctx, cli); err != nil {
+		fmt.Printf("  ∙ authentification Kubernetes non configurée : %v\n", err)
 		return &Resultat{}
 	}
 	if err := retirerJetonRacine(ctx, cli); err != nil {
@@ -405,6 +416,42 @@ func applyConfig(ctx context.Context, cli *k8sapi.Client, domaine string) (strin
 // 3. Charge de travail
 // ---------------------------------------------------------------------------
 
+// identiteManifest donne au coffre une IDENTITÉ DANS LE CLUSTER, et le droit de
+// valider les jetons des autres.
+//
+// POURQUOI LE COFFRE A BESOIN D'UNE IDENTITÉ : pour authentifier un pod par son
+// jeton de ServiceAccount, le coffre doit demander au cluster « ce jeton
+// est-il valide, et à qui appartient-il ? ». Cette question s'appelle un
+// TokenReview, et l'API du cluster n'y répond qu'à qui en a le droit. Le rôle
+// `system:auth-delegator` est précisément ce droit — il est livré par Kubernetes
+// et n'a pas à être redéfini.
+//
+// POURQUOI LE RÔLE EST UN ClusterRoleBinding : le droit de valider un jeton ne
+// se limite pas à un namespace. C'est un pouvoir vis-à-vis de l'API du cluster
+// entier. D'où un objet de portée globale — et c'est bien pour cela qu'il est
+// nommé, et lié à UN ServiceAccount précis plutôt qu'à un groupe.
+func identiteManifest() string {
+	return fmt.Sprintf(`apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: %[1]s
+  namespace: %[2]s
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: openbao-auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: %[1]s
+    namespace: %[2]s
+roleRef:
+  kind: ClusterRole
+  name: system:auth-delegator
+  apiGroup: rbac.authorization.k8s.io
+`, service, ns)
+}
+
 // workloadManifest pose le StatefulSet, le Service et le volume.
 //
 // UN SEUL NŒUD, ET C'EST UN CHOIX : le stockage raft sait faire un cluster, mais
@@ -450,6 +497,12 @@ spec:
       annotations:
         ceffio.fr/empreinte-config: "%[5]s"
     spec:
+      # LE COFFRE TOURNE SOUS SON PROPRE ServiceAccount, et non sous celui par
+      # défaut : c'est lui qui porte le droit de valider les jetons des autres
+      # pods. Sans cette ligne, l'authentification Kubernetes ne peut pas
+      # fonctionner, et l'échec apparaîtrait plus tard, au moment de la première
+      # connexion — loin de la cause.
+      serviceAccountName: %[1]s
       securityContext:
         runAsUser: 100
         runAsGroup: 1000
@@ -739,6 +792,24 @@ path "kv/undelete/ceffio/*" { capabilities = ["update"] }
 # L'autorisation est en LECTURE SEULE : elle ne révèle que l'emplacement des
 # moteurs et la version de leur API, jamais un contenu.
 path "sys/internal/ui/mounts/*" { capabilities = ["read"] }`},
+		// CONSOLE : c'est le SEUL rôle qui écrit. Les humains passent par la
+		// console, qui détient ce droit ; un service compromis ne l'a pas. C'est
+		// cette séparation qui limite les dégâts, pas le namespace.
+		//
+		// Elle s'obtient par l'authentification Kubernetes — voir
+		// configurerAuthKubernetes — donc sans qu'aucun secret ne soit rangé dans
+		// la console.
+		{"ceffio-console", `path "kv/data/ceffio/*" { capabilities = ["create","read","update","list"] }
+path "kv/metadata/ceffio/*" { capabilities = ["read","list","delete"] }
+path "kv/delete/ceffio/*" { capabilities = ["update"] }
+path "kv/undelete/ceffio/*" { capabilities = ["update"] }
+path "sys/internal/ui/mounts/*" { capabilities = ["read"] }`},
+		// LECTURE SEULE : ce que reçoivent les composants de la suite qui n'ont
+		// qu'à lire leurs propres secrets. Le « metadata » donne la liste des
+		// versions, jamais les valeurs.
+		{"ceffio-lecture", `path "kv/data/ceffio/*" { capabilities = ["read","list"] }
+path "kv/metadata/ceffio/*" { capabilities = ["read","list"] }
+path "sys/internal/ui/mounts/*" { capabilities = ["read"] }`},
 		// INSTALLATION : ce qu'exige la mise en place et les passages suivants.
 		// Le KV y figure aussi, pour que le diagnostic de bout en bout tourne
 		// avec ce jeton sans dépendre d'un autre.
@@ -751,11 +822,29 @@ path "sys/internal/ui/mounts/*" { capabilities = ["read"] }`},
 path "kv/*" { capabilities = ["create","read","update","delete","list"] }
 path "sys/mounts" { capabilities = ["read","list"] }
 path "sys/mounts/*" { capabilities = ["create","read","update","delete","list","sudo"] }
+# MÊME DISTINCTION POUR L'AUTHENTIFICATION que pour les moteurs : « sys/auth »
+# est le point d'entrée de la LISTE des méthodes, et « sys/auth/* » celui de leur
+# configuration. Il faut les deux — n'avoir que le second répond 403 sur la
+# liste, ce qui empêche de savoir si une méthode est déjà branchée. Constaté en
+# service, sur cette étape précise.
+path "sys/auth" { capabilities = ["read","list"] }
+path "sys/auth/*" { capabilities = ["create","read","update","delete","list","sudo"] }
 path "sys/policies/acl/*" { capabilities = ["create","read","update","delete","list"] }
+# TOUTE LA BRANCHE « auth/ », et pas seulement « auth/token/ ».
+#
+# POURQUOI SI LARGE : configurer une méthode d'authentification s'écrit à
+# « auth/<méthode>/config », et poser un rôle à « auth/<méthode>/role/<nom> ».
+# Énumérer méthode par méthode obligeait à revenir dans le code à chaque fois —
+# et l'échec était un 403 sur un chemin qui ne figure nulle part dans la
+# politique. C'est le jeton d'ADMINISTRATION : c'est ici que la largeur est à sa
+# place, pas dans la politique applicative, qui n'a aucun droit d'écriture sur
+# cette branche.
+path "auth/*" { capabilities = ["create","read","update","delete","list"] }
+# LA RÈGLE LA PLUS PRÉCISE L'EMPORTE, et c'est indispensable ici : créer un jeton
+# ORPHELIN — celui dont dépend la survie du jeton d'installation — exige la
+# capacité « sudo » sur ce chemin précis. La ligne générale ci-dessus ne la donne
+# pas. Sans celle-ci, le prochain déploiement échouerait à la création des jetons.
 path "auth/token/create" { capabilities = ["create","update","sudo"] }
-path "auth/token/lookup" { capabilities = ["read"] }
-path "auth/token/lookup-self" { capabilities = ["read"] }
-path "auth/token/revoke-self" { capabilities = ["update"] }
 path "sys/health" { capabilities = ["read"] }`},
 	}
 	for _, p := range politiques {
@@ -828,6 +917,72 @@ func creerJeton(ctx context.Context, cli *k8sapi.Client, porteur, politique, nom
 		return "", fmt.Errorf("jeton %s vide : %.120s", nom, strings.TrimSpace(sortie))
 	}
 	return res.Auth.ClientToken, nil
+}
+
+// configurerAuthKubernetes branche l'authentification par Kubernetes : un pod
+// présente son jeton de ServiceAccount, le coffre le fait valider par l'API du
+// cluster, et rend un jeton portant la politique du rôle correspondant.
+//
+// POURQUOI CE MÉCANISME PLUTÔT QU'UN SECRET PARTAGÉ : un secret partagé, il faut
+// le ranger quelque part, donc recréer le problème qu'on résout. Le jeton de
+// ServiceAccount, lui, est déjà là, présenté par le pod et renouvelé par le
+// cluster. Rien à ranger, rien à faire tourner à la main.
+//
+// POURQUOI LE RÔLE PRÉCISE LE NAMESPACE ET LE NOM : les deux comptent. Un
+// ServiceAccount homonyme créé ailleurs dans le cluster obtiendrait sinon les
+// mêmes droits. C'est la combinaison des deux qui identifie un pod.
+func configurerAuthKubernetes(ctx context.Context, cli *k8sapi.Client) error {
+	adm, err := jetonAdministration(ctx, cli)
+	if err != nil {
+		return err
+	}
+
+	// DÉJÀ BRANCHÉE ? On le DEMANDE au coffre plutôt que de le supposer : une
+	// seconde activation renvoie une erreur qui ferait échouer tout le
+	// déploiement pour rien.
+	sortie, err := baoAvecJeton(ctx, cli, adm, "auth", "list")
+	if err != nil {
+		return fmt.Errorf("lecture des méthodes d'authentification : %w", err)
+	}
+	if !strings.Contains(sortie, "kubernetes/") {
+		if _, err := baoAvecJeton(ctx, cli, adm, "auth", "enable", "kubernetes"); err != nil {
+			return fmt.Errorf("activation de l'authentification Kubernetes : %w", err)
+		}
+		fmt.Println("  ∙ authentification Kubernetes activée")
+	}
+
+	// L'ADRESSE DU CLUSTER VUE DE L'INTÉRIEUR : « kubernetes.default.svc » est le
+	// nom que tout pod résout, et le certificat de l'API y correspond.
+	//
+	// LE JETON DE VALIDATION N'EST PAS FOURNI ICI, et c'est volontaire : le coffre
+	// utilise le sien, celui de son ServiceAccount — d'où le droit de délégation
+	// accordé par identiteManifest, qui n'est donc pas décoratif. C'est aussi ce
+	// qui évite d'avoir un jeton de longue durée à ranger dans un fichier de
+	// configuration.
+	if _, err := baoAvecJeton(ctx, cli, adm, "write", "auth/kubernetes/config",
+		"kubernetes_host=https://kubernetes.default.svc:443"); err != nil {
+		return fmt.Errorf("configuration de l'authentification Kubernetes : %w", err)
+	}
+
+	roles := []struct{ nom, sa, ns, politique string }{
+		// La console est aujourd'hui le seul consommateur : c'est elle qui écrit
+		// les secrets, et c'est là que les humains agissent. Les composants
+		// viendront s'ajouter un par un, en Phase 3, avec la politique de lecture
+		// seule.
+		{nom: "console", sa: "ceffio-admin", ns: "ceffio-system", politique: "ceffio-console"},
+	}
+	for _, r := range roles {
+		if _, err := baoAvecJeton(ctx, cli, adm,
+			"write", "auth/kubernetes/role/"+r.nom,
+			"bound_service_account_names="+r.sa,
+			"bound_service_account_namespaces="+r.ns,
+			"policies="+r.politique,
+			"ttl=1h"); err != nil {
+			return fmt.Errorf("rôle « %s » : %w", r.nom, err)
+		}
+	}
+	fmt.Println("  ∙ authentification Kubernetes configurée (rôle « console », délai 1 h)")
+	return nil
 }
 
 // retirerJetonRacine révoque le jeton racine dès que le jeton dérivé existe.
