@@ -93,11 +93,16 @@ metadata:
   name: onlyoffice-agent
   namespace: %s
 data:
-  # LA CONFIGURATION DE L'AGENT, DÉCLARATIVE. Elle remplace les commandes
-  # « bao » écrites à la main dans le conteneur : plus de manipulation de secret
-  # dans un shell, jeton renouvelé par l'agent, et un gabarit qu'on relit.
+  # LA CONFIGURATION DE L'AGENT, TEL QUE LA DOCUMENTATION LE DÉCRIT POUR UN
+  # INIT-CONTAINER : il s'authentifie, rend les secrets dans le volume partagé,
+  # puis s'arrête. Le conteneur applicatif ne fait que lire un fichier.
   agent.hcl: |
     pid_file = "/tmp/bao-agent.pid"
+
+    # L'AGENT S'ARRÊTE APRÈS AVOIR RENDU. Sans cette ligne il reste en vie, et le
+    # conteneur suivant n'est jamais lancé : le pod attend indéfiniment, sans
+    # message d'erreur. Ce réglage va au niveau racine, pas dans auto_auth.
+    exit_after_auth = true
 
     vault {
       address = "http://openbao.ceffio-vault.svc:8200"
@@ -121,20 +126,16 @@ data:
       exit_on_retry_failure = true
     }
 
-    env_template "JWT_ENABLED" {
-      contents = "true"
-    }
-
-    # LE CHEMIN EST CELUI DE L'API (kv/data/...), comme pour la politique.
-    env_template "JWT_SECRET" {
-      contents             = "{{ with secret \"kv/data/ceffio/onlyoffice/jwt\" }}{{ .Data.data.jwt }}{{ end }}"
+    # LE GABARIT REND UN FICHIER QUE LE CONTENEUR PRINCIPAL « SOURCE ».
+    # Le chemin passé à « secret » est celui de l'API (kv/data/...), comme pour
+    # la politique.
+    template {
+      destination          = "/secrets/env"
       error_on_missing_key = true
-    }
-
-    # L'AGENT LANCE LE SCRIPT D'ENTRÉE D'ORIGINE — celui de l'image, qui prépare
-    # le serveur. Le remplacer casserait tout ; c'est lui qui doit tourner.
-    exec {
-      command = ["/bin/bash", "/app/ds/run-document-server.sh"]
+      contents             = <<EOT
+    export JWT_ENABLED='true'
+    export JWT_SECRET='{{ with secret "kv/data/ceffio/onlyoffice/jwt" }}{{ .Data.data.jwt }}{{ end }}'
+    EOT
     }
 ---
 apiVersion: v1
@@ -168,38 +169,52 @@ spec:
       serviceAccountName: onlyoffice
       securityContext:
         fsGroup: 1000
-      # LE BINAIRE DE L'AGENT EST COPIÉ DEPUIS L'IMAGE DU COFFRE : le mode superviseur
-      # exige que l'agent et le service vivent dans le MÊME conteneur, puisque
-      # c'est l'agent qui lance le service.
+      # L'AGENT REND LES SECRETS, PUIS DISPARAÎT. Il tourne avec l'image du COFFRE —
+      # aucun binaire à copier —, s'authentifie par Kubernetes, écrit le résultat
+      # dans le volume partagé et s'arrête. Le conteneur applicatif ne fait plus
+      # que LIRE un fichier.
       initContainers:
-        - name: binaire-de-l-agent
+        - name: agent-du-coffre
           image: %s
           command: ["/bin/sh", "-c"]
-          args: ["cp /usr/bin/bao /bao-bin/bao && chmod 0555 /bao-bin/bao"]
+          args:
+            - |
+              if /usr/bin/bao status >/dev/null 2>&1; then
+                exec /usr/bin/bao agent -config=/etc/agent/agent.hcl
+              fi
+              echo "coffre injoignable : aucun secret rendu, le conteneur principal se rabattra"
+          env:
+            - name: BAO_ADDR
+              value: "http://openbao.ceffio-vault.svc:8200"
           volumeMounts:
-            - name: bao-bin
-              mountPath: /bao-bin
+            - name: agent-config
+              mountPath: /etc/agent
+              readOnly: true
+            - name: secrets
+              mountPath: /secrets
       containers:
         - name: onlyoffice
           image: %s
-          # LA GARDE, PUIS L'AGENT. « bao status » est un test de vie rapide ; s'il
-          # échoue, on repart du Secret Kubernetes — la suite doit tenir sans
-          # OpenBao, et le repli doit s'annoncer, sinon il donne l'illusion que
-          # les secrets viennent du coffre.
+          # LE CONTENEUR PRINCIPAL CHARGE LE FICHIER RENDU, PUIS LANCE LE SCRIPT
+          # D'ENTRÉE D'ORIGINE — celui de l'image, qui prépare le serveur. Le
+          # remplacer casserait tout.
+          #
+          # Si l'agent a échoué, le fichier n'existe pas : on retombe alors sur le
+          # Secret Kubernetes, en le disant.
           command: ["/bin/bash", "-c"]
           args:
             - |
-              set -e
-              if BAO_ADDR="$COFFRE_ADDR" /bao-bin/bao status >/dev/null 2>&1; then
-                exec /bao-bin/bao agent -config=/etc/agent/agent.hcl
+              if [ -s /secrets/env ]; then
+                set -a
+                . /secrets/env
+                set +a
+              else
+                echo "coffre injoignable : repli sur le Secret Kubernetes"
+                export JWT_ENABLED="true"
+                export JWT_SECRET="$JWT_SECRET_REPLI"
               fi
-              echo "coffre injoignable : repli sur le Secret Kubernetes"
-              export JWT_ENABLED="true"
-              export JWT_SECRET="$JWT_SECRET_REPLI"
               exec /bin/bash /app/ds/run-document-server.sh
           env:
-            - name: COFFRE_ADDR
-              value: "http://openbao.ceffio-vault.svc:8200"
             - name: JWT_SECRET_REPLI
               valueFrom:
                 secretKeyRef:
@@ -209,10 +224,9 @@ spec:
             - name: http
               containerPort: 80
           volumeMounts:
-            - name: bao-bin
-              mountPath: /bao-bin
-            - name: agent-config
-              mountPath: /etc/agent
+            # Le seul lien entre les deux conteneurs : le fichier rendu.
+            - name: secrets
+              mountPath: /secrets
               readOnly: true
             - name: data
               mountPath: /var/www/onlyoffice/Data
@@ -226,8 +240,9 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: onlyoffice-data
-        # Le binaire de l'agent, copié à chaque démarrage depuis l'image du coffre.
-        - name: bao-bin
+        # LE RÉSULTAT DE L'AGENT, ET RIEN D'AUTRE : le conteneur principal lit ce
+        # fichier. C'est le seul lien entre les deux conteneurs.
+        - name: secrets
           emptyDir: {}
         # La configuration de l'agent : un gabarit qu'on relit, pas une commande.
         - name: agent-config
