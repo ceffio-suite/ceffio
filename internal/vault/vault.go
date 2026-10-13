@@ -217,6 +217,20 @@ func Deploy(ctx context.Context, domaine string) *Resultat {
 		return &Resultat{}
 	}
 
+	// LA SEMENCE VIENT EN DERNIER, et elle n'est PAS fatale.
+	//
+	// En dernier, parce qu'on ne confie des copies de secrets vivants qu'à un
+	// coffre dont on vient de vérifier qu'il fonctionne.
+	//
+	// Non fatale, parce qu'un coffre opérationnel dont la copie de référence est
+	// incomplète reste plus utile qu'un déploiement arrêté. Le module suit la
+	// doctrine d'ensemble : le coffre améliore, il ne bloque pas.
+	if err := Semer(ctx, cli); err != nil {
+		fmt.Printf("  ∙ ATTENTION : semence incomplète (%v) — aucune valeur n'a été inventée\n", err)
+	} else {
+		fmt.Println("  ∙ secrets existants remontés au coffre (copie de référence)")
+	}
+
 	fmt.Printf("✓ Coffre OpenBao déployé (%s, %s)\n", openbaoImage, ns)
 	// L'adresse rendue est celle du NodePort, et non le nom de service interne.
 	//
