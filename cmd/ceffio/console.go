@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ceffio-suite/ceffio/internal/console"
+	"github.com/ceffio-suite/ceffio/internal/secrets"
 )
 
 func newConsoleCmd() *cobra.Command {
@@ -23,6 +24,13 @@ func newConsoleCmd() *cobra.Command {
 		Short: "Console d'administration Ceffio (dashboard + utilisateurs SSO)",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, args []string) error {
+			// LES SECRETS VIENNENT DU COFFRE, par le fichier que l'injecteur a rendu.
+			// L'image de la console ne contient aucun shell : elle ne peut donc pas
+			// « sourcer » ce fichier, elle le lit. Sans injection, le fichier est
+			// absent et rien n'est posé — c'est le comportement attendu hors cluster.
+			if err := secrets.ChargerDepuisFichier("/secrets/env"); err != nil {
+				return err
+			}
 			if domain == "" {
 				return fmt.Errorf("--domain est requis")
 			}
@@ -34,6 +42,9 @@ func newConsoleCmd() *cobra.Command {
 			// clé qui n'ouvre rien : la panne la plus déroutante, puisqu'elle
 			// ressemble à un jeton valide.
 			if deployer {
+				// Le coffre doit être résolu AVANT : la clé d'administration de la
+				// console s'y lit et s'y écrit, il n'y a plus de Secret Kubernetes.
+				resoudreCoffre(c)
 				return console.Deploy(c.Context(), domain)
 			}
 			if apiKey == "" {

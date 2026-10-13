@@ -66,15 +66,12 @@ func New(domain, apiKey string) (*Server, error) {
 			}
 		}
 	}
-	// Credentials admin Keycloak : env en priorité, sinon secret k8s keycloak-admin.
+	// Les identifiants viennent du COFFRE, posés dans l'environnement au démarrage
+	// par le fichier que l'injecteur a rendu. Le repli qui lisait le Secret
+	// Kubernetes a été retiré : le coffre est la source unique, et une valeur
+	// laissée dans Kubernetes finit par diverger sans que personne ne le voie.
 	s.kcAdmin = strings.TrimSpace(os.Getenv("KC_ADMIN"))
 	s.kcPass = strings.TrimSpace(os.Getenv("KC_ADMIN_PASSWORD"))
-	if s.kcAdmin == "" && s.kube != nil {
-		if sec, err := s.kube.CoreV1().Secrets(kcNS).Get(context.Background(), "keycloak-admin", metav1.GetOptions{}); err == nil {
-			s.kcAdmin = string(sec.Data["username"])
-			s.kcPass = string(sec.Data["password"])
-		}
-	}
 	// Base URL Keycloak : ClusterIP du Service (résout aussi bien hors pod qu'en pod).
 	s.kcBase = kcSvc
 	if s.kube != nil {
@@ -91,13 +88,6 @@ func New(domain, apiKey string) (*Server, error) {
 	// du temps à chercher du côté de Nextcloud.
 	s.ncUser = strings.TrimSpace(os.Getenv("NC_USER"))
 	s.ncPass = strings.TrimSpace(os.Getenv("NC_PASSWORD"))
-	if s.ncUser == "" && s.kube != nil {
-		if sec, err := s.kube.CoreV1().Secrets(deployNS).Get(context.Background(),
-			"nextcloud-console-api", metav1.GetOptions{}); err == nil {
-			s.ncUser = string(sec.Data["username"])
-			s.ncPass = string(sec.Data["password"])
-		}
-	}
 
 	return s, nil
 }

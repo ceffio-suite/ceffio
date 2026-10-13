@@ -16,6 +16,8 @@ import (
 	"strings"
 
 	"github.com/ceffio-suite/ceffio/internal/k8s"
+	"github.com/ceffio-suite/ceffio/internal/secrets"
+	"github.com/ceffio-suite/ceffio/internal/vault"
 )
 
 const (
@@ -25,7 +27,7 @@ const (
 	// Bump OBLIGATOIRE à chaque changement de la page ou du code console :
 	// buildAndImportImage saute la reconstruction si le tag existe déjà dans
 	// containerd. Sans bump, l'ancienne image continue de servir.
-	imageTag = "1.32.1"
+	imageTag = "1.32.2"
 	imageRef = imageName + ":" + imageTag
 )
 
@@ -331,21 +333,32 @@ func imagePresent(ctx context.Context) bool {
 	return err == nil && strings.Contains(string(out), imageName)
 }
 
-// ensureConsoleKey crée le secret ceffio-console-key (clé admin persistée, générée une fois).
+// ensureConsoleKey garantit la clé d'administration DANS LE COFFRE, et nulle part ailleurs.
+//
+// ELLE EST REPRISE SI ELLE EXISTE : c'est elle qui authentifie les appels à l'API de
+// la console. En régénérer une couperait l'accès sans prévenir, et le symptôme
+// serait un 401 sur une clé qui « a l'air » valide.
 func ensureConsoleKey(ctx context.Context) error {
-	if secretExists(ctx, "ceffio-console-key") {
+	coffre := secrets.DepuisEnvironnement()
+	entree := map[string]string{}
+	actuelle, err := secrets.LireEntreeCoffre(ctx, coffre, "console", "api")
+	switch {
+	case err == nil:
+		entree = actuelle
+	case secrets.EntreeAbsente(err):
+	default:
+		return fmt.Errorf("coffre illisible pour console/api : %w", err)
+	}
+	if entree["key"] != "" {
 		return nil
 	}
 	key, err := genSecret(32)
 	if err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, "sh", "-c", "kubectl create secret generic ceffio-console-key -n "+deployNS+
-		" --from-literal=key='"+key+"' --dry-run=client -o yaml | kubectl apply -f -")
-	cmd.Env = k8s.Env()
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	entree["key"] = key
+	fmt.Println("∙ clé d'administration de la console générée (absente du coffre)")
+	return secrets.EcrireDansCoffre(ctx, coffre, "console", "api", entree)
 }
 
 // applyConsoleManifest applique RBAC + Deployment + Service + Ingress.
@@ -357,6 +370,27 @@ func ensureConsoleKey(ctx context.Context) error {
 // « credentials absents » à chaque requête. On ne met PAS optional : un secret
 // absent doit faire échouer le pod, pas produire une console inutilisable.
 func applyConsoleManifest(ctx context.Context, domain string) error {
+	// LES SECRETS VIENNENT DU COFFRE, à travers le fichier que l'injecteur rend.
+	//
+	// TROIS SOURCES : la clé de la console, le compte d'administration Keycloak, et
+	// le compte de service Nextcloud. L'image de la console ne contient AUCUN shell :
+	// elle ne peut pas « sourcer » ce fichier comme les autres composants, elle le
+	// lit elle-même au démarrage, dans le même format.
+	annotations := vault.AnnotationsAgent(8, "console", "kv/data/ceffio/console/api",
+		vault.GabaritMulti([]vault.Source{
+			{Chemin: "kv/data/ceffio/console/api", Paires: [][2]string{
+				{"CEFFIO_KEY", vault.ChampCoffre("key")},
+			}},
+			{Chemin: "kv/data/ceffio/keycloak/admin", Paires: [][2]string{
+				{"KC_ADMIN", vault.ChampCoffre("username")},
+				{"KC_ADMIN_PASSWORD", vault.ChampCoffre("password")},
+			}},
+			{Chemin: "kv/data/ceffio/console/nextcloud-api", Paires: [][2]string{
+				{"NC_USER", vault.ChampCoffre("username")},
+				{"NC_PASSWORD", vault.ChampCoffre("password")},
+			}},
+		}))
+
 	manifest := `apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -446,7 +480,10 @@ spec:
   replicas: 1
   selector: {matchLabels: {app: ceffio-admin}}
   template:
-    metadata: {labels: {app: ceffio-admin}}
+    metadata:
+      labels: {app: ceffio-admin}
+      annotations:
+` + annotations + `
     spec:
       serviceAccountName: ceffio-admin
       containers:
@@ -454,16 +491,10 @@ spec:
         image: ` + imageRef + `
         imagePullPolicy: IfNotPresent
         args: ["console", "--domain", "` + domain + `", "--addr", ":8088"]
-        env:
-        - {name: CEFFIO_KEY, valueFrom: {secretKeyRef: {name: ceffio-console-key, key: key}}}
-        - {name: KC_ADMIN, valueFrom: {secretKeyRef: {name: keycloak-admin, key: username}}}
-        - {name: KC_ADMIN_PASSWORD, valueFrom: {secretKeyRef: {name: keycloak-admin, key: password}}}
-        # Compte de service Nextcloud : la console lit et gere les applications
-        # via l'API OCS. Mot de passe d'application dedie et revocable, jamais
-        # le compte admin (secret trop large, et changer son mot de passe
-        # casserait la console).
-        - {name: NC_USER, valueFrom: {secretKeyRef: {name: nextcloud-console-api, key: username}}}
-        - {name: NC_PASSWORD, valueFrom: {secretKeyRef: {name: nextcloud-console-api, key: password}}}
+        # PLUS AUCUNE VALEUR SECRÈTE ICI : elles arrivent par le fichier que
+        # l'injecteur rend, et que la console lit elle-même au démarrage — son
+        # image ne contient pas de shell, donc elle ne peut pas le « sourcer »
+        # comme les autres composants.
         ports:
         - {name: http, containerPort: 8088}
         readinessProbe:
