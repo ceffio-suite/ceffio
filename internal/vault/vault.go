@@ -76,6 +76,7 @@ import (
 	"time"
 
 	"github.com/ceffio-suite/ceffio/internal/k8sapi"
+	"github.com/ceffio-suite/ceffio/internal/sso"
 )
 
 const (
@@ -196,6 +197,13 @@ func Deploy(ctx context.Context, domaine string) *Resultat {
 	// rôle, ou pire, créerait un rôle qui ne donne aucun droit.
 	if err := configurerAuthKubernetes(ctx, cli); err != nil {
 		fmt.Printf("  ∙ authentification Kubernetes non configurée : %v\n", err)
+		return &Resultat{}
+	}
+	// LES PERSONNES APRÈS LES SERVICES : l'OIDC dépend d'un client Keycloak, donc
+	// d'une partie de la pile qui doit déjà être debout. Le configurer avant ne
+	// ferait qu'échouer plus tôt, sur une cause moins claire.
+	if err := configurerOIDC(ctx, cli, domaine); err != nil {
+		fmt.Printf("  ∙ authentification des personnes non configurée : %v\n", err)
 		return &Resultat{}
 	}
 	if err := retirerJetonRacine(ctx, cli); err != nil {
@@ -985,6 +993,144 @@ func configurerAuthKubernetes(ctx context.Context, cli *k8sapi.Client) error {
 	return nil
 }
 
+// ecrirePayloadCoffre écrit une charge JSON dans le conteneur, en 0600, et rend
+// son chemin.
+//
+// POURQUOI UN FICHIER, ET PAS DES ARGUMENTS : la ligne de commande ne sait
+// transmettre que du texte. Écrire « bound_claims={"email":[...]} » fait répondre
+// au coffre « got unconvertible type 'string' » — le rôle n'est pas créé, et le
+// message ne dit pas comment s'y prendre. Un objet transmis en entier, depuis un
+// fichier, est analysé correctement : c'est la seule forme qui marche pour un
+// champ structuré.
+//
+// LE UMASK EST POSÉ AVANT L'ÉCRITURE : la charge peut contenir un secret de
+// client, et un fichier lisible par tous dans le conteneur serait une trace
+// inutile. Le fichier est supprimé après emploi.
+func ecrirePayloadCoffre(ctx context.Context, cli *k8sapi.Client, chemin string, charge any) error {
+	brut, err := json.MarshalIndent(charge, "", "  ")
+	if err != nil {
+		return fmt.Errorf("charge illisible : %w", err)
+	}
+	script := fmt.Sprintf("umask 077; cat > %s <<'FIN_PAYLOAD'\n%s\nFIN_PAYLOAD\n", chemin, brut)
+	if _, err := cli.Executer(ctx, ns, pod, "openbao", "sh", "-c", script); err != nil {
+		return fmt.Errorf("écriture de la charge %s : %w", chemin, err)
+	}
+	return nil
+}
+
+// retirerPayloadCoffre efface une charge après emploi.
+func retirerPayloadCoffre(ctx context.Context, cli *k8sapi.Client, chemin string) {
+	_, _ = cli.Executer(ctx, ns, pod, "openbao", "sh", "-c", "rm -f "+chemin)
+}
+
+// configurerOIDC branche l'authentification des PERSONNES, sur le Keycloak de la
+// suite.
+//
+// POURQUOI L'OIDC POUR LES GENS ET KUBERNETES POUR LES SERVICES : un pod a un
+// jeton que le cluster lui donne. Une personne n'en a pas. Lui en fabriquer un
+// reviendrait à tenir une liste de comptes à part, avec leurs mots de passe et
+// leurs oublis — exactement la seconde liste qu'on veut éviter. L'OIDC dit
+// simplement : « cette personne est celle que Keycloak dit qu'elle est ».
+func configurerOIDC(ctx context.Context, cli *k8sapi.Client, domaine string) error {
+	if domaine == "" {
+		// SANS DOMAINE, PAS D'ADRESSE DE RETOUR : le navigateur n'aurait nulle
+		// part où revenir. On l'annonce plutôt que de configurer quelque chose
+		// qui ne peut pas fonctionner.
+		fmt.Println("  ∙ pas de domaine : authentification des personnes non configurée")
+		return nil
+	}
+
+	// LE CLIENT ET SON SECRET SONT CRÉÉS PAR LE MODULE SSO, qui possède la
+	// connaissance de Keycloak. On les LIT ici plutôt que d'en fabriquer
+	// d'autres : deux sources pour un même secret finissent par diverger, et
+	// c'est la panne la plus longue à comprendre.
+	if err := sso.AssurerClientCoffre(ctx, domaine); err != nil {
+		return fmt.Errorf("client OIDC du coffre : %w", err)
+	}
+	id, _ := cli.LireSecret(ctx, "ceffio-identity", "openbao-oidc", "client-id")
+	secret, _ := cli.LireSecret(ctx, "ceffio-identity", "openbao-oidc", "client-secret")
+	if id == "" || secret == "" {
+		return fmt.Errorf("Secret openbao-oidc absent ou incomplet dans ceffio-identity")
+	}
+
+	adm, err := jetonAdministration(ctx, cli)
+	if err != nil {
+		return err
+	}
+	sortie, err := baoAvecJeton(ctx, cli, adm, "auth", "list")
+	if err != nil {
+		return fmt.Errorf("lecture des méthodes d'authentification : %w", err)
+	}
+	if !strings.Contains(sortie, "oidc/") {
+		if _, err := baoAvecJeton(ctx, cli, adm, "auth", "enable", "oidc"); err != nil {
+			return fmt.Errorf("activation de l'authentification OIDC : %w", err)
+		}
+		fmt.Println("  ∙ authentification OIDC activée")
+	}
+
+	// L'ADRESSE DE DÉCOUVERTE EST CELLE QUE VOIT LE NAVIGATEUR, et c'est
+	// volontaire : Keycloak signe ses jetons en annonçant SON adresse publique,
+	// et le coffre vérifie que l'émetteur correspond. Une adresse interne ferait
+	// échouer la vérification, avec un message qui parle d'émetteur et non
+	// d'adresse. Vérifié : le coffre joint bien l'adresse publique depuis le
+	// cluster.
+	emetteur := "https://keycloak." + domaine + "/realms/ceffio"
+	cfg := map[string]any{
+		"oidc_discovery_url": emetteur,
+		"oidc_client_id":     id,
+		"oidc_client_secret": secret,
+		"default_role":       "adminceffio",
+	}
+	if err := ecrirePayloadCoffre(ctx, cli, "/tmp/oidc-config.json", cfg); err != nil {
+		return err
+	}
+	_, errCfg := baoAvecJeton(ctx, cli, adm, "write", "auth/oidc/config", "@/tmp/oidc-config.json")
+	// Le fichier a porté le secret du client : il disparaît dès qu'il a servi,
+	// quel que soit le résultat.
+	retirerPayloadCoffre(ctx, cli, "/tmp/oidc-config.json")
+	if errCfg != nil {
+		return fmt.Errorf("configuration OIDC : %w", errCfg)
+	}
+
+	// LE RÔLE EST LIÉ SUR L'ADRESSE ÉLECTRONIQUE, jamais sur le « sub ».
+	//
+	// « sub » est un identifiant interne à Keycloak : il change si le compte est
+	// recréé, et le rôle cesserait alors d'accepter la bonne personne sans que
+	// rien ne le signale. L'adresse est ce que la personne connaît, ce qu'elle
+	// tape pour se connecter, et ce qu'on veut lire dans la définition du rôle.
+	//
+	// POURQUOI LES CONDITIONS PASSENT PAR UN FICHIER : « bound_claims » attend un
+	// OBJET, et la ligne de commande ne sait transmettre que du texte. Écrire
+	// « bound_claims={"email":[...]} » fait répondre « got unconvertible type
+	// 'string' » — le rôle n'est pas créé, et le message ne dit pas comment s'y
+	// prendre. Une charge JSON complète, lue depuis un fichier, est analysée
+	// correctement. Constaté en service, aide de la commande à l'appui.
+	retours := []string{
+		"https://bao." + domaine + "/ui/vault/auth/oidc/oidc/callback",
+		"https://bao." + domaine + "/vault/auth/oidc/oidc/callback",
+		"http://localhost:8250/oidc/callback",
+	}
+	role := map[string]any{
+		"role_type":             "oidc",
+		"user_claim":            "email",
+		"bound_claims":          map[string]any{"email": []string{"adminceffio@ceffio.local"}},
+		"policies":              "ceffio-console",
+		"allowed_redirect_uris": retours,
+		"oidc_scopes":           []string{"email", "profile"},
+		"ttl":                   "2h",
+	}
+	if err := ecrirePayloadCoffre(ctx, cli, "/tmp/oidc-role.json", role); err != nil {
+		return err
+	}
+	_, errRole := baoAvecJeton(ctx, cli, adm, "write", "auth/oidc/role/adminceffio", "@/tmp/oidc-role.json")
+	retirerPayloadCoffre(ctx, cli, "/tmp/oidc-role.json")
+	if errRole != nil {
+		return fmt.Errorf("rôle OIDC « adminceffio » : %w", errRole)
+	}
+	fmt.Println("  ∙ authentification des personnes configurée (adminceffio@ceffio.local)")
+	return nil
+}
+
 // retirerJetonRacine révoque le jeton racine dès que le jeton dérivé existe.
 //
 // Un jeton maître qui survit à la mise en place est un défaut, pas une
@@ -1179,20 +1325,37 @@ func etatCoffre(ctx context.Context, cli *k8sapi.Client) (string, error) {
 // code d'administration qui ne cherche que le racine ne fonctionne plus après la
 // mise en place ; le garder aurait été un piège pour la prochaine lecture.
 
+// commandeBao assemble la ligne de commande, en PROTÉGEANT chaque argument.
+//
+// POURQUOI PROTÉGER : les valeurs passées au coffre contiennent parfois des
+// caractères que le shell interprète — accolades, guillemets, virgules. Sans
+// protection, le shell retire les guillemets et le coffre reçoit une valeur
+// DIFFÉRENTE de celle qu'on croit avoir écrite, sans que rien ne le signale.
+//
+// POURQUOI LA PROTECTION NE SUFFIT PAS POUR UN OBJET : un champ structuré ne peut
+// pas passer par la ligne de commande du tout, même correctement protégé. Ces
+// charges passent par un fichier — voir ecrirePayloadCoffre.
+func commandeBao(args []string) string {
+	proteges := make([]string, 0, len(args))
+	for _, a := range args {
+		// Guillemets simples : à l'intérieur, le shell n'interprète plus rien.
+		// L'apostrophe elle-même se referme et s'échappe.
+		proteges = append(proteges, "'"+strings.ReplaceAll(a, "'", `'\''`)+"'")
+	}
+	return strings.Join(proteges, " ")
+}
+
 // baoAvecJeton exécute une commande avec un jeton explicite, transmis par
 // l'ENTRÉE STANDARD — jamais en argument.
 //
 // POURQUOI C'EST IMPORTANT : un jeton passé en argument apparaît dans la table
 // des processus du pod, lisible par tout ce qui peut observer la machine.
-// L'entrée standard ne laisse aucune trace de ce genre, et le jeton n'est pas
-// non plus écrit sur le disque du conteneur.
-//
-// NOTE : le jeton passe par l'ENTRÉE STANDARD, qui ne laisse aucune trace — ni
-// dans la table des processus du conteneur, ni sur son disque.
+// L'entrée standard ne laisse aucune trace de ce genre, et le jeton n'est pas non
+// plus écrit sur le disque du conteneur.
 func baoAvecJeton(ctx context.Context, cli *k8sapi.Client, jeton string, args ...string) (string, error) {
 	// Le shell lit le jeton sur son entrée standard et le pose dans
 	// l'environnement de la commande bao. Il n'apparaît donc nulle part ailleurs.
-	script := fmt.Sprintf("IFS= read -r TOK; BAO_TOKEN=\"$TOK\" exec bao %s", strings.Join(args, " "))
+	script := fmt.Sprintf("IFS= read -r TOK; BAO_TOKEN=\"$TOK\" exec bao %s", commandeBao(args))
 
 	var sortie string
 	var err error

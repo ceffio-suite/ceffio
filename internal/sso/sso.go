@@ -47,6 +47,18 @@ func clientsOIDC(domain string) []client {
 			id:        "nextcloud",
 			redirects: fmt.Sprintf("https://cloud.%s/apps/user_oidc/code,http://localhost/*", domain),
 		},
+		{
+			// LE COFFRE A UN CLIENT À LUI, et deux adresses de retour : celle de
+			// l'interface web, et celle de la ligne de commande. Ce ne sont pas
+			// les mêmes chemins — la ligne de commande ouvre un petit serveur
+			// local (8250) pour recevoir la réponse, puisqu'elle n'est pas un
+			// navigateur.
+			app: "openbao",
+			id:  "openbao",
+			redirects: fmt.Sprintf(
+				"https://bao.%s/ui/vault/auth/oidc/oidc/callback,https://bao.%s/vault/auth/oidc/oidc/callback,http://localhost:8250/oidc/callback",
+				domain, domain),
+		},
 		// NB : pas de client « jitsi » — Jitsi est en accès libre (SSO retiré
 		// le 2026-10-09, voir internal/media/sans_sso.go). Les installations
 		// existantes le voient supprimé par SupprimerClientOIDC.
@@ -63,36 +75,63 @@ func EnsureOIDCClients(ctx context.Context, domain string) error {
 		return fmt.Errorf("domaine requis pour construire les redirect_uri OIDC")
 	}
 	for _, c := range clientsOIDC(domain) {
-		sec := c.app + "-oidc"
-		uuid, err := ensureClient(ctx, c.id, c.redirects)
-		if err != nil {
-			return fmt.Errorf("client OIDC %s: %w", c.id, err)
-		}
-		// Réutilise le secret existant (les apps pointent dessus), sinon génère.
-		secretVal, ok := readSecretVal(ctx, sec, "client-secret")
-		if !ok {
-			secretVal, err = genSecret(24)
-			if err != nil {
-				return err
-			}
-		}
-		if err := setClientSecret(ctx, uuid, secretVal); err != nil {
-			return fmt.Errorf("secret client %s: %w", c.id, err)
-		}
-		if err := createSecretS(ctx, sec, map[string]string{
-			"client-id":     c.id,
-			"client-secret": secretVal,
-		}); err != nil {
+		existant := secretExists(ctx, c.app+"-oidc")
+		if err := assurerUnClient(ctx, c); err != nil {
 			return err
 		}
-		if !ok {
-			fmt.Printf("∙ client OIDC %s créé (secret → %s)\n", c.id, sec)
+		if !existant {
+			fmt.Printf("∙ client OIDC %s créé (secret → %s-oidc)\n", c.id, c.app)
 		} else {
-			fmt.Printf("∙ client OIDC %s réconcilié (secret → %s)\n", c.id, sec)
+			fmt.Printf("∙ client OIDC %s réconcilié (secret → %s-oidc)\n", c.id, c.app)
 		}
 	}
-	fmt.Println("✓ Clients OIDC Keycloak prêts (nextcloud)")
+	fmt.Println("✓ Clients OIDC Keycloak prêts")
 	return nil
+}
+
+// assurerUnClient crée le client s'il manque, (re)pose son secret dans Keycloak,
+// et range le tout dans un Secret Kubernetes.
+//
+// FACTORISÉ PARCE QU'IL SERT DEUX FOIS : à l'installation complète, et au
+// déploiement du coffre seul. Recopier ces quatre étapes aurait suffi à ce que
+// les deux chemins divergent à la première correction.
+func assurerUnClient(ctx context.Context, c client) error {
+	sec := c.app + "-oidc"
+	uuid, err := ensureClient(ctx, c.id, c.redirects)
+	if err != nil {
+		return fmt.Errorf("client OIDC %s: %w", c.id, err)
+	}
+	// Réutilise le secret existant (les apps pointent dessus), sinon génère.
+	secretVal, ok := readSecretVal(ctx, sec, "client-secret")
+	if !ok {
+		secretVal, err = genSecret(24)
+		if err != nil {
+			return err
+		}
+	}
+	if err := setClientSecret(ctx, uuid, secretVal); err != nil {
+		return fmt.Errorf("secret client %s: %w", c.id, err)
+	}
+	return createSecretS(ctx, sec, map[string]string{
+		"client-id":     c.id,
+		"client-secret": secretVal,
+	})
+}
+
+// AssurerClientCoffre garantit le client OIDC du coffre, et lui seul.
+//
+// EXPORTÉE PARCE QUE LE COFFRE EN A BESOIN À SON PROPRE DÉPLOIEMENT : `ceffio
+// vault` doit pouvoir être relancé seul, sans rejouer toute la pile — c'est même
+// sa raison d'être. La connaissance de Keycloak reste dans ce paquet ; le module
+// du coffre demande le client et lit le Secret qui en résulte, plutôt que de
+// parler à Keycloak lui-même.
+func AssurerClientCoffre(ctx context.Context, domain string) error {
+	for _, c := range clientsOIDC(domain) {
+		if c.id == "openbao" {
+			return assurerUnClient(ctx, c)
+		}
+	}
+	return fmt.Errorf("client OIDC « openbao » absent de la liste : le coffre ne peut pas s'authentifier")
 }
 
 func ensureClient(ctx context.Context, clientID, redirects string) (string, error) {
