@@ -12,6 +12,27 @@
 // jeton que internal/secrets lira ensuite (BAO_ADDR / BAO_TOKEN). Les deux
 // moitiés d'un même mécanisme : celui-ci CRÉE le coffre, l'autre le CONSOMME.
 //
+// PARLE AU CLUSTER PAR internal/k8sapi, ET UNIQUEMENT PAR LUI.
+//
+// Ce module a d'abord lancé `kubectl` et lu sa sortie. Cinq défauts en sont
+// sortis, tous de la même famille — confondre « je n'ai pas pu demander » avec
+// « on m'a répondu » :
+//
+//   - `kubectl run` mêle ses messages d'accompagnement à la sortie utile : une
+//     clé de 32 octets est devenue un Secret de 309 caractères contenant
+//     « pod deleted » et « if you don't see a command prompt » ;
+//   - `CombinedOutput` fusionne les deux flux, et `kubectl exec` s'en accommode
+//     mal : « failed to start exec » ;
+//   - un message d'erreur analysé comme du JSON redevenait un objet vide, donc
+//     un état plausible — et faux ;
+//   - un outil absent de l'image (`curl`) transformait un échec d'exécution en
+//     « coffre non initialisé » ;
+//   - un jsonpath revenu vide n'a jamais pu être expliqué, précisément parce que
+//     rien dans ce programme ne pouvait l'observer.
+//
+// L'API Kubernetes est TYPÉE : un Secret est un Secret, une erreur est une
+// erreur. La classe entière de défauts disparaît avec l'intermédiaire.
+//
 // LE SECRET-ZÉRO, ET POURQUOI IL EST ICI : pour que le coffre soit utilisable
 // sans intervention humaine, il se descelle tout seul, grâce au sceau
 // « static » d'OpenBao : une clé de 32 octets lue depuis un fichier. Cette clé
@@ -21,15 +42,20 @@
 //
 // Qui obtient la machine obtient le coffre. C'était déjà vrai avant : les
 // secrets étaient dans des Secrets Kubernetes, sur cette même machine. La
-// différence est qu'à partir d'ici ils sont centralisés, traçables et
-// rotables — trois propriétés qu'on n'avait pas. Déplacer le coffre sur une
-// autre machine ne supprimerait pas ce point faible, cela ajouterait un
-// composant à administrer.
+// différence est qu'à partir d'ici ils sont centralisés, traçables et rotables —
+// trois propriétés qu'on n'avait pas. Déplacer le coffre sur une autre machine
+// ne supprimerait pas ce point faible, cela ajouterait un composant à
+// administrer.
 //
 // POURQUOI PAS DE DESCELlement MANUEL : demander une intervention humaine à
 // chaque redémarrage ferait d'un redémarrage une panne, dans un produit dont
 // l'argument est « une commande et ça tourne ». Le choix est fait en connaissance
 // de cause.
+//
+// CE QUI N'EST PAS FAIT, ET QU'IL FAUT SAVOIR : la ROTATION de la clé de sceau
+// n'est pas implémentée. OpenBao la prévoit (`previous_key` accompagne
+// `current_key` pour relire ce qui est déjà chiffré) ; aujourd'hui, changer
+// cette clé rendrait le coffre illisible. C'est une lacune réelle.
 //
 // LE COFFRE EST OPTIONNEL (voir internal/secrets) : si ce module échoue, le
 // déploiement continue et les secrets restent dans Kubernetes. Une panne du
@@ -39,6 +65,7 @@ package vault
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -48,7 +75,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ceffio-suite/ceffio/internal/k8s"
+	"github.com/ceffio-suite/ceffio/internal/k8sapi"
 )
 
 const (
@@ -58,6 +85,7 @@ const (
 
 	ns      = "ceffio-vault"
 	service = "openbao"
+	pod     = "openbao-0"
 
 	cheminDonnees = "/openbao/data"
 	cheminCle     = "/openbao/secrets/unseal.key"
@@ -81,7 +109,7 @@ type Resultat struct {
 //  4. l'initialisation, si le coffre ne l'est pas déjà ;
 //  5. le moteur KV versionné ;
 //  6. une politique d'administration et un jeton, puis RÉVOCATION du jeton racine ;
-//  7. un aller-retour réel : écrire, relire, et prouver que ça se lit.
+//  7. un aller-retour réel : écrire, relire, et prouver que ça REFUSE.
 //
 // Ne rend JAMAIS d'erreur fatale pour la suite : en cas d'échec, un
 // avertissement est imprimé et Resultat{Pret:false} est rendu, pour que le
@@ -90,52 +118,77 @@ type Resultat struct {
 // PAS DE PARAMÈTRE DE DOMAINE, VOLONTAIREMENT : le coffre n'en a pas besoin
 // aujourd'hui. Le jour où il sera exposé en https://bao.<domaine>, l'entrée
 // publique demandera le domaine — et c'est à ce moment-là qu'il faudra ajouter
-// le paramètre, pas avant. Un paramètre que rien n'utilise finit par être
-// rempli au hasard, puis lu par erreur.
+// le paramètre, pas avant. Un paramètre que rien n'utilise finit par être rempli
+// au hasard, puis lu par erreur.
 func Deploy(ctx context.Context) *Resultat {
 	fmt.Println("\nDéploiement du coffre de secrets (OpenBao)...")
 
-	if err := ensureNamespace(ctx); err != nil {
+	cli, err := k8sapi.Nouveau()
+	if err != nil {
+		// ICI SE JOUE TOUT : pas de client, donc pas de cluster. On le DIT. La
+		// version précédente laissait une configuration introuvable se manifester
+		// plus tard, sous forme de sorties vides qu'on interprétait comme des
+		// états — et le déploiement poursuivait sur un cluster qu'il n'atteignait
+		// pas.
+		fmt.Printf("  ∙ coffre non déployé : %v\n", err)
+		return &Resultat{}
+	}
+
+	if err := cli.Appliquer(ctx, namespaceManifest()); err != nil {
 		fmt.Printf("  ∙ coffre non déployé (namespace) : %v\n", err)
 		return &Resultat{}
 	}
-	if err := ensureCleDescellement(ctx); err != nil {
+	if err := ensureCleDescellement(ctx, cli); err != nil {
 		fmt.Printf("  ∙ coffre non déployé (clé de descellement) : %v\n", err)
 		return &Resultat{}
 	}
-	empreinte, err := applyConfig(ctx)
+	empreinte, err := applyConfig(ctx, cli)
 	if err != nil {
 		fmt.Printf("  ∙ coffre non déployé (configuration) : %v\n", err)
 		return &Resultat{}
 	}
-	if err := applyWorkload(ctx, empreinte); err != nil {
+	if err := cli.Appliquer(ctx, workloadManifest(empreinte)); err != nil {
 		fmt.Printf("  ∙ coffre non déployé (charge de travail) : %v\n", err)
 		return &Resultat{}
 	}
-	if err := waitReady(ctx); err != nil {
+
+	// Le pod doit être INSTALLÉ SUR UN NŒUD avant qu'une exécution soit possible.
+	// Le contrôle est typé : son échec ne peut plus ressembler à un résultat.
+	if _, err := cli.AttendrePodInstalle(ctx, ns, pod, 180*time.Second); err != nil {
 		fmt.Printf("  ∙ coffre injoignable : %v\n", err)
 		return &Resultat{}
 	}
-	if err := initialiser(ctx); err != nil {
+	if err := waitReady(ctx, cli); err != nil {
+		fmt.Printf("  ∙ coffre injoignable : %v\n", err)
+		return &Resultat{}
+	}
+	if err := initialiser(ctx, cli); err != nil {
 		fmt.Printf("  ∙ initialisation impossible : %v\n", err)
 		return &Resultat{}
 	}
-	if err := monterMoteurKV(ctx); err != nil {
+	// LES POLITIQUES ET LES JETONS AVANT LE MONTAGE DU MOTEUR — et cet ordre
+	// n'est pas cosmétique. Monter un moteur est une opération d'administration
+	// qui exige une politique à jour. Placée après, une politique corrigée ne
+	// pouvait jamais s'appliquer à l'étape qui en avait besoin : le déploiement
+	// échouait sur un 403, on corrigeait la politique, on relançait — et il
+	// échouait au même endroit, puisque le code n'atteignait jamais l'écriture de
+	// la politique. Un blocage circulaire, constaté en service.
+	jeton, err := poserPolitiquesEtJetons(ctx, cli)
+	if err != nil {
+		fmt.Printf("  ∙ jetons non créés : %v\n", err)
+		return &Resultat{}
+	}
+	if err := monterMoteurKV(ctx, cli); err != nil {
 		fmt.Printf("  ∙ moteur KV non monté : %v\n", err)
 		return &Resultat{}
 	}
-	jeton, err := poserPolitiqueEtJeton(ctx)
-	if err != nil {
-		fmt.Printf("  ∙ jeton d'administration non créé : %v\n", err)
-		return &Resultat{}
-	}
-	if err := retirerJetonRacine(ctx); err != nil {
+	if err := retirerJetonRacine(ctx, cli); err != nil {
 		// Non bloquant : le jeton racine reste, et on le DIT. Un jeton maître
 		// qui survit sans le dire est un défaut ; qui survit en le signalant est
 		// un incident à traiter.
 		fmt.Printf("  ∙ ATTENTION : jeton racine non révoqué (%v) — à traiter\n", err)
 	}
-	if err := verifierAllerRetour(ctx, jeton); err != nil {
+	if err := verifierAllerRetour(ctx, cli, jeton); err != nil {
 		fmt.Printf("  ∙ vérification de bout en bout échouée : %v\n", err)
 		return &Resultat{}
 	}
@@ -148,16 +201,24 @@ func Deploy(ctx context.Context) *Resultat {
 	// ne peut pas atteindre ne sert à rien. Le NodePort est joignable depuis la
 	// machine ET depuis les pods, ce qui donne une seule adresse aux deux.
 	//
+	// LE NUMÉRO EST LU, PAS CHOISI : fixer un NodePort le réserve pour tout le
+	// cluster, et une recréation échoue alors sur « provided port is already
+	// allocated ». Kubernetes l'attribue, on le relit.
+	//
 	// CE QU'ON ASSUME ICI, ET QU'IL FAUT DIRE : ce NodePort parle en clair sur le
 	// réseau de la machine. C'est un point à corriger quand l'ingress TLS de la
 	// suite sera en place — le coffre y gagnera une adresse https://bao.<domaine>.
-	// Tant que ce n'est pas fait, le trafic du coffre n'est pas chiffré.
+	port, err := cli.NodePortDuService(ctx, ns, service, "api")
+	if err != nil || port == 0 {
+		fmt.Printf("  ∙ ATTENTION : port externe du coffre illisible (%v) — le coffre tourne, mais son adresse n'est pas connue\n", err)
+		return &Resultat{Pret: false}
+	}
 	noeud := os.Getenv("CEFFIO_NOEUD")
 	if noeud == "" {
 		noeud = "127.0.0.1"
 	}
 	return &Resultat{
-		Adresse: fmt.Sprintf("http://%s:32000", noeud),
+		Adresse: fmt.Sprintf("http://%s:%d", noeud, port),
 		Jeton:   jeton,
 		Pret:    true,
 	}
@@ -167,96 +228,62 @@ func Deploy(ctx context.Context) *Resultat {
 // 1. Namespace et clé de descellement
 // ---------------------------------------------------------------------------
 
-// ensureNamespace crée le namespace, de façon IDEMPOTENTE.
+// namespaceManifest décrit le namespace, posé par `apply` donc IDEMPOTENT.
 //
-// POURQUOI PAS `kubectl create` : cette commande ÉCHOUE si le namespace existe
-// déjà, et un échec ferait abandonner tout le déploiement. Le coffre ne
-// pourrait donc jamais être redéployé — précisément au moment où l'on en a le
-// plus besoin, après une mise à niveau ou un changement de configuration.
-//
-// `kubectl apply` sur un manifeste de namespace dit la même chose sans échouer
-// quand c'est déjà en place.
-func ensureNamespace(ctx context.Context) error {
-	return appliquer(ctx, fmt.Sprintf(`apiVersion: v1
+// POURQUOI PAS une création directe : créer échoue si l'objet existe déjà, et
+// cet échec ferait abandonner tout le déploiement. Le coffre ne pourrait donc
+// jamais être redéployé — précisément au moment où l'on en a le plus besoin,
+// après une mise à niveau ou un changement de configuration.
+func namespaceManifest() string {
+	return fmt.Sprintf(`apiVersion: v1
 kind: Namespace
 metadata:
   name: %s
-`, ns))
+`, ns)
 }
 
 // ensureCleDescellement crée la clé de 32 octets du sceau « static », si elle
 // n'existe pas. On ne la régénère JAMAIS : la régénérer rendrait le coffre
 // illisible, puisque les données existantes sont chiffrées avec elle.
-func ensureCleDescellement(ctx context.Context) error {
-	if _, err := kube(ctx, "get", "secret", "openbao-unseal-key", "-n", ns); err == nil {
+//
+// LA CLÉ EST ENGENDRÉE EN GO, ET C'EST UN GAIN RÉEL : plus de pod jetable, plus
+// de sortie de commande à découper, donc plus aucun risque de récupérer autre
+// chose que la clé. La version précédente passait par `kubectl run` et a
+// enregistré un Secret de 309 caractères dont la moitié était un message d'aide.
+//
+// 32 OCTETS, ET PAS UN AUTRE NOMBRE : c'est la taille qu'exige le sceau
+// statique, qui s'en sert comme clé AES-256. Une taille différente fait échouer
+// le démarrage du serveur sur « unknown encoding for AES-256 key » — constaté.
+func ensureCleDescellement(ctx context.Context, cli *k8sapi.Client) error {
+	existante, err := cli.LireSecret(ctx, ns, "openbao-unseal-key", "unseal.key")
+	if err != nil {
+		return err
+	}
+	if existante != "" {
 		return nil
 	}
 
-	// POURQUOI PAS `kubectl run` : cette commande est faite pour un humain devant
-	// un terminal. Elle mêle à sa sortie des messages d'accompagnement (« pod
-	// deleted », « if you don't see a command prompt… ») et, avec `-i`, elle
-	// attend parfois une entrée. Constaté en service : la clé enregistrée faisait
-	// 309 caractères au lieu de 44, et le coffre refusait de démarrer sur
-	// « unknown encoding for AES-256 key ». Le coffre aurait pu être configuré
-	// avec une clé dont la moitié était un message d'aide.
-	//
-	// Un pod JETABLE dont on ne lit QUE la sortie standard fait la même chose
-	// sans rien y mêler.
-	nom := "gen-cle"
-	_, _ = kube(ctx, "delete", "pod", nom, "-n", ns, "--ignore-not-found")
-
-	lancer := []string{"run", nom, "--image=" + openbaoImage, "-n", ns,
-		"--restart=Never", "--command", "--", "sh", "-c",
-		// 32 octets aléatoires, exactement ce qu'exige le sceau statique
-		// (AES-256-GCM), encodés en base64 sur une seule ligne.
-		"head -c 32 /dev/urandom | base64 -w0"}
-	if _, err := kube(ctx, lancer...); err != nil {
-		return fmt.Errorf("lancement de la génération : %w", err)
+	brut := make([]byte, 32)
+	if _, err := rand.Read(brut); err != nil {
+		return fmt.Errorf("génération de la clé : %w", err)
 	}
-	defer func() {
-		_, _ = kube(ctx, "delete", "pod", nom, "-n", ns, "--ignore-not-found")
-	}()
+	// base64 sur une ligne : la forme que le fichier attend, et l'une de celles
+	// qu'OpenBao sait décoder (« raw, hex, or base64-encoded »).
+	cle := base64.StdEncoding.EncodeToString(brut)
 
-	// Attente bornée de la fin du pod : un pod qui n'aboutit pas ne doit pas
-	// bloquer le déploiement indéfiniment.
-	phase := ""
-	for i := 0; i < 24; i++ {
-		phase, _ = kube(ctx, "get", "pod", nom, "-n", ns, "-o", "jsonpath={.status.phase}")
-		if phase == "Succeeded" || phase == "Failed" {
-			break
-		}
-		time.Sleep(5 * time.Second)
-	}
-	if phase != "Succeeded" {
-		return fmt.Errorf("le pod de génération n'a pas abouti (état %q)", phase)
-	}
-
-	// LA SORTIE STANDARD SEULE, et rien d'autre : c'est le cœur de la correction.
-	cmd := k8s.Command(ctx, "kubectl", "logs", nom, "-n", ns)
-	cmd.Env = k8s.Env()
-	brut, err := cmd.Output()
-	if err != nil {
-		return fmt.Errorf("lecture de la clé générée : %w", err)
-	}
-	cle := strings.TrimSpace(string(brut))
-
-	// ON CONTRÔLE LA FORME AVANT DE S'EN SERVIR. Sans cette vérification, une
-	// sortie polluée se retrouve dans le coffre et l'erreur n'apparaît qu'au
-	// démarrage du serveur, sous une forme qui ne dit pas d'où elle vient.
-	// 32 octets en base64 font exactement 44 caractères.
+	// ON CONTRÔLE LA FORME AVANT DE S'EN SERVIR. Le contrôle est trivial
+	// maintenant que la valeur ne sort plus d'une commande — mais il documente la
+	// contrainte, et il attraperait une modification future qui réintroduirait un
+	// détour. 32 octets en base64 font exactement 44 caractères.
 	if len(cle) != 44 {
-		return fmt.Errorf("clé mal formée : %d caractères au lieu de 44 — sortie inattendue de kubectl : %.80s",
-			len(cle), cle)
-	}
-	if _, err := base64.StdEncoding.DecodeString(cle); err != nil {
-		return fmt.Errorf("clé qui n'est pas du base64 valide : %w", err)
+		return fmt.Errorf("clé mal formée : %d caractères au lieu de 44", len(cle))
 	}
 
-	if _, err := kube(ctx, "create", "secret", "generic", "openbao-unseal-key",
-		"-n", ns, "--from-literal=unseal.key="+cle); err != nil {
+	if err := cli.PoserSecret(ctx, ns, "openbao-unseal-key",
+		map[string][]byte{"unseal.key": []byte(cle)}); err != nil {
 		return fmt.Errorf("pose de la clé : %w", err)
 	}
-	fmt.Println("  ∙ clé de descellement créée (32 octets, vérifiée, le secret-zéro)")
+	fmt.Println("  ∙ clé de descellement créée (32 octets = 256 bits → AES-256)")
 	return nil
 }
 
@@ -264,16 +291,16 @@ func ensureCleDescellement(ctx context.Context) error {
 // 2. Configuration : stockage, écoute, sceau, AUDIT
 // ---------------------------------------------------------------------------
 
-// ConfigMap de configuration.
+// configManifest décrit la configuration du serveur.
 //
-// TROIS CHOIX À EXPLIQUER :
+// QUATRE CHOIX À EXPLIQUER :
 //
 //   - L'ÉCOUTE SE FAIT SANS TLS À L'INTÉRIEUR DU CLUSTER. Le trafic ne quitte
 //     pas le réseau des pods. Le dire explicitement plutôt que de le laisser
 //     deviner : un serveur TLS qui reçoit du clair répond 400, donc un code
 //     d'erreur ne prouve pas qu'on parle à un serveur en clair.
 //
-//   - `disable_mlock` A ÉTÉ RETIRÉ, et c'est délibéré : OpenBao le signale comme
+//   - `disable_mlock` EST ABSENT, et c'est délibéré : OpenBao le signale comme
 //     « unknown or unsupported field » au démarrage. Le garder produirait un
 //     avertissement à chaque démarrage, et un avertissement permanent finit par
 //     être ignoré — y compris le jour où il annonce autre chose.
@@ -286,8 +313,8 @@ func ensureCleDescellement(ctx context.Context) error {
 //     LA SYNTAXE EXACTE COMPTE : `audit "<type>" "<chemin>"` prend DEUX
 //     étiquettes — le type d'abord, le chemin de montage ensuite — et `options`
 //     est un BLOC, pas une affectation. Écrire `audit "file" { … }` avec une
-//     seule étiquette fait échouer le démarrage du serveur sur
-//     « audit type must be specified », constaté en service.
+//     seule étiquette fait échouer le démarrage sur « audit type must be
+//     specified », constaté en service.
 //
 //   - LE DESCELlement EST AUTOMATIQUE, par le sceau statique. Voir l'entête du
 //     paquet pour le compromis.
@@ -303,7 +330,7 @@ data:
 
     storage "raft" {
       path    = "%[2]s"
-      node_id = "openbao-0"
+      node_id = "%[6]s"
     }
 
     listener "tcp" {
@@ -325,7 +352,7 @@ data:
 
     api_addr     = "http://%[5]s.%[1]s.svc:8200"
     cluster_addr = "http://%[5]s.%[1]s.svc:8201"
-`, ns, cheminDonnees, cheminCle, cheminAudit, service)
+`, ns, cheminDonnees, cheminCle, cheminAudit, service, pod)
 }
 
 // applyConfig pose la configuration et rend son empreinte.
@@ -334,15 +361,15 @@ data:
 // ne redémarre pas un pod parce qu'un ConfigMap a changé : le fichier monté se
 // met à jour sur le disque, mais le processus en cours ne relit rien. Un pod en
 // marche continuerait donc d'utiliser l'ancienne configuration — et une
-// correction de configuration resterait sans effet, ce qui fait perdre beaucoup
-// de temps à qui croit avoir corrigé.
+// correction resterait sans effet, ce qui fait perdre beaucoup de temps à qui
+// croit avoir corrigé.
 //
 // En reportant l'empreinte dans une annotation du gabarit, toute modification
 // devient un changement de pod : le StatefulSet roule, et la nouvelle
 // configuration est réellement appliquée.
-func applyConfig(ctx context.Context) (string, error) {
+func applyConfig(ctx context.Context, cli *k8sapi.Client) (string, error) {
 	manifeste := configManifest()
-	if err := appliquer(ctx, manifeste); err != nil {
+	if err := cli.Appliquer(ctx, manifeste); err != nil {
 		return "", err
 	}
 	somme := sha256.Sum256([]byte(manifeste))
@@ -353,19 +380,15 @@ func applyConfig(ctx context.Context) (string, error) {
 // 3. Charge de travail
 // ---------------------------------------------------------------------------
 
-// applyWorkload pose le StatefulSet, le Service et le PVC.
+// workloadManifest pose le StatefulSet, le Service et le volume.
 //
 // UN SEUL NŒUD, ET C'EST UN CHOIX : le stockage raft sait faire un cluster, mais
 // une PME n'a pas besoin de trois coffres pour trois secrets. Le jour où il en
 // faudra un, c'est le nombre de réplicas qui changera — pas la conception.
 //
 // L'EMPREINTE DE CONFIGURATION EST REPORTÉE DANS LE GABARIT : c'est elle qui fait
-// qu'une modification de la configuration redémarre réellement le pod, au lieu de
-// laisser tourner l'ancienne.
-func applyWorkload(ctx context.Context, empreinte string) error {
-	return appliquer(ctx, workloadManifest(empreinte))
-}
-
+// qu'une modification de la configuration redémarre réellement le pod, au lieu
+// de laisser tourner l'ancienne.
 func workloadManifest(empreinte string) string {
 	return fmt.Sprintf(`apiVersion: v1
 kind: Service
@@ -380,7 +403,6 @@ spec:
     - name: api
       port: 8200
       targetPort: 8200
-      nodePort: 32000
     - name: cluster
       port: 8201
       targetPort: 8201
@@ -431,8 +453,19 @@ spec:
             - name: audit
               mountPath: /openbao/audit
           readinessProbe:
+            # SONDE QUI ACCEPTE L'ÉTAT « NON INITIALISÉ ».
+            #
+            # /v1/sys/health répond 501 tant que le coffre n'est pas initialisé,
+            # et 503 tant qu'il est scellé. Une sonde par défaut (200-399) ne
+            # passerait donc JAMAIS avant l'initialisation — or c'est
+            # l'initialisation qui est censée suivre. Le pod resterait
+            # éternellement « non prêt », et le déploiement attendrait un état
+            # qui ne peut pas venir.
+            #
+            # 204 sur ces deux états dit la vérité : le serveur est vivant et
+            # répond, il attend juste sa mise en service.
             httpGet:
-              path: /v1/sys/health?standbyok=true
+              path: /v1/sys/health?standbyok=true&sealedcode=204&uninitcode=204
               port: 8200
             initialDelaySeconds: 5
             periodSeconds: 5
@@ -456,19 +489,23 @@ spec:
 `, service, ns, openbaoImage, cheminDonnees, empreinte)
 }
 
-// waitReady attend que le serveur réponde. Il peut répondre 501 (non
-// initialisé) : c'est un état valide, pas une erreur.
-func waitReady(ctx context.Context) error {
+// waitReady attend que le coffre réponde à une commande d'état.
+//
+// Le pod est déjà connu comme installé (AttendrePodInstalle s'en est chargé) :
+// il ne reste qu'à attendre que le serveur soit assez vivant pour répondre.
+func waitReady(ctx context.Context, cli *k8sapi.Client) error {
 	limite := time.Now().Add(180 * time.Second)
+	var dernier string
 	for time.Now().Before(limite) {
-		etat, _ := etatCoffre(ctx)
-		if etat != "" {
+		etat, err := etatCoffre(ctx, cli)
+		if err == nil && etat != "" {
 			fmt.Printf("  ∙ coffre joignable (état : %s)\n", etat)
 			return nil
 		}
-		time.Sleep(5 * time.Second)
+		dernier = fmt.Sprintf("%v", err)
+		time.Sleep(4 * time.Second)
 	}
-	return fmt.Errorf("le coffre n'a pas répondu en 180 s")
+	return fmt.Errorf("le coffre n'a pas répondu en 180 s (dernier état : %s)", dernier)
 }
 
 // ---------------------------------------------------------------------------
@@ -482,8 +519,8 @@ func waitReady(ctx context.Context) error {
 // des clés de descellement : le coffre reste descellé une fois initialisé. Ces
 // clés servent uniquement à régénérer un jeton racine perdu — d'où leur
 // conservation, et d'où le fait qu'elles ne soient PAS la clé quotidienne.
-func initialiser(ctx context.Context) error {
-	initie, err := dejaInitialise(ctx)
+func initialiser(ctx context.Context, cli *k8sapi.Client) error {
+	initie, err := dejaInitialise(ctx, cli)
 	if err != nil {
 		return err
 	}
@@ -492,7 +529,11 @@ func initialiser(ctx context.Context) error {
 		return nil
 	}
 
-	sortie, err := bao(ctx, "operator", "init",
+	// Le réessai n'est pas décoratif : `operator init` monte la barrière de
+	// sécurité du coffre, ce qui provoque un bref redémarrage du cœur. Sans lui,
+	// l'étape suivante échouait sur « connection refused » — une course avec le
+	// redémarrage que la commande venait elle-même de déclencher.
+	sortie, err := baoReessai(ctx, cli, "operator", "init",
 		"-recovery-shares=1", "-recovery-threshold=1", "-format=json")
 	if err != nil {
 		return fmt.Errorf("operator init : %w", err)
@@ -504,36 +545,43 @@ func initialiser(ctx context.Context) error {
 	if err := json.Unmarshal([]byte(extraitJSON(sortie)), &res); err != nil {
 		return fmt.Errorf("réponse d'initialisation illisible : %w", err)
 	}
+	// On contrôle que la réponse est COMPLÈTE avant de l'utiliser : un
+	// initialisation à demi lue produirait un coffre sans jeton racine, donc
+	// impossible à administrer.
+	if res.RootToken == "" {
+		return fmt.Errorf("réponse d'initialisation sans jeton racine : %.120s", strings.TrimSpace(sortie))
+	}
+	if len(res.RecoveryKeys) == 0 {
+		return fmt.Errorf("réponse d'initialisation sans clé de récupération : %.120s", strings.TrimSpace(sortie))
+	}
 
 	// Les clés sont rangées dans un Secret, JAMAIS imprimées.
-	args := []string{"create", "secret", "generic", "openbao-recovery", "-n", ns,
-		"--from-literal=root-token=" + res.RootToken}
+	donnees := map[string][]byte{"root-token": []byte(res.RootToken)}
 	for i, k := range res.RecoveryKeys {
-		args = append(args, fmt.Sprintf("--from-literal=recovery-%d=%s", i, k))
+		donnees[fmt.Sprintf("recovery-%d", i)] = []byte(k)
 	}
-	if _, err := kube(ctx, args...); err != nil {
+	if err := cli.PoserSecret(ctx, ns, "openbao-recovery", donnees); err != nil {
 		return fmt.Errorf("rangement des clés de récupération : %w", err)
 	}
 	fmt.Println("  ∙ coffre initialisé (clés rangées dans openbao-recovery, non affichées)")
 	return nil
 }
 
-// dejaInitialise interroge l'état : 501 signifie « pas initialisé », 200 ou 429
-// « déjà initialisé ». On ne déduit pas d'un code d'erreur générique.
-func dejaInitialise(ctx context.Context) (bool, error) {
-	code, err := codeHTTP(ctx, "/v1/sys/health")
+// dejaInitialise dit si le stockage du coffre a déjà été préparé.
+//
+// UNE SEULE SOURCE DE VÉRITÉ, et c'est l'état du serveur. Il y en avait deux
+// auparavant — le code de `/v1/sys/health` et la sortie de `bao status` — et
+// elles se contredisaient : la première annonçait « déjà initialisé » sur un
+// coffre qui ne l'était pas, parce que l'image OpenBao ne contient PAS `curl`.
+// L'appel échouait, et le code « inconnu » était interprété comme
+// « initialisé ». Un échec silencieux, dans la fonction qui décide s'il faut
+// initialiser.
+func dejaInitialise(ctx context.Context, cli *k8sapi.Client) (bool, error) {
+	etat, err := etatCoffre(ctx, cli)
 	if err != nil {
 		return false, err
 	}
-	switch code {
-	case "200", "429", "472", "473":
-		return true, nil
-	case "501":
-		return false, nil
-	}
-	// Un 5xx après initialisation (coffre scellé, par exemple) compte comme
-	// initialisé : c'est l'état du serveur, pas celui du stockage.
-	return true, nil
+	return etat != "non initialisé", nil
 }
 
 // ---------------------------------------------------------------------------
@@ -542,8 +590,16 @@ func dejaInitialise(ctx context.Context) (bool, error) {
 
 // monterMoteurKV monte un KV versionné au chemin « kv », la convention que
 // internal/secrets attend par défaut (BAO_MOTEUR).
-func monterMoteurKV(ctx context.Context) error {
-	sortie, err := baoRacine(ctx, "secrets", "list")
+//
+// IL PASSE PAR L'ADMINISTRATION, ET C'EST NÉCESSAIRE : monter un moteur est une
+// opération d'administration du coffre, hors de portée du jeton applicatif — par
+// conception. Le jeton d'installation existe précisément pour ça.
+func monterMoteurKV(ctx context.Context, cli *k8sapi.Client) error {
+	adm, err := jetonAdministration(ctx, cli)
+	if err != nil {
+		return err
+	}
+	sortie, err := baoAvecJeton(ctx, cli, adm, "secrets", "list")
 	if err != nil {
 		return err
 	}
@@ -551,66 +607,189 @@ func monterMoteurKV(ctx context.Context) error {
 		fmt.Println("  ∙ moteur KV déjà monté")
 		return nil
 	}
-	if _, err := baoRacine(ctx, "secrets", "enable", "-path=kv", "-version=2", "kv"); err != nil {
+	if _, err := baoAvecJeton(ctx, cli, adm, "secrets", "enable", "-path=kv", "-version=2", "kv"); err != nil {
 		return fmt.Errorf("montage du moteur KV : %w", err)
 	}
 	fmt.Println("  ∙ moteur KV versionné monté sur « kv »")
 	return nil
 }
 
+// jetonAdministration rend un jeton capable d'administrer le coffre :
+// le jeton d'installation s'il est valide, sinon le jeton racine — c'est-à-dire
+// le premier passage, avant la révocation.
+//
+// L'ORDRE COMPTE, et il a une raison : après la mise en place, le jeton racine
+// n'existe plus. Chercher le racine en premier échouerait à chaque
+// redéploiement, alors que le coffre se porte parfaitement bien.
+func jetonAdministration(ctx context.Context, cli *k8sapi.Client) (string, error) {
+	if j, _ := cli.LireSecret(ctx, ns, "openbao-installation", "token"); j != "" {
+		// `token lookup` sans argument interroge le jeton courant — voir la note
+		// détaillée dans poserPolitiquesEtJetons : « lookup-self » n'existe pas.
+		if _, err := baoAvecJeton(ctx, cli, j, "token", "lookup"); err == nil {
+			return j, nil
+		}
+	}
+	if j, _ := cli.LireSecret(ctx, ns, "openbao-recovery", "root-token"); j != "" {
+		return j, nil
+	}
+	return "", fmt.Errorf("aucun jeton d'administration : ni jeton d'installation valide, ni jeton racine (régénérer un jeton racine avec une clé de récupération)")
+}
+
 // ---------------------------------------------------------------------------
 // 6. Politique et jeton d'administration, puis révocation du racine
 // ---------------------------------------------------------------------------
 
-// poserPolitiqueEtJeton crée une politique d'administration, en dérive un jeton,
-// et rend ce jeton.
+// poserPolitiquesEtJetons crée DEUX politiques et DEUX jetons, aux périmètres
+// distincts, et rend le jeton applicatif.
 //
-// POURQUOI PAS GARDER LE JETON RACINE : il ne peut rien refuser. Le garder pour
-// « simplifier » revient à laisser une clé passe-partout dans un tiroir. Le
-// jeton dérivé porte exactement les droits listés ci-dessous, et se révoque.
-func poserPolitiqueEtJeton(ctx context.Context) (string, error) {
-	// ON RÉUTILISE UN JETON DÉJÀ POSÉ, s'il fonctionne encore.
-	//
-	// POURQUOI C'EST INDISPENSABLE : le jeton racine est RÉVOQUÉ après la mise en
-	// place, et sa copie locale supprimée. Un redéploiement n'a donc plus les
-	// moyens d'en fabriquer un — il échouerait sur « jeton racine indisponible »,
-	// alors que le coffre tourne parfaitement. Un coffre qu'on ne peut pas
-	// redéployer est un coffre qu'on n'ose pas toucher.
-	if jeton, _ := lireSecret(ctx, "openbao-token", "token"); jeton != "" {
-		// On ne se fie pas à sa seule présence : on vérifie qu'il est encore
-		// valide. Un jeton expiré ou révoqué laissé dans un Secret donnerait
-		// l'illusion d'un coffre opérationnel.
-		if _, err := baoAvecJeton(ctx, jeton, "token", "lookup-self"); err == nil {
-			fmt.Println("  ∙ jeton d'administration déjà en place (réutilisé)")
-			return jeton, nil
+// POURQUOI DEUX, ET PAS UN SEUL — c'est la correction d'une contradiction que le
+// terrain a révélée. Le code précédent révoquait le jeton racine (bien) après
+// avoir tout fait avec lui (mal) : au second passage, le montage du moteur KV et
+// la réécriture des politiques exigeaient des droits racine qui n'existaient
+// plus. Le coffre devenait non redéployable — précisément au moment où l'on en a
+// le plus besoin, après une mise à niveau.
+//
+// La réponse n'est pas de garder le jeton racine, mais de fabriquer DEUX jetons
+// AVANT de le révoquer :
+//
+//   - le jeton d'INSTALLATION porte les droits d'administration du coffre
+//     (monter un moteur, écrire une politique, créer un jeton). Il sert aux
+//     passages suivants de `ceffio vault`, et il est rangé à part ;
+//   - le jeton APPLICATIF ne porte que la lecture et l'écriture des secrets de
+//     la suite, sous `kv/data/ceffio/*`. C'est celui que la suite reçoit
+//     (BAO_TOKEN).
+//
+// AINSI LE JETON QUE LA SUITE UTILISE NE PEUT PAS ADMINISTRER LE COFFRE. Un
+// service compromis ne peut pas monter de moteur, ni élargir sa propre
+// politique, ni fabriquer de jeton. C'est ce que veut dire « moindre privilège »,
+// et un seul jeton n'aurait pas pu le faire.
+func poserPolitiquesEtJetons(ctx context.Context, cli *k8sapi.Client) (string, error) {
+	// ON RÉUTILISE LE JETON D'INSTALLATION S'IL FONCTIONNE ENCORE. Le coffre a
+	// certainement déjà été mis en place : sans cela, il faudrait le jeton racine,
+	// qui a été révoqué — et un coffre qu'on ne peut pas redéployer est un coffre
+	// qu'on n'ose pas toucher.
+	inst := ""
+	if j, _ := cli.LireSecret(ctx, ns, "openbao-installation", "token"); j != "" {
+		// On ne se fie pas à sa seule présence : un jeton expiré laissé dans un
+		// Secret donnerait l'illusion d'un coffre administrable.
+		//
+		// LA FORME EXACTE COMPTE : `bao token lookup` SANS argument interroge le
+		// jeton courant. Les sous-commandes réelles sont capabilities, create,
+		// lookup, renew et revoke — il n'existe pas de « lookup-self ». Écrire ce
+		// nom affiche l'aide et sort en erreur, ce qui faisait déclarer INVALIDE un
+		// jeton parfaitement valide, et le coffre passait pour ingérable.
+		// (Vérifié : `bao token --help`.)
+		if _, err := baoAvecJeton(ctx, cli, j, "token", "lookup"); err == nil {
+			fmt.Println("  ∙ jeton d'installation déjà en place (réutilisé)")
+			inst = j
 		}
-		fmt.Println("  ∙ jeton en place invalide — il faut le jeton racine pour en refaire un")
+	}
+	if inst == "" {
+		inst, _ = cli.LireSecret(ctx, ns, "openbao-recovery", "root-token")
+		if inst == "" {
+			return "", fmt.Errorf("aucun jeton d'administration valide : le jeton racine a été révoqué et le jeton d'installation est absent — régénérer un jeton racine avec une clé de récupération (openbao-recovery)")
+		}
 	}
 
-	// La politique couvre les besoins RÉELS de Ceffio : lire et écrire les
-	// secrets de la suite, lire les métadonnées, et rien d'autre. Les actions
-	// d'administration du coffre lui-même (montage de moteurs, politiques,
-	// authentification) restent hors de portée d'un jeton quotidien — c'est le
-	// sens de la dernière vérification de verifierAllerRetour.
-	//
-	// ELLE EST ÉCRITE PAR HEREDOC, et non passée en argument : `bao policy write`
-	// attend un chemin de fichier ou `-` pour stdin, et une politique tenant sur
-	// une ligne de commande serait tronquée au premier retour à la ligne.
-	regle := `path "kv/data/ceffio/*" { capabilities = ["create","read","update","list"] }
-path "kv/metadata/ceffio/*" { capabilities = ["read","list"] }
+	// LES DEUX POLITIQUES SONT ÉCRITES PAR FICHIER, et non en argument : `policy
+	// write` attend un chemin ou `-` pour l'entrée standard, et une politique
+	// tenant sur une ligne de commande serait tronquée au premier retour à la
+	// ligne.
+	politiques := []struct{ nom, regle string }{
+		// APPLICATIVE : les secrets de la suite, et rien d'autre. Noter qu'il n'y
+		// a AUCUNE capacité d'administration ici — ni montage de moteur, ni
+		// politique, ni création de jeton.
+		{"ceffio-admin", `path "kv/data/ceffio/*" { capabilities = ["create","read","update","list"] }
+path "kv/metadata/ceffio/*" { capabilities = ["read","list","delete"] }
 path "kv/delete/ceffio/*" { capabilities = ["update"] }
-path "kv/list/ceffio" { capabilities = ["list"] }`
-	script := fmt.Sprintf("cat > /tmp/politique.hcl <<'FIN_POLITIQUE'\n%s\nFIN_POLITIQUE\n", regle)
-	if _, err := execPod(ctx, "sh", "-c", script); err != nil {
-		return "", fmt.Errorf("écriture de la politique : %w", err)
+path "kv/undelete/ceffio/*" { capabilities = ["update"] }
+# L'OUTIL EN LIGNE DE COMMANDE INTERROGE CE CHEMIN AVANT TOUTE ÉCRITURE.
+#
+# « bao kv put » commence par demander où le moteur est monté, pour savoir s'il
+# doit viser l'API KV version 1 ou version 2. Sans cette autorisation, la
+# commande échoue sur un 403 portant sur « sys/internal/ui/mounts/... » — un
+# message qui ne parle PAS du secret qu'on voulait écrire, et qui envoie donc
+# chercher l'erreur au mauvais endroit. Constaté en service.
+#
+# L'autorisation est en LECTURE SEULE : elle ne révèle que l'emplacement des
+# moteurs et la version de leur API, jamais un contenu.
+path "sys/internal/ui/mounts/*" { capabilities = ["read"] }`},
+		// INSTALLATION : ce qu'exige la mise en place et les passages suivants.
+		// Le KV y figure aussi, pour que le diagnostic de bout en bout tourne
+		// avec ce jeton sans dépendre d'un autre.
+		{"ceffio-installation", `# LE CHEMIN EXACT ET LE WILDCARD SONT DEUX AUTORISATIONS DISTINCTES.
+# « sys/mounts/* » couvre les moteurs montés, mais PAS « sys/mounts » lui-même,
+# qui est le point d'entrée de la LISTE des moteurs. Sans la ligne exacte,
+# « bao secrets list » répond 403 — et le message porte sur « /v1/sys/mounts »,
+# donc sur un chemin qui n'apparaît nulle part dans la politique : on cherche
+# l'erreur ailleurs. Constaté en service.
+path "kv/*" { capabilities = ["create","read","update","delete","list"] }
+path "sys/mounts" { capabilities = ["read","list"] }
+path "sys/mounts/*" { capabilities = ["create","read","update","delete","list","sudo"] }
+path "sys/policies/acl/*" { capabilities = ["create","read","update","delete","list"] }
+path "auth/token/create" { capabilities = ["create","update","sudo"] }
+path "auth/token/lookup" { capabilities = ["read"] }
+path "auth/token/lookup-self" { capabilities = ["read"] }
+path "auth/token/revoke-self" { capabilities = ["update"] }
+path "sys/health" { capabilities = ["read"] }`},
 	}
-	if _, err := baoRacine(ctx, "policy", "write", "ceffio-admin", "/tmp/politique.hcl"); err != nil {
-		return "", fmt.Errorf("politique : %w", err)
+	for _, p := range politiques {
+		script := fmt.Sprintf("cat > /tmp/p.hcl <<'FIN_POLITIQUE'\n%s\nFIN_POLITIQUE\n", p.regle)
+		if _, err := cli.Executer(ctx, ns, pod, "openbao", "sh", "-c", script); err != nil {
+			return "", fmt.Errorf("écriture de la politique %s : %w", p.nom, err)
+		}
+		if _, err := baoAvecJeton(ctx, cli, inst, "policy", "write", p.nom, "/tmp/p.hcl"); err != nil {
+			return "", fmt.Errorf("politique %s : %w", p.nom, err)
+		}
 	}
-	sortie, err := baoRacine(ctx, "token", "create", "-policy=ceffio-admin",
-		"-period=768h", "-format=json", "-display-name=ceffio-installation")
+
+	// Le jeton d'installation est fabriqué EN PREMIER : une fois le jeton racine
+	// révoqué, il n'y a plus de quoi en créer un.
+	nj, err := creerJeton(ctx, cli, inst, "ceffio-installation", "ceffio-installation")
 	if err != nil {
-		return "", fmt.Errorf("création du jeton : %w", err)
+		return "", err
+	}
+	if err := cli.PoserSecret(ctx, ns, "openbao-installation",
+		map[string][]byte{"token": []byte(nj)}); err != nil {
+		return "", fmt.Errorf("rangement du jeton d'installation : %w", err)
+	}
+
+	ja, err := creerJeton(ctx, cli, inst, "ceffio-admin", "ceffio-suite")
+	if err != nil {
+		return "", err
+	}
+	if err := cli.PoserSecret(ctx, ns, "openbao-token",
+		map[string][]byte{"token": []byte(ja)}); err != nil {
+		return "", fmt.Errorf("rangement du jeton applicatif : %w", err)
+	}
+	fmt.Println("  ∙ politiques « ceffio-admin » (applicative) et « ceffio-installation » posées")
+	fmt.Println("  ∙ deux jetons créés : la suite ne peut PAS administrer le coffre")
+	return ja, nil
+}
+
+// creerJeton fabrique un jeton portant une politique, sous un nom qui dit son
+// usage.
+//
+// LE JETON EST ORPHELIN, ET C'EST LA CORRECTION D'UN DÉFAUT GRAVE. Dans
+// OpenBao comme dans Vault, révoquer un jeton révoque TOUTE SA DESCENDANCE. Les
+// deux jetons créés depuis le jeton racine mouraient donc avec lui : au passage
+// suivant, le coffre tournait, mais plus personne ne pouvait l'administrer — et
+// aucune trace ne disait pourquoi, puisque la révocation du racine avait réussi.
+//
+// Un jeton orphelin n'a pas de parent : il survit à la révocation du jeton qui
+// l'a créé. Le prix est qu'il ne s'efface plus « par ricochet » — il faut le
+// révoquer nommément. C'est le bon compromis ici : un jeton d'administration
+// qu'on oublie doit rester révocable, pas disparaître silencieusement avec un
+// autre.
+//
+// Le nom compte aussi : dans la liste des jetons d'un coffre, un jeton anonyme
+// ne se distingue plus d'un autre, et l'on hésite à révoquer par peur de casser
+// quelque chose.
+func creerJeton(ctx context.Context, cli *k8sapi.Client, porteur, politique, nom string) (string, error) {
+	sortie, err := baoAvecJeton(ctx, cli, porteur, "token", "create",
+		"-policy="+politique, "-period=768h", "-orphan", "-format=json", "-display-name="+nom)
+	if err != nil {
+		return "", fmt.Errorf("création du jeton %s : %w", nom, err)
 	}
 	var res struct {
 		Auth struct {
@@ -618,20 +797,11 @@ path "kv/list/ceffio" { capabilities = ["list"] }`
 		} `json:"auth"`
 	}
 	if err := json.Unmarshal([]byte(extraitJSON(sortie)), &res); err != nil {
-		return "", fmt.Errorf("réponse illisible : %w", err)
+		return "", fmt.Errorf("réponse illisible pour %s : %w", nom, err)
 	}
 	if res.Auth.ClientToken == "" {
-		return "", fmt.Errorf("jeton vide")
+		return "", fmt.Errorf("jeton %s vide : %.120s", nom, strings.TrimSpace(sortie))
 	}
-	// Le jeton est rangé pour que les redéploiements le réutilisent, plutôt que
-	// d'en fabriquer un nouveau à chaque fois — un jeton qui s'accumule est un
-	// jeton qu'on oublie de révoquer.
-	_, _ = kube(ctx, "delete", "secret", "openbao-token", "-n", ns)
-	if _, err := kube(ctx, "create", "secret", "generic", "openbao-token", "-n", ns,
-		"--from-literal=token="+res.Auth.ClientToken); err != nil {
-		return "", fmt.Errorf("rangement du jeton : %w", err)
-	}
-	fmt.Println("  ∙ politique « ceffio-admin » et jeton dérivé posés")
 	return res.Auth.ClientToken, nil
 }
 
@@ -643,8 +813,8 @@ path "kv/list/ceffio" { capabilities = ["list"] }`
 // SI LE JETON RACINE N'EST DÉJÀ PLUS LÀ, ce n'est pas une erreur : c'est le cas
 // nominal d'un redéploiement, où la révocation a déjà eu lieu. Le dire comme un
 // avertissement ferait croire à un incident à chaque relance.
-func retirerJetonRacine(ctx context.Context) error {
-	racine, err := lireSecret(ctx, "openbao-recovery", "root-token")
+func retirerJetonRacine(ctx context.Context, cli *k8sapi.Client) error {
+	racine, err := cli.LireSecret(ctx, ns, "openbao-recovery", "root-token")
 	if err != nil {
 		return fmt.Errorf("jeton racine illisible : %w", err)
 	}
@@ -652,11 +822,16 @@ func retirerJetonRacine(ctx context.Context) error {
 		fmt.Println("  ∙ jeton racine déjà révoqué (rien à faire)")
 		return nil
 	}
-	if _, err := baoAvecJeton(ctx, racine, "token", "revoke-self"); err != nil {
+	// La syntaxe compte : `-self` est une OPTION de `token revoke`, pas une
+	// sous-commande. Écrire `token revoke-self` affiche l'aide du groupe et sort
+	// en erreur — constaté en service, et le jeton racine restait alors vivant.
+	if _, err := baoAvecJeton(ctx, cli, racine, "token", "revoke", "-self"); err != nil {
 		return err
 	}
 	// On retire aussi la copie locale : un jeton révoqué n'a plus à traîner.
-	_, _ = kube(ctx, "delete", "secret", "openbao-recovery", "-n", ns)
+	if err := cli.SupprimerSecret(ctx, ns, "openbao-recovery"); err != nil {
+		return err
+	}
 	fmt.Println("  ∙ jeton racine révoqué (les clés de récupération permettent d'en régénérer un)")
 	return nil
 }
@@ -670,16 +845,24 @@ func retirerJetonRacine(ctx context.Context) error {
 //
 // POURQUOI LES DEUX : un coffre dont on n'a prouvé que les autorisations n'a rien
 // prouvé. La moitié d'un contrôle d'accès, c'est ce qu'il refuse.
-func verifierAllerRetour(ctx context.Context, jeton string) error {
+func verifierAllerRetour(ctx context.Context, cli *k8sapi.Client, jeton string) error {
 	const (
-		composant = "diagnostic"
+		// LA VÉRIFICATION ÉCRIT DANS LE PÉRIMÈTRE DE LA POLITIQUE, et pas
+		// ailleurs. C'est une leçon mesurée : la première version écrivait dans
+		// `kv/diagnostic/…`, hors de `kv/data/ceffio/*` — le jeton dérivé
+		// répondait donc 403, à juste titre, et le déploiement échouait sur un
+		// refus qui était en réalité le comportement CORRECT du contrôle d'accès.
+		composant = "ceffio/diagnostic"
 		nom       = "aller-retour"
 		valeur    = "verification-ceffio"
+		// Le chemin de refus doit être HORS du périmètre : c'est ce qui prouve
+		// que la politique n'est pas trop large.
+		cheminInterdit = "kv/hors-perimetre/x"
 	)
-	if _, err := baoAvecJeton(ctx, jeton, "kv", "put", "kv/"+composant+"/"+nom, nom+"="+valeur); err != nil {
+	if _, err := baoAvecJeton(ctx, cli, jeton, "kv", "put", "kv/"+composant+"/"+nom, nom+"="+valeur); err != nil {
 		return fmt.Errorf("écriture : %w", err)
 	}
-	sortie, err := baoAvecJeton(ctx, jeton, "kv", "get", "-field="+nom, "kv/"+composant+"/"+nom)
+	sortie, err := baoAvecJeton(ctx, cli, jeton, "kv", "get", "-field="+nom, "kv/"+composant+"/"+nom)
 	if err != nil {
 		return fmt.Errorf("relecture : %w", err)
 	}
@@ -689,12 +872,12 @@ func verifierAllerRetour(ctx context.Context, jeton string) error {
 
 	// Le refus : un chemin HORS du périmètre de la politique doit être rejeté.
 	// Sans ce contrôle, une politique trop large passerait inaperçue.
-	if _, err := baoAvecJeton(ctx, jeton, "kv", "get", "kv/ceffio-interdit/x"); err == nil {
+	if _, err := baoAvecJeton(ctx, cli, jeton, "kv", "get", cheminInterdit); err == nil {
 		return fmt.Errorf("le jeton dérivé lit un chemin qu'il ne devrait pas — politique trop large")
 	}
 
 	// On nettoie la trace du diagnostic.
-	_, _ = baoAvecJeton(ctx, jeton, "kv", "delete", "kv/"+composant+"/"+nom)
+	_, _ = baoAvecJeton(ctx, cli, jeton, "kv", "delete", "kv/"+composant+"/"+nom)
 	fmt.Println("  ∙ aller-retour vérifié (écriture, relecture, ET refus d'un chemin hors périmètre)")
 	return nil
 }
@@ -702,18 +885,6 @@ func verifierAllerRetour(ctx context.Context, jeton string) error {
 // ---------------------------------------------------------------------------
 // Utilitaires
 // ---------------------------------------------------------------------------
-
-// appliquer pose un manifeste multi-documents via `kubectl apply -f -`.
-func appliquer(ctx context.Context, manifeste string) error {
-	cmd := k8s.Command(ctx, "kubectl", "apply", "-f", "-")
-	cmd.Env = k8s.Env()
-	cmd.Stdin = strings.NewReader(manifeste)
-	sortie, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%v: %.200s", err, string(sortie))
-	}
-	return nil
-}
 
 // extraitJSON isole l'objet JSON d'une sortie qui peut porter des avertissements
 // avant ou après. Sans cela, un avertissement ferait échouer la lecture.
@@ -726,76 +897,91 @@ func extraitJSON(s string) string {
 	return s[debut : fin+1]
 }
 
-// bao exécute une commande `bao` DANS le pod, en tant que racine.
+// baoReessai exécute une commande du coffre en RÉESSAYANT sur les échecs
+// transitoires.
 //
-// POURQUOI PAR EXEC ET PAS PAR HTTP : l'installation tourne sur la machine, et
-// le service du coffre est interne au cluster. Passer par exec évite d'exposer
-// le coffre avant que l'ingress n'existe — et évite de faire transiter un jeton
-// racine sur le réseau. C'est le motif déjà utilisé pour `occ` (Nextcloud).
-func bao(ctx context.Context, args ...string) (string, error) {
-	return execPod(ctx, args...)
-}
-
-// baoRacine exécute une commande d'administration avec le jeton racine.
-func baoRacine(ctx context.Context, args ...string) (string, error) {
-	racine, err := lireSecret(ctx, "openbao-recovery", "root-token")
-	if err != nil || racine == "" {
-		return "", fmt.Errorf("jeton racine indisponible : %v", err)
+// POURQUOI C'EST NÉCESSAIRE, ET MESURÉ : `operator init` monte la barrière de
+// sécurité du coffre, ce qui provoque un bref redémarrage du cœur. Pendant ces
+// quelques secondes, le port répond « connection refused ». Ce n'est pas une
+// panne : c'est une course entre une commande et le redémarrage qu'elle vient de
+// déclencher. Sans réessai, le déploiement échouait exactement là — sur l'étape
+// qui venait de réussir.
+func baoReessai(ctx context.Context, cli *k8sapi.Client, args ...string) (string, error) {
+	var sortie string
+	var err error
+	for i := 0; i < 6; i++ {
+		sortie, err = cli.Executer(ctx, ns, pod, "openbao", append([]string{"bao"}, args...)...)
+		if err == nil {
+			return sortie, nil
+		}
+		if !transitoire(err) {
+			return sortie, err
+		}
+		// Attente croissante : un redémarrage de cœur prend quelques secondes.
+		time.Sleep(time.Duration(3*(i+1)) * time.Second)
 	}
-	return baoAvecJeton(ctx, racine, args...)
+	return sortie, err
 }
 
-// baoAvecJeton exécute une commande avec un jeton explicite, transmis par
-// l'ENTRÉE STANDARD — jamais en argument.
+// transitoire dit si l'erreur peut disparaître en réessayant.
 //
-// POURQUOI C'EST IMPORTANT ICI : un jeton passé en argument apparaît dans la
-// table des processus du pod, lisible par tout ce qui peut observer la machine.
-// L'entrée standard ne laisse aucune trace de ce genre, et le jeton n'est pas
-// non plus écrit sur le disque du conteneur.
-func baoAvecJeton(ctx context.Context, jeton string, args ...string) (string, error) {
-	script := fmt.Sprintf("IFS= read -r TOK; BAO_TOKEN=\"$TOK\" bao %s", strings.Join(args, " "))
-	return execPodAvecEntree(ctx, jeton, "sh", "-c", script)
+// On ne réessaie QUE ce qui est transitoire : insister sur une erreur de
+// configuration ne ferait que retarder l'aveu d'échec, et masquerait la cause.
+func transitoire(err error) bool {
+	if err == nil {
+		return false
+	}
+	m := strings.ToLower(err.Error())
+	for _, motif := range []string{
+		"connection refused",
+		"connection reset",
+		"i/o timeout",
+		"unexpected eof",
+		"unable to upgrade connection",
+		"server is starting",
+		"is the server running",
+	} {
+		if strings.Contains(m, motif) {
+			return true
+		}
+	}
+	return false
 }
 
-// execPod lance une commande dans le conteneur du coffre.
-func execPod(ctx context.Context, args ...string) (string, error) {
-	return execPodAvecEntree(ctx, "", args...)
-}
-
-// execPodAvecEntree lance une commande dans le conteneur du coffre, en
-// alimentant éventuellement son entrée standard.
-func execPodAvecEntree(ctx context.Context, entree string, args ...string) (string, error) {
-	base := []string{"exec", "statefulset/openbao", "-n", ns, "-c", "openbao"}
-	if entree != "" {
-		// -i est nécessaire pour que l'entrée standard soit transmise.
-		base = append(base, "-i")
-	}
-	base = append(base, "--")
-	cmd := k8s.Command(ctx, "kubectl", append(base, args...)...)
-	cmd.Env = k8s.Env()
-	if entree != "" {
-		cmd.Stdin = strings.NewReader(entree + "\n")
-	}
-	sortie, err := cmd.CombinedOutput()
-	retour := strings.TrimSpace(string(sortie))
-	if err != nil {
-		return retour, fmt.Errorf("%v: %.200s", err, retour)
-	}
-	return retour, nil
-}
-
-// etatCoffre rend l'état lisible du coffre, ou "" s'il ne répond pas.
-func etatCoffre(ctx context.Context) (string, error) {
-	sortie, err := bao(ctx, "status", "-format=json")
-	if err != nil {
-		return "", err
+// etatCoffre rend l'état lisible du coffre, ou "" s'il n'a pas pu être lu.
+//
+// ON NE SE FIE PAS AU CODE DE SORTIE DE `bao status`. Cet outil sort en erreur
+// quand le coffre est scellé ou non initialisé : c'est un choix de conception,
+// pensé pour les scripts qui testent « est-ce prêt ? ». Ici, ces états sont
+// précisément ce qu'on veut LIRE.
+//
+// LES DEUX SORTES D'ÉCHEC SONT SÉPARÉES, et c'est le cœur de ce module :
+//
+//   - l'EXÉCUTION A ÉCHOUÉ (pod absent, connexion refusée) : la sortie est un
+//     message d'erreur, pas du JSON. La traiter comme un état faisait croire à un
+//     coffre « non initialisé » qui n'avait jamais été interrogé — et le
+//     déploiement poursuivait sur un serveur injoignable ;
+//   - la COMMANDE A RENDU UN VERDICT (code non nul, sortie JSON valide) : c'est
+//     un état, et on le lit.
+//
+// Le contrôle `"initialized"` dans la sortie est le garde-fou : sans lui, une
+// réponse inattendue redevient un objet vide, et l'objet vide redevient un état
+// plausible.
+func etatCoffre(ctx context.Context, cli *k8sapi.Client) (string, error) {
+	sortie, errExec := cli.Executer(ctx, ns, pod, "openbao", "bao", "status", "-format=json")
+	brut := extraitJSON(sortie)
+	if !strings.Contains(brut, `"initialized"`) {
+		if errExec != nil {
+			return "", fmt.Errorf("le coffre n'a pas pu être interrogé : %w", errExec)
+		}
+		return "", fmt.Errorf("réponse inattendue du coffre : %.100s", strings.TrimSpace(sortie))
 	}
 	var st struct {
 		Initialized bool `json:"initialized"`
 		Sealed      bool `json:"sealed"`
 	}
-	if err := json.Unmarshal([]byte(extraitJSON(sortie)), &st); err != nil {
-		return "", err
+	if err := json.Unmarshal([]byte(brut), &st); err != nil {
+		return "", fmt.Errorf("état illisible : %w", err)
 	}
 	switch {
 	case !st.Initialized:
@@ -807,38 +993,38 @@ func etatCoffre(ctx context.Context) (string, error) {
 	}
 }
 
-// codeHTTP rend le code de la réponse d'un point d'API, sans interpréter.
-func codeHTTP(ctx context.Context, chemin string) (string, error) {
-	sortie, _ := execPod(ctx, "sh", "-c",
-		fmt.Sprintf("curl -s -o /dev/null -w '%%{http_code}' http://127.0.0.1:8200%s", chemin))
-	c := strings.TrimSpace(sortie)
-	if c == "" {
-		return "", fmt.Errorf("aucune réponse du coffre")
-	}
-	return c, nil
-}
+// baoAvecReessai a été retiré avec baoRacine : les deux ne servaient qu'à
+// joindre le jeton racine, et l'administration passe désormais par
+// jetonAdministration, qui essaie le jeton d'installation AVANT le racine. Du
+// code d'administration qui ne cherche que le racine ne fonctionne plus après la
+// mise en place ; le garder aurait été un piège pour la prochaine lecture.
 
-// lireSecret lit une clé d'un Secret Kubernetes. Rend "" sans erreur si la clé
-// est absente du Secret.
-func lireSecret(ctx context.Context, nom, cle string) (string, error) {
-	sortie, err := kube(ctx, "get", "secret", nom, "-n", ns, "-o",
-		fmt.Sprintf("jsonpath={.data.%s}", cle))
-	if err != nil {
-		return "", err
-	}
-	if sortie == "" {
-		return "", nil
-	}
-	b, err := base64.StdEncoding.DecodeString(strings.TrimSpace(sortie))
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
-}
+// baoAvecJeton exécute une commande avec un jeton explicite, transmis par
+// l'ENTRÉE STANDARD — jamais en argument.
+//
+// POURQUOI C'EST IMPORTANT : un jeton passé en argument apparaît dans la table
+// des processus du pod, lisible par tout ce qui peut observer la machine.
+// L'entrée standard ne laisse aucune trace de ce genre, et le jeton n'est pas
+// non plus écrit sur le disque du conteneur.
+//
+// NOTE : le jeton passe par l'ENTRÉE STANDARD, qui ne laisse aucune trace — ni
+// dans la table des processus du conteneur, ni sur son disque.
+func baoAvecJeton(ctx context.Context, cli *k8sapi.Client, jeton string, args ...string) (string, error) {
+	// Le shell lit le jeton sur son entrée standard et le pose dans
+	// l'environnement de la commande bao. Il n'apparaît donc nulle part ailleurs.
+	script := fmt.Sprintf("IFS= read -r TOK; BAO_TOKEN=\"$TOK\" exec bao %s", strings.Join(args, " "))
 
-func kube(ctx context.Context, args ...string) (string, error) {
-	cmd := k8s.Command(ctx, "kubectl", args...)
-	cmd.Env = k8s.Env()
-	sortie, err := cmd.CombinedOutput()
-	return strings.TrimSpace(string(sortie)), err
+	var sortie string
+	var err error
+	for i := 0; i < 6; i++ {
+		sortie, err = cli.ExecuterAvecEntree(ctx, ns, pod, "openbao", jeton, "sh", "-c", script)
+		if err == nil {
+			return sortie, nil
+		}
+		if !transitoire(err) {
+			return sortie, err
+		}
+		time.Sleep(time.Duration(3*(i+1)) * time.Second)
+	}
+	return sortie, err
 }
