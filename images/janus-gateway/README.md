@@ -3,7 +3,7 @@
 This directory holds the **frozen build context** of the Janus WebRTC gateway
 image that Ceffio deploys:
 
-    ghcr.io/ceffio-suite/janus-gateway:1.4.0-1
+    ghcr.io/ceffio-suite/janus-gateway:1.4.3-1
 
 Janus is **GPL-3.0**. Distributing a binary image of it carries the obligation
 to publish the corresponding source — this directory and the repository below
@@ -16,9 +16,9 @@ authoritative source and its build pipeline:
 
     https://github.com/ceffio-suite/janus-gateway
 
-The files here are a **snapshot frozen at tag `v1.4.0-1`** of that repository,
+The files here are a **snapshot frozen at tag `v1.4.3-1`** of that repository,
 copied byte-for-byte (the Dockerfile here has the same SHA-256 as
-`git show v1.4.0-1:Dockerfile` there). They are placed in the product tree so
+`git show v1.4.3-1:Dockerfile` there). They are placed in the product tree so
 that anyone auditing Ceffio's deployed components finds the corresponding
 source next to the code that references it, without having to know the image
 lives in another repo.
@@ -31,7 +31,7 @@ refresh this snapshot to the new tag (and bump `internal/version/version.go`).
 
 | File | Origin |
 |---|---|
-| `Dockerfile` | Builds Janus `1.3.0` from the official upstream tarball (`github.com/meetecho/janus-gateway`), plus pinned `usrsctp` (by commit) and `libsrtp 2.6.0` |
+| `Dockerfile` | Builds Janus `1.4.3` from the official upstream tarball (`github.com/meetecho/janus-gateway`), plus pinned `usrsctp` (by commit) and `libsrtp 2.6.0` |
 | `docker-entrypoint.sh` | Ceffio's own: public-IP injection and **STUN IPv4 resolution** at container start |
 | `janus.jcfg`, `janus.transport.*.jcfg`, `janus.plugin.videoroom.jcfg` | Upstream Janus config, adapted: media range narrowed to `20000-20100`, NAT handling |
 
