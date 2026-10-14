@@ -56,10 +56,11 @@ in Ceffio's own script, not a change to Janus.
 - **usrsctp**: BSD-3-Clause — https://github.com/sctplab/usrsctp
 - **libsrtp**: BSD-3-Clause — https://github.com/cisco/libsrtp
 - **Ceffio's entrypoint and configuration adaptations**: © MANDEM. Inside
-  this repository they follow its license (AGPL-3.0-or-later). NOTE: the
-  upstream `janus-gateway` repository currently carries an Apache-2.0 LICENSE
-  file, dated from before the suite's AGPL decision — the maintainer must
-  align it (this snapshot does not change it).
+  this repository they follow its license (AGPL-3.0-or-later). The upstream
+  `janus-gateway` repository carried an Apache-2.0 placeholder from before
+  the suite's AGPL decision; it is being replaced by AGPL-3.0-or-later
+  there (see its `fix/licence-gpl-agpl` PR), with the `.jcfg` files kept
+  GPL-3.0 as upstream derivatives.
 
 The image is an aggregate: Ceffio's scripts are separate files from the
 GPL Janus binary, and Janus is compiled unmodified from upstream. See
