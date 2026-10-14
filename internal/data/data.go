@@ -189,7 +189,11 @@ metadata:
   namespace: ` + pgNamespace + `
   labels:
     app.kubernetes.io/part-of: ceffio
-    ceffio.io/deprecated: "renamed to ceffio-valkey"
+    # A LABEL VALUE CANNOT CONTAIN SPACES: only alphanumerics, '-', '_' and '.'.
+    # The prose belongs in an annotation, which accepts free text.
+    ceffio.io/deprecated: "true"
+  annotations:
+    ceffio.io/replaced-by: "ceffio-valkey (renamed when the cache moved from Redis to Valkey)"
 spec:
   selector:
     app: ceffio-valkey
