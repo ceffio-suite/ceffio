@@ -53,12 +53,73 @@ func installUmbrella(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	// ADOPT THE NAMESPACES THE CHART KNOWS BUT DOES NOT YET OWN.
+	//
+	// ceffio-vault was created outside the chart: it existed only because the
+	// OpenBao Helm release used --create-namespace. Helm refuses to take over a
+	// resource it does not own, and the upgrade fails with:
+	//
+	//   UPGRADE FAILED: Namespace "ceffio-vault" exists and cannot be imported
+	//   into the current release: invalid ownership metadata
+	//
+	// The remedy is the same thing Helm would have written itself: the ownership
+	// labels and annotations. Doing it here, before the upgrade, means an
+	// EXISTING installation is repaired by the normal `ceffio install` — no
+	// manual kubectl, and no need to reinstall to pick up the namespace list.
+	//
+	// Absence is not an error: on a fresh cluster the namespace does not exist
+	// yet, and the chart creates it properly.
+	if err := adopterNamespaces(ctx); err != nil {
+		return err
+	}
+
 	cmd := k8s.Command(ctx, "helm", "upgrade", "--install", "ceffio",
 		chart,
 		"--namespace", "ceffio-system", "--create-namespace")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// adopterNamespaces gives the chart's namespaces the ownership metadata Helm
+// requires, when they already exist without it.
+func adopterNamespaces(ctx context.Context) error {
+	// The release name and namespace must match the helm upgrade above.
+	const (
+		release   = "ceffio"
+		relNS     = "ceffio-system"
+		managedBy = "Helm"
+	)
+	for _, ns := range []string{"ceffio-vault"} {
+		// Only act if it exists: --ignore-not-found makes the check a no-op
+		// otherwise, and we must not create it here (the chart does that).
+		verif := k8s.Command(ctx, "kubectl", "get", "namespace", ns,
+			"--ignore-not-found", "-o", "name")
+		out, err := verif.Output()
+		if err != nil {
+			return fmt.Errorf("checking namespace %s: %w", ns, err)
+		}
+		if strings.TrimSpace(string(out)) == "" {
+			continue // absent: the chart will create it
+		}
+
+		lab := "app.kubernetes.io/managed-by=" + managedBy
+		ann := "meta.helm.sh/release-name=" + release
+		annNS := "meta.helm.sh/release-namespace=" + relNS
+		cmd := k8s.Command(ctx, "kubectl", "label", "namespace", ns,
+			lab, "--overwrite")
+		if o, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("labelling namespace %s: %w: %s", ns, err, o)
+		}
+		cmd = k8s.Command(ctx, "kubectl", "annotate", "namespace", ns,
+			ann, annNS, "--overwrite")
+		if o, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("annotating namespace %s: %w: %s", ns, err, o)
+		}
+		fmt.Printf("  ∙ namespace %s adopted by the Helm release \"%s\"\n", ns, release)
+	}
+	return nil
 }
 
 // embeddedChart extracts the "ceffio" chart from the embedded FS to a
