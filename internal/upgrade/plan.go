@@ -178,7 +178,7 @@ func imagesEnService(ctx context.Context) (map[string]versionImage, map[string]v
 		// Valkey replaced Redis (license migration): the running pod carries the
 		// valkey image. Keep "redis:" too, so an installation still running the
 		// old image is FOUND and reported as drift, not as missing.
-		"redis":          {"valkey/valkey:", "redis:"},
+		"valkey":         {"valkey/valkey:", "redis:"},
 		"cloudnative-pg": {"cloudnative-pg"},
 		"cert-manager":   {"cert-manager"},
 	}

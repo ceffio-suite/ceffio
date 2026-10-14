@@ -34,7 +34,7 @@ const (
 	// Valkey 8.1.10: latest stable of the 8.x branch at the time of the license
 	// migration (verified on Docker Hub, published 2026-09-21). Pinned exactly:
 	// no "8", no "latest".
-	redisImage = "docker.io/valkey/valkey:8.1.10"
+	valkeyImage = "docker.io/valkey/valkey:8.1.10"
 )
 
 // Deploy installs the data layer (Phase 3), idempotently:
@@ -50,7 +50,12 @@ func Deploy(ctx context.Context) error {
 	if err := deployPostgres(ctx); err != nil {
 		return err
 	}
-	if err := installRedis(ctx); err != nil {
+	if err := installValkey(ctx); err != nil {
+		return err
+	}
+	// AFTER the new Deployment and the alias Service are in place, never
+	// before: the old pod keeps serving until its replacement is up.
+	if err := retirerAncienValkey(ctx); err != nil {
 		return err
 	}
 
@@ -126,29 +131,29 @@ func waitPostgresReady(ctx context.Context) error {
 	return fmt.Errorf("PostgreSQL %s not ready after 300s", pgClusterName)
 }
 
-func installRedis(ctx context.Context) error {
-	fmt.Println("∙ Valkey (Redis-compatible) " + redisImage)
+func installValkey(ctx context.Context) error {
+	fmt.Println("∙ Valkey " + valkeyImage)
 	manifest := `apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ceffio-redis
+  name: ceffio-valkey
   namespace: ` + pgNamespace + `
   labels:
-    app: ceffio-redis
+    app: ceffio-valkey
     app.kubernetes.io/part-of: ceffio
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: ceffio-redis
+      app: ceffio-valkey
   template:
     metadata:
       labels:
-        app: ceffio-redis
+        app: ceffio-valkey
     spec:
       containers:
-        - name: redis
-          image: ` + redisImage + `
+        - name: valkey
+          image: ` + valkeyImage + `
           ports:
             - containerPort: 6379
           resources:
@@ -158,16 +163,61 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: ceffio-redis
+  name: ceffio-valkey
   namespace: ` + pgNamespace + `
 spec:
   selector:
-    app: ceffio-redis
+    app: ceffio-valkey
+  ports:
+    - port: 6379
+      targetPort: 6379
+---
+# COMPATIBILITY ALIAS, for installations created before the rename.
+#
+# The Service used to be called ceffio-redis. Existing Nextcloud deployments
+# still hold a REDIS_HOST pointing at that name, and their env cannot be
+# updated in place (it is baked into the pod template). Both names therefore
+# resolve to the same pods: service discovery is by label, so an alias costs
+# one invisible ClusterIP and no traffic.
+#
+# It is created BEFORE the old resource could be removed, never after: an
+# installation must never lose its cache because of a rename.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ceffio-redis
+  namespace: ` + pgNamespace + `
+  labels:
+    app.kubernetes.io/part-of: ceffio
+    ceffio.io/deprecated: "renamed to ceffio-valkey"
+spec:
+  selector:
+    app: ceffio-valkey
   ports:
     - port: 6379
       targetPort: 6379
 `
 	return apply(ctx, manifest)
+}
+
+// retirerAncienValkey removes the Deployment that carried the old name.
+//
+// THE SERVICE IS KEPT (as an alias, see installValkey): a running Nextcloud
+// still resolves ceffio-redis. The DEPLOYMENT is not: leaving it would keep a
+// second, unmanaged pod alive on the same port, and two writers on one cache
+// is worse than none. The alias Service re-points to the new pods by label, so
+// removing the old Deployment moves the traffic rather than dropping it.
+func retirerAncienValkey(ctx context.Context) error {
+	cmd := k8s.Command(ctx, "kubectl", "delete", "deployment", "ceffio-redis",
+		"-n", pgNamespace, "--ignore-not-found")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("removing the old ceffio-redis Deployment: %w: %s", err, out)
+	}
+	if s := strings.TrimSpace(string(out)); s != "" {
+		fmt.Println("  " + s)
+	}
+	return nil
 }
 
 func ensureRepo(ctx context.Context, name, url string) error {
