@@ -1,0 +1,178 @@
+name: Release
+
+# ONE DEFINITION OF "DONE" FOR A RELEASE.
+#
+# A release here is a Git tag AND a GitHub Release with downloadable binaries
+# AND their checksums. All three are produced by this single workflow, from
+# the tag. Nothing else creates releases: `ci.yml` deliberately does not react
+# to tags, so a version is never built twice by two pipelines that could
+# disagree about what they built.
+#
+# WHY CHECKSUMS ARE NOT OPTIONAL: this project installs software on hosts that
+# then hold an organisation's data. A binary downloaded with no way to verify
+# it is a binary whose integrity is merely assumed. The checksums file is
+# published next to the assets so the operator can verify BEFORE executing.
+#
+# THE RELEASE IS ATTACHED TO A GREEN CI: the job below waits for and then
+# checks the CI runs of the commit the tag points at, and refuses to publish
+# if they did not succeed. A release out of a red build is a trap for the
+# first user who hits the bug.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to (re-)publish, must already exist. e.g. v1.0.0"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: build, verify and publish ${{ github.event.ref_name || inputs.tag }}
+    runs-on: ubuntu-24.04
+    # Creating a Release is the one thing this job needs write access to.
+    # Everything else stays read-only on purpose.
+    permissions:
+      contents: write
+    steps:
+      - name: Resolve the tag
+        id: tag
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          # A tag outside semver cannot be sorted, compared, or used to derive
+          # "latest" — the release channel would become guesswork.
+          if ! echo "$TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::tag '$TAG' is not a valid release tag: expected vMAJOR.MINOR.PATCH (suffix -rc.N allowed)."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Wait for the CI of the tagged commit, refuse it if not green
+        # Verified against the commit the TAG points at, never against a
+        # branch ref: "the last run of this ref" can be an older run, prior to
+        # the change we mean to release.
+        #
+        # WAITING IS PART OF THE CHECK: the tag is pushed right after the
+        # merge to main, while that merge's CI is still running. Reading the
+        # status once would either fail for no reason or, worse, pass over an
+        # empty list ("nothing to disprove").
+        #
+        # QUERIED BY WORKFLOW NAME, NOT BY CHECK-RUN NAME: the CI workflow is
+        # named "CI"; matching its runs keeps this job out of its own verdict
+        # (the Release job creates a check-run on the same commit as it runs —
+        # filtering on job names inside it would make the release wait on
+        # itself until the deadline and fail).
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.tag.outputs.tag }}"
+          SHA="$(git rev-list -n 1 "$TAG")"
+          DEADLINE=$(( $(date +%s) + 900 ))
+          while :; do
+            gh run list --workflow CI --commit "$SHA" \
+              --json databaseId,status,conclusion \
+              --jq '.[] | "\(.databaseId) :: \(.status) :: \(.conclusion)"' \
+              > /tmp/runs.txt || true
+            if [ -s /tmp/runs.txt ] && ! grep -qvE ' :: completed :: (success|skipped)$' /tmp/runs.txt; then
+              break
+            fi
+            if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+              echo "::error::CI of commit $SHA is not green (or was not found) after 15 minutes — nothing is published."
+              cat /tmp/runs.txt || echo "(no CI run found)"
+              exit 1
+            fi
+            sleep 20
+          done
+          cat /tmp/runs.txt
+          echo "CI verified green on $SHA"
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build the binaries
+        env:
+          GOOS: linux
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.tag.outputs.tag }}"
+          COMMIT="$(git rev-parse --short HEAD)"
+          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          mkdir -p dist
+          for ARCH in amd64 arm64; do
+            GOARCH=$ARCH go build -trimpath \
+              -ldflags "-s -w -X main.version=${TAG} -X main.commit=${COMMIT} -X main.date=${DATE}" \
+              -o "dist/ceffio-linux-$ARCH" ./cmd/ceffio
+          done
+          ( cd dist && sha256sum ceffio-linux-* > checksums.txt )
+          ls -la dist/
+
+      - name: Exercise what will be shipped
+        # The native architecture is RUN, not just built — see ci.yml for why
+        # arm64 is not executed on an amd64 runner.
+        run: |
+          set -euo pipefail
+          ./dist/ceffio-linux-amd64 --help > /dev/null
+          ./dist/ceffio-linux-amd64 install --help > /dev/null
+          echo "the shipped amd64 binary starts"
+
+      - name: Write the release body
+        # `generate_release_notes` keeps the changelog (the commits since the
+        # previous tag); this body adds what a changelog cannot carry: how to
+        # install, and how to verify the download.
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.tag.outputs.tag }}"
+          cat > RELEASE_BODY.md <<EOF
+          ## Install
+
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${TAG}/installer/install.sh | sh -s -- install --domain <your-domain>
+          \`\`\`
+
+          Or download a binary directly:
+
+          | File | Platform |
+          |---|---|
+          | \`ceffio-linux-amd64\` | x86_64 |
+          | \`ceffio-linux-arm64\` | aarch64 |
+
+          ## Verify before running
+
+          \`\`\`bash
+          sha256sum -c --ignore-missing checksums.txt
+          \`\`\`
+          EOF
+
+      - name: Create the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Ceffio ${{ steps.tag.outputs.tag }}
+          # A -rc tag is a prerelease: the release channel must not offer it
+          # as "latest", or every user gets the candidate.
+          prerelease: ${{ contains(steps.tag.outputs.tag, '-') }}
+          generate_release_notes: true
+          files: |
+            dist/ceffio-linux-amd64
+            dist/ceffio-linux-arm64
+            dist/checksums.txt
+          body_path: RELEASE_BODY.md
+        env:
+          GH_TOKEN: ${{ github.token }}
