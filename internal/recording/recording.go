@@ -231,10 +231,29 @@ spec:
         env:
         # The recorder needs to tell the two suites apart: which Nextcloud it
         # serves, and which signaling it must authenticate against.
+        # NC_DOMAIN MUST BE THE URL NEXTCLOUD ANNOUNCES ITSELF AS, not the
+        # installation's base domain. The recorder matches it against the
+        # "Talk-Recording-Backend" header Talk sends and looks up a secret for
+        # that EXACT url: Config.getBackendSecret() strips a trailing slash,
+        # then returns None when the url is unknown -> Forbidden.
+        #
+        # With the base domain here, the recorder generates a section for
+        # "https://<base>" while Talk announces "https://cloud.<base>/": no
+        # match, no secret, and every recording attempt is rejected with
+        #   No secret configured for backend https://cloud.<base>/
+        # which is what the first end-to-end test produced.
         - name: NC_DOMAIN
-          value: %[5]s
+          value: cloud.%[5]s
         - name: HPB_DOMAIN
-          value: %[5]s
+          value: spreed.%[5]s
+        # HPB_PATH MUST BE OVERRIDDEN. The image defaults it to
+        # "/standalone-signaling/", a path that exists only where a reverse
+        # proxy strips the prefix. This signaling serves /spreed on the root,
+        # so the recorder must be told "/" — otherwise it dials
+        # https://spreed.<base>/standalone-signaling/ and gets a 404, and the
+        # recording fails with no useful message.
+        - name: HPB_PATH
+          value: /
         - name: TZ
           value: UTC
         ports:
