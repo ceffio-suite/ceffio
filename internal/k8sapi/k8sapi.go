@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Package k8sapi is THE SINGLE ENTRY POINT to the cluster.
 //
 // WHY THIS PACKAGE EXISTS. The vault module used to talk to the cluster by

@@ -1,3 +1,11 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright © MANDEM
+#
+# Reference profile for ~50 concurrent users — sizing guidance only: the
+# installer does not parse this file yet (`--profile` is displayed, not
+# applied). Component names match the version registry
+# (internal/version/version.go); the Talk media stack (signaling + janus +
+# coturn + nats) replaced the removed matrix/jitsi components.
 name: business-50
 
 capacity:
@@ -14,16 +22,14 @@ resources:
     memory: 2Gi
   postgres:
     memory: 6Gi
-  redis:
+  redis: # Valkey (Redis-compatible); the Service name stays ceffio-redis
     memory: 2Gi
   nextcloud:
     memory: 8Gi
   onlyoffice:
     memory: 6Gi
-  matrix:
+  talk: # signaling + janus + coturn + nats
     memory: 4Gi
-  jitsi:
-    memory: 8Gi
   mail:
     memory: 6Gi
   observability:

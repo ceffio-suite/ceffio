@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Package console implements the Ceffio administration console (MVP):
 // a mini-API + web page serving (1) a stack status dashboard and
 // (2) SSO user management (Keycloak realm). Protected by an admin token;

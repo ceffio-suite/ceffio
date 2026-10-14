@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Package backup backs up and restores a Ceffio installation.
 //
 // Principle: a backup is only a safety net if its restore has been

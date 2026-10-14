@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Package expos publishes a Ceffio installation behind an OPNsense firewall.
 //
 // WHY this package exists: deploying Ceffio is not enough to make it

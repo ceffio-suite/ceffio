@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Single administration account of the platform.
 //
 // WHY THIS FILE: a single account must administer Nextcloud (applications),

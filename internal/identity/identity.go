@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Package identity orchestrates the deployment of the identity layer (Phase 4):
 // the dedicated PostgreSQL user/secret, Keycloak (official pinned Quay image)
 // wired to the `keycloak` database, and the creation of the `ceffio` realm.

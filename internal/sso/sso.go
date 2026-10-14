@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Package sso orchestrates single sign-on (SSO) via Keycloak for the suite's
 // applications: idempotent creation of the OIDC clients (Nextcloud, Synapse) in
 // the ceffio realm and storage of their secrets in Kubernetes.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Package cluster handles provisioning of the Kubernetes runtime (real K3s on
 // Linux, k3d in dev environments) and cluster health.
 package cluster

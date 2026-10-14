@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Package secrets centralizes secret management for the Ceffio components.
 //
 // WHY THIS MODULE: today each component generates its secrets and sets them

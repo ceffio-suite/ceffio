@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Package ingress — fixes born from the real deployment behind OPNsense.
 //
 // This file adds what was missing for a Ceffio deployment to be usable behind

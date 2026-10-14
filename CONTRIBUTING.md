@@ -148,4 +148,5 @@ redact them. A public issue is indexed by search engines within hours.
 ## Licensing
 
 By contributing you accept that your contribution is licensed under the
-Apache License 2.0, like the whole project (see `LICENSE`).
+GNU Affero General Public License v3.0 or later, like the whole project
+(see `LICENSE`). Copyright © MANDEM.

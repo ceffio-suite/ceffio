@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://github.com/ceffio-suite/ceffio/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/ceffio-suite/ceffio/ci.yml?branch=main&label=CI&logo=github" alt="CI status (main)"></a>
   <a href="https://github.com/ceffio-suite/ceffio/releases/latest"><img src="https://img.shields.io/github/v/release/ceffio-suite/ceffio?logo=github" alt="Latest release"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/ceffio-suite/ceffio?color=blue" alt="Apache-2.0 license"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0--or--later-blue" alt="AGPL-3.0-or-later license"></a>
   <a href="https://github.com/ceffio-suite/ceffio/blob/main/go.mod"><img src="https://img.shields.io/badge/Go-1.27-00ADD8?logo=go" alt="Go 1.27"></a>
   <a href="https://github.com/ceffio-suite/ceffio/graphs/contributors"><img src="https://img.shields.io/github/contributors/ceffio-suite/ceffio" alt="Contributors"></a>
   <a href="https://goreportcard.com/report/github.com/ceffio-suite/ceffio"><img src="https://goreportcard.com/badge/github.com/ceffio-suite/ceffio" alt="Go Report Card"></a>
@@ -48,7 +48,7 @@ source projects:
 | Video        | Nextcloud Talk + Janus (HPB)       |
 | Office       | ONLYOFFICE                         |
 | Mail         | Stalwart                           |
-| Data         | PostgreSQL (CloudNativePG) + Redis |
+| Data         | PostgreSQL (CloudNativePG) + Valkey |
 | Secrets      | OpenBao                            |
 | Ingress/TLS  | Traefik + cert-manager             |
 | Console      | Ceffio administration console      |
@@ -98,7 +98,7 @@ runs, so before and after can be compared.
 | Layer | Package | Contents |
 |---|---|---|
 | Platform | `internal/platform` | K3s, Ingress, cert-manager |
-| Data | `internal/data` | CloudNativePG, PostgreSQL, Redis |
+| Data | `internal/data` | CloudNativePG, PostgreSQL, Valkey |
 | Identity | `internal/identity` | Keycloak, realm, OIDC clients |
 | Files | `internal/files` | Nextcloud |
 | Office | `internal/office` | ONLYOFFICE + Nextcloud connector |
@@ -255,6 +255,14 @@ Open points, stated plainly:
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE). Ceffio deploys components under
-their own licenses (AGPL for Nextcloud and Keycloak, among others); the
-integration layer is Apache-2.0 and is not a derivative work of them.
+Ceffio is distributed under the **GNU Affero General Public License v3.0 or
+later** (`AGPL-3.0-or-later`). See [LICENSE](LICENSE).
+
+Copyright © MANDEM.
+
+Ceffio deploys third-party software that keeps its own license (Apache-2.0,
+AGPL-3.0, GPL-3.0, MPL-2.0, BSD…). See
+[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+
+"Ceffio" and its logo are trademarks of MANDEM; the code license grants no
+right over these trademarks.

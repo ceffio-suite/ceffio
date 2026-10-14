@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright © MANDEM
 .PHONY: build test vet lint clean test-clean
 
 build:

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 package version
 
 import (
@@ -45,11 +48,6 @@ func TestAucuneVersionFlottante(t *testing.T) {
 // production, on somebody else's machine.
 func TestImagesQualifiees(t *testing.T) {
 	for _, c := range Registry {
-		// Official Docker library images are an accepted exception:
-		// `redis:7.4.11` is a recognized form, not an imprecision.
-		if strings.HasPrefix(c.Image, "redis:") {
-			continue
-		}
 		if !strings.Contains(strings.SplitN(c.Image, "/", 2)[0], ".") {
 			t.Errorf("%s: unqualified image reference (%s) — prefix with docker.io/", c.Nom, c.Image)
 		}
