@@ -20,6 +20,7 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/mail"
 	"github.com/ceffio-suite/ceffio/internal/office"
 	"github.com/ceffio-suite/ceffio/internal/platform"
+	"github.com/ceffio-suite/ceffio/internal/recording"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"github.com/ceffio-suite/ceffio/internal/sso"
 	"github.com/ceffio-suite/ceffio/internal/stacks"
@@ -272,6 +273,18 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 		DomaineAdmin: "ceffio.local",
 		CompteAdmin:  "adminceffio",
 	}); err != nil {
+		return err
+	}
+
+	// 12ter. Call recording (Phase 14). AFTER the mail layer, and after Talk
+	// itself through the parallel phases above: the recorder authenticates
+	// against the signaling server and declares itself in Nextcloud, so both
+	// must already exist.
+	//
+	// It is the heaviest component relative to the work it does — it drives a
+	// browser to capture the room — so it is deployed last, once everything it
+	// could starve is already running.
+	if err := recording.Deploy(ctx, o.domain); err != nil {
 		return err
 	}
 
