@@ -882,6 +882,15 @@ path "sys/internal/ui/mounts/*" { capabilities = ["read"] }`},
 		{"ceffio-keycloak", `path "kv/data/ceffio/keycloak/*" { capabilities = ["read","list"] }
 path "kv/metadata/ceffio/keycloak/*" { capabilities = ["read","list"] }
 path "sys/internal/ui/mounts/*" { capabilities = ["read"] }`},
+		// The recording server reads its own entry, and ONLY its own: it needs
+		// two values (its recording secret and the signaling's internal
+		// secret), both stored under recording/*. It does not need the talk/*
+		// entry — the shared value is copied into recording/server by
+		// internal/recording at deployment time, precisely so that the
+		// recorder never holds a right on the signaling's secrets.
+		{"ceffio-recording", `path "kv/data/ceffio/recording/*" { capabilities = ["read","list"] }
+path "kv/metadata/ceffio/recording/*" { capabilities = ["read","list"] }
+path "sys/internal/ui/mounts/*" { capabilities = ["read"] }`},
 		// ADMINISTRATION: the single human account, the one the directory
 		// designates as administrator. It has ALL rights on the vault — that
 		// is the meaning of an administration account, and it is what makes
@@ -1060,6 +1069,12 @@ func configurerAuthKubernetes(ctx context.Context, cli *k8sapi.Client) error {
 		{nom: "talk", sa: "talk", ns: "ceffio-video", politique: "ceffio-talk"},
 		{nom: "nextcloud", sa: "nextcloud", ns: "ceffio-files", politique: "ceffio-nextcloud"},
 		{nom: "keycloak", sa: "keycloak", ns: "ceffio-identity", politique: "ceffio-keycloak"},
+		// The recording server, added with its own ServiceAccount (created by
+		// internal/recording). WITHOUT THIS ROLE THE INJECTOR CANNOT AUTHENTICATE
+		// and the pod starts with no secrets at all: the annotations ask the
+		// vault for a role that does not exist, and the failure is silent on the
+		// application side — the recorder simply runs without credentials.
+		{nom: "recording", sa: "talk-recording", ns: "ceffio-video", politique: "ceffio-recording"},
 	}
 	for _, r := range roles {
 		if _, err := baoAvecJeton(ctx, cli, adm,
