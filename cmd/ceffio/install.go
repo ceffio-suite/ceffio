@@ -14,6 +14,7 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/cluster"
 	"github.com/ceffio-suite/ceffio/internal/console"
 	"github.com/ceffio-suite/ceffio/internal/data"
+	"github.com/ceffio-suite/ceffio/internal/exapps"
 	"github.com/ceffio-suite/ceffio/internal/files"
 	"github.com/ceffio-suite/ceffio/internal/identity"
 	"github.com/ceffio-suite/ceffio/internal/ingress"
@@ -285,6 +286,17 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	// browser to capture the room — so it is deployed last, once everything it
 	// could starve is already running.
 	if err := recording.Deploy(ctx, o.domain); err != nil {
+		return err
+	}
+
+	// 12quater. ExApp deploy daemon (HaRP). LAST, and that is deliberate: it
+	// gives Nextcloud the ability to INSTALL more components, so it belongs
+	// after everything we install ourselves. Nothing depends on it yet, and if
+	// it fails the rest of the platform stays up.
+	//
+	// It needs the vault (its shared key is stored there and read by the
+	// injector), which is why it cannot run before this point in the sequence.
+	if err := exapps.Deploy(ctx, o.domain); err != nil {
 		return err
 	}
 
