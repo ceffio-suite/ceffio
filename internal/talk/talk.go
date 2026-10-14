@@ -754,14 +754,56 @@ func brancherNextcloud(ctx context.Context) error {
 		return fmt.Errorf("enabling Talk: %w", err)
 	}
 
-	// 2. Declare the external signaling server. Without this step, Talk runs
-	//    in direct connections (~4-6 participants) and ignores the HPB.
-	url := fmt.Sprintf("https://spreed.%s/standalone-signaling", domaineDe(ctx))
-	if err := occ(ctx, "config:app:set", "spreed", "signaling_server_url", "--value", url); err != nil {
-		return fmt.Errorf("signaling URL: %w", err)
-	}
+	// 2. Declare the external signaling server (the HPB). Without this step,
+	//    Talk runs in direct connections (~4-6 participants) and ignores the
+	//    HPB entirely — and, more visibly, never offers call recording: the
+	//    recording feature is enabled by Talk only when a signaling server is
+	//    known, however correct recording_servers may be.
+	//
+	//    THE FORMAT MATTERS AND IS NOT THE OBVIOUS ONE. Talk does not read
+	//    "signaling_server_url"/"signaling_server_secret": those two keys were
+	//    written here for a long time and were read by NOBODY. The app reads a
+	//    single key, "signaling_servers", holding a JSON object
+	//    — verified in custom_apps/spreed/lib/Config.php:
+	//
+	//      public function getSignalingServers(): array {
+	//          $config = $this->config->getAppValue('spreed', 'signaling_servers');
+	//          $signaling = json_decode($config, true);
+	//          if (!is_array($signaling) || !isset($signaling['servers'])) {
+	//              return [];
+	//          }
+	//          return $signaling['servers'];
+	//      }
+	//
+	//    and getSignalingSecret() reads the same key's "secret" field.
+	//
+	//    Consequence of getting this wrong: a HPB that is deployed, healthy and
+	//    reachable, and a Talk instance that behaves as if no HPB existed. No
+	//    error anywhere — the setting is simply absent from the app's point of
+	//    view. That silence is why this went unnoticed.
+	//    THE URL CARRIES NO PATH PREFIX. The signaling server listens on
+	//    0.0.0.0:8081 and serves its WebSocket endpoint at /spreed directly
+	//    ([http] section of server.conf, no prefix configured). So the URL
+	//    announced here must stop at the host:
+	//
+	//      https://spreed.<domain>          -> client calls /spreed          OK
+	//      https://spreed.<domain>/standalone-signaling
+	//                                       -> client calls
+	//                                          /standalone-signaling/spreed, a path that
+	//                                          returns 404
+	//
+	//    "/standalone-signaling" is the path used by Nextcloud AIO, where a
+	//    reverse proxy STRIPS the prefix before forwarding. Writing it here
+	//    without that stripping rule produces a client that dials a path the
+	//    server does not serve: Talk reports "signaling server connection lost"
+	//    and nothing in either log names the path, which is what made this
+	//    expensive to find.
+	//
+	//    If a deployment ever does serve the signaling under a prefix, the
+	//    reverse proxy must strip it — and this URL must carry it.
+	url := urlSignaling(domaineDe(ctx))
 
-	// 3. The signaling secrets, READ FROM THE VAULT — single source since the
+	// 3. The signaling secret, READ FROM THE VAULT — single source since the
 	//    Kubernetes Secrets disappeared. The signaling reads the same entry
 	//    through its agent: the two sides cannot diverge.
 	entree, err := secrets.LireEntreeCoffre(ctx, secrets.DepuisEnvironnement(), "talk", "signaling")
@@ -772,8 +814,29 @@ func brancherNextcloud(ctx context.Context) error {
 	if secret == "" {
 		return fmt.Errorf("shared secret missing from the vault's talk/signaling entry")
 	}
-	if err := occ(ctx, "config:app:set", "spreed", "signaling_server_secret", "--value", secret); err != nil {
-		return fmt.Errorf("signaling secret: %w", err)
+
+	// The URL goes in as "server" — NOT "url". Talk reads $server['server']:
+	// getAllServerUrlsForCSP() calls
+	// getWebSocketDomainForSignalingServer($server['server']), and that method
+	// takes a non-nullable string. Passing "url" instead leaves the field null
+	// and Talk throws a TypeError on EVERY page load, taking the whole
+	// dashboard down with it, not just Talk:
+	//
+	//   getWebSocketDomainForSignalingServer(): Argument #1 ($url) must be of
+	//   type string, null given
+	//
+	// The "verify" flag keeps certificate verification on; the certificate is
+	// issued by the cluster's own CA and trusted inside the namespace.
+	reglage := reglageSignaling(url, secret)
+	if err := occ(ctx, "config:app:set", "spreed", "signaling_servers", "--value", reglage); err != nil {
+		return fmt.Errorf("signaling servers: %w", err)
+	}
+
+	// The two legacy keys are removed if a previous installation wrote them:
+	// leaving them behind suggests a configuration that Talk does not read,
+	// which is precisely the confusion this comment exists to prevent.
+	for _, cle := range []string{"signaling_server_url", "signaling_server_secret"} {
+		_ = occ(ctx, "config:app:delete", "spreed", cle)
 	}
 
 	// 4. Declare the TURN servers (native, no external dependency).
@@ -796,6 +859,27 @@ func brancherNextcloud(ctx context.Context) error {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// urlSignaling builds the URL Talk announces to clients for the signaling
+// server.
+//
+// NO PATH PREFIX: the signaling serves its WebSocket endpoint at /spreed on
+// the root (see the long note in brancherNextcloud). A function rather than an
+// inline format so the absence of a prefix is testable — copying AIO's
+// "/standalone-signaling" here costs hours of debugging.
+func urlSignaling(domaine string) string {
+	return fmt.Sprintf("https://spreed.%s", domaine)
+}
+
+// reglageSignaling builds the value Talk expects for "signaling_servers".
+//
+// It is a function rather than an inline format so the shape can be tested:
+// the field name is what broke the dashboard once already.
+func reglageSignaling(url, secret string) string {
+	return fmt.Sprintf(`{"servers":[{"server":%q,"verify":true}],"secret":%q}`, url, secret)
+}
+
+// occ runs an occ command inside the Nextcloud pod.
 
 // occ runs an occ command in the Nextcloud pod.
 func occ(ctx context.Context, args ...string) error {
