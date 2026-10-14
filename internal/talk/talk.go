@@ -754,14 +754,36 @@ func brancherNextcloud(ctx context.Context) error {
 		return fmt.Errorf("enabling Talk: %w", err)
 	}
 
-	// 2. Declare the external signaling server. Without this step, Talk runs
-	//    in direct connections (~4-6 participants) and ignores the HPB.
+	// 2. Declare the external signaling server (the HPB). Without this step,
+	//    Talk runs in direct connections (~4-6 participants) and ignores the
+	//    HPB entirely — and, more visibly, never offers call recording: the
+	//    recording feature is enabled by Talk only when a signaling server is
+	//    known, however correct recording_servers may be.
+	//
+	//    THE FORMAT MATTERS AND IS NOT THE OBVIOUS ONE. Talk does not read
+	//    "signaling_server_url"/"signaling_server_secret": those two keys were
+	//    written here for a long time and were read by NOBODY. The app reads a
+	//    single key, "signaling_servers", holding a JSON object
+	//    — verified in custom_apps/spreed/lib/Config.php:
+	//
+	//      public function getSignalingServers(): array {
+	//          $config = $this->config->getAppValue('spreed', 'signaling_servers');
+	//          $signaling = json_decode($config, true);
+	//          if (!is_array($signaling) || !isset($signaling['servers'])) {
+	//              return [];
+	//          }
+	//          return $signaling['servers'];
+	//      }
+	//
+	//    and getSignalingSecret() reads the same key's "secret" field.
+	//
+	//    Consequence of getting this wrong: a HPB that is deployed, healthy and
+	//    reachable, and a Talk instance that behaves as if no HPB existed. No
+	//    error anywhere — the setting is simply absent from the app's point of
+	//    view. That silence is why this went unnoticed.
 	url := fmt.Sprintf("https://spreed.%s/standalone-signaling", domaineDe(ctx))
-	if err := occ(ctx, "config:app:set", "spreed", "signaling_server_url", "--value", url); err != nil {
-		return fmt.Errorf("signaling URL: %w", err)
-	}
 
-	// 3. The signaling secrets, READ FROM THE VAULT — single source since the
+	// 3. The signaling secret, READ FROM THE VAULT — single source since the
 	//    Kubernetes Secrets disappeared. The signaling reads the same entry
 	//    through its agent: the two sides cannot diverge.
 	entree, err := secrets.LireEntreeCoffre(ctx, secrets.DepuisEnvironnement(), "talk", "signaling")
@@ -772,8 +794,20 @@ func brancherNextcloud(ctx context.Context) error {
 	if secret == "" {
 		return fmt.Errorf("shared secret missing from the vault's talk/signaling entry")
 	}
-	if err := occ(ctx, "config:app:set", "spreed", "signaling_server_secret", "--value", secret); err != nil {
-		return fmt.Errorf("signaling secret: %w", err)
+
+	// The URL goes in as "url" and is handled by the app's own code; the
+	// "verify" flag keeps certificate verification on — the certificate is
+	// issued by the cluster's own CA and trusted inside the namespace.
+	reglage := fmt.Sprintf(`{"servers":[{"url":%q,"verify":true}],"secret":%q}`, url, secret)
+	if err := occ(ctx, "config:app:set", "spreed", "signaling_servers", "--value", reglage); err != nil {
+		return fmt.Errorf("signaling servers: %w", err)
+	}
+
+	// The two legacy keys are removed if a previous installation wrote them:
+	// leaving them behind suggests a configuration that Talk does not read,
+	// which is precisely the confusion this comment exists to prevent.
+	for _, cle := range []string{"signaling_server_url", "signaling_server_secret"} {
+		_ = occ(ctx, "config:app:delete", "spreed", cle)
 	}
 
 	// 4. Declare the TURN servers (native, no external dependency).
