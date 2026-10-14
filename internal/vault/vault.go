@@ -405,7 +405,18 @@ data:
     }
 
     audit "file" "fichier" {
-      description = "Ceffio audit log"
+      # DO NOT TRANSLATE THIS DESCRIPTION. It is not interface text: it is
+      # stored in the vault's own state when the audit device is first enabled,
+      # and OpenBao REFUSES TO START if a later config carries a different one
+      # ("modifications to audit devices are not allowed: audit device
+      # fichier/ has different descriptions"). Translating it during the
+      # English pass took the vault down: the node came up standby, found no
+      # active peer, and every layer reading secrets stopped behind it.
+      #
+      # The value below is what installations already carry. Changing it would
+      # require disabling and re-enabling the audit device on every existing
+      # cluster, so it stays as it is — frozen, not forgotten.
+      description = "Journal d'audit Ceffio"
       options {
         file_path = "%[4]s"
       }
