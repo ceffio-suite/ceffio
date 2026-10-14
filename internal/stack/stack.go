@@ -1,11 +1,12 @@
-// Package stack interroge l'état réel d'une installation Ceffio via l'API
-// Kubernetes. C'est la brique commune à `ceffio status` et `ceffio doctor`.
+// Package stack queries the real state of a Ceffio installation through the
+// Kubernetes API. It is the common building block for `ceffio status` and
+// `ceffio doctor`.
 //
-// Pourquoi ce package plutôt que du kubectl en ligne de commande : `status` et
-// `doctor` doivent pouvoir dire ce qui est cassé même quand kubectl n'est pas
-// utilisable (kubeconfig manquant, droits d'exécution). En passant par
-// l'interface Go, on conserve un diagnostic exploitable et on produit des
-// données structurées plutôt que du texte à re-parser.
+// Why this package rather than command-line kubectl: `status` and `doctor`
+// must be able to say what is broken even when kubectl cannot be used
+// (missing kubeconfig, execution permissions). By going through the Go API,
+// we keep an actionable diagnostic and produce structured data instead of
+// text to be re-parsed.
 package stack
 
 import (
@@ -16,7 +17,7 @@ import (
 	"strings"
 )
 
-// Couche de la pile : un namespace applicatif et les pods qu'il contient.
+// Layer of the stack: an application namespace and the pods it contains.
 type Layer struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`
@@ -56,7 +57,7 @@ type Service struct {
 	Status string `json:"status,omitempty"`
 }
 
-// State est un instantané complet de l'installation.
+// State is a complete snapshot of the installation.
 type State struct {
 	ClusterReachable bool          `json:"cluster_reachable"`
 	ClusterError     string        `json:"cluster_error,omitempty"`
@@ -81,30 +82,28 @@ type Node struct {
 	Roles      string `json:"roles,omitempty"`
 }
 
-// Layers est la liste ordonnée des couches déployées par `ceffio install`.
-// L'ordre suit celui du déploiement, pas l'alphabet : c'est celui qu'un humain
-// veut lire quand il diagnostique.
-// L'ordre suit celui du déploiement, pas l'alphabet : c'est celui qu'un humain
-// veut lire quand il diagnostique.
+// Layers is the ordered list of layers deployed by `ceffio install`.
+// The order follows the deployment order, not the alphabet: it is the one a
+// human wants to read when diagnosing.
 //
-// ATTENTION : un namespace ne doit apparaître qu'UNE fois. Les couches
-// « plateforme » (cert-manager, issuers) et « console » (l'interface d'admin)
-// partagent le namespace ceffio-system : les lister séparément faisait compter
-// deux fois les mêmes pods, et le total affiché ne correspondait plus à la
-// somme des couches.
+// WARNING: a namespace must appear only ONCE. The "platform" layer
+// (cert-manager, issuers) and the "console" layer (the admin interface)
+// share the ceffio-system namespace: listing them separately counted the
+// same pods twice, and the displayed total no longer matched the sum of the
+// layers.
 var Layers = []struct{ Name, Namespace string }{
-	{"plateforme", "ceffio-system"},
-	{"données", "ceffio-data"},
-	{"identité", "ceffio-identity"},
-	{"fichiers", "ceffio-files"},
-	{"bureau", "ceffio-office"},
+	{"platform", "ceffio-system"},
+	{"data", "ceffio-data"},
+	{"identity", "ceffio-identity"},
+	{"files", "ceffio-files"},
+	{"office", "ceffio-office"},
 	{"chat", "ceffio-chat"},
-	{"visio", "ceffio-video"},
+	{"video", "ceffio-video"},
 }
 
-// Collecte interroge le cluster et renvoie un instantané complet.
-// Ne retourne jamais d'erreur : une erreur devient un cluster injoignable,
-// ce qui est exactement l'information dont `doctor` a besoin.
+// Collect queries the cluster and returns a complete snapshot.
+// Never returns an error: an error becomes an unreachable cluster, which is
+// exactly the information `doctor` needs.
 func Collect(ctx context.Context) *State {
 	st := &State{Layers: []Layer{}, Nodes: []Node{}, Ingresses: []Ingress{},
 		Certificates: []Certificate{}, Services: []Service{}}
@@ -170,12 +169,12 @@ func Collect(ctx context.Context) *State {
 		}
 	}
 
-	// Pods de chaque couche.
+	// Pods of each layer.
 	for _, l := range Layers {
 		layer := Layer{Name: l.Name, Namespace: l.Namespace, Pods: []Pod{}}
 		raw, err := kubectlJSON(ctx, "get", "pods", "-n", l.Namespace, "-o", "json")
 		if err != nil {
-			// Couche absente = information utile, on la garde vide.
+			// Missing layer = useful information, we keep it empty.
 			st.Layers = append(st.Layers, layer)
 			continue
 		}
@@ -202,9 +201,9 @@ func Collect(ctx context.Context) *State {
 					}
 					pod.Restarts += cs.RestartCount
 				}
-				// Un pod terminé (phase Succeeded) a fini son travail : ni prêt
-				// ni en panne. Le compter comme « non prêt » ferait échouer le
-				// diagnostic sur une installation saine.
+				// A finished pod (phase Succeeded) has completed its work:
+				// neither ready nor failing. Counting it as "not ready" would
+				// fail the diagnostic on a healthy installation.
 				if pod.Phase == "Succeeded" {
 					pod.Ready = true
 					pod.Completed = true
@@ -260,7 +259,7 @@ func Collect(ctx context.Context) *State {
 		}
 	}
 
-	// Certificats cert-manager.
+	// cert-manager certificates.
 	if raw, err := kubectlJSON(ctx, "get", "certificates", "-A", "-o", "json"); err == nil {
 		var cl struct {
 			Items []struct {
@@ -298,7 +297,7 @@ func Collect(ctx context.Context) *State {
 		}
 	}
 
-	// Services exposés (LoadBalancer surtout : c'est par eux qu'on entre).
+	// Exposed services (mostly LoadBalancer: that's how we get in).
 	if raw, err := kubectlJSON(ctx, "get", "svc", "-A", "-o", "json"); err == nil {
 		var sl struct {
 			Items []struct {
@@ -347,7 +346,7 @@ func Collect(ctx context.Context) *State {
 				}
 				svc.Port = strings.Join(ports, ",")
 				if s.Spec.Type == "LoadBalancer" && svc.IP == "" {
-					svc.Status = "en attente d'adresse"
+					svc.Status = "waiting for address"
 				}
 				st.Services = append(st.Services, svc)
 			}

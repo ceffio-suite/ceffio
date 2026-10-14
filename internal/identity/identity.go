@@ -1,9 +1,9 @@
-// Package identity orchestre le déploiement de la couche identité (Phase 4) :
-// l'utilisateur/secret PostgreSQL dédié, Keycloak (image officielle Quay, pinnée)
-// branché sur la base `keycloak`, et la création du realm `ceffio`.
+// Package identity orchestrates the deployment of the identity layer (Phase 4):
+// the dedicated PostgreSQL user/secret, Keycloak (official pinned Quay image)
+// wired to the `keycloak` database, and the creation of the `ceffio` realm.
 //
-// Secrets : tous générés à l'exécution (crypto/rand), stockés dans des Kubernetes
-// Secrets — jamais en clair dans Git (principe §111 du doc).
+// Secrets: all generated at runtime (crypto/rand), stored in Kubernetes Secrets
+// — never in clear text in Git (doc principle §111).
 package identity
 
 import (
@@ -19,11 +19,11 @@ import (
 	"time"
 )
 
-// Versions pinnées (découvertes via l'API Quay, pas inventées).
+// Pinned versions (discovered via the Quay API, not invented).
 const (
 	keycloakImage = "quay.io/keycloak/keycloak:26.7.3"
 	ns            = "ceffio-identity"
-	// PostgreSQL : pod CNPG (pour créer le rôle) et service rw (pour se connecter).
+	// PostgreSQL: CNPG pod (to create the role) and rw service (to connect).
 	pgPod     = "ceffio-pg-1"
 	pgNSPod   = "ceffio-data"
 	dbName    = "keycloak"
@@ -31,13 +31,13 @@ const (
 	dbService = "ceffio-pg-rw.ceffio-data.svc"
 )
 
-// Deploy installe l'identité (Phase 4), de façon idempotente :
-//  1. rôle + mot de passe PostgreSQL dédié à Keycloak
-//  2. secret admin Keycloak (généré)
-//  3. déploiement Keycloak (postgres) + service
-//  4. création du realm "ceffio" via kcadm + vérification
+// Deploy installs the identity layer (Phase 4), idempotently:
+//  1. dedicated PostgreSQL role + password for Keycloak
+//  2. Keycloak admin secret (generated)
+//  3. Keycloak deployment (postgres) + service
+//  4. creation of the "ceffio" realm via kcadm + verification
 func Deploy(ctx context.Context) error {
-	fmt.Println("\nDéploiement de l'identité (Phase 4)...")
+	fmt.Println("\nDeploying the identity layer (Phase 4)...")
 
 	if err := ensureKeycloakDB(ctx); err != nil {
 		return err
@@ -61,14 +61,14 @@ func Deploy(ctx context.Context) error {
 		return err
 	}
 
-	fmt.Println("✓ Identité déployée (realm ceffio)")
+	fmt.Println("✓ Identity layer deployed (ceffio realm)")
 	return nil
 }
 
-// ensureKeycloakDB garantit le rôle PostgreSQL DANS LE COFFRE, et nulle part ailleurs.
+// ensureKeycloakDB guarantees the PostgreSQL role lives IN THE VAULT, and nowhere else.
 //
-// Le mot de passe est REPRIS s'il existe : le régénérer laisserait Keycloak avec un
-// mot de passe que la base refuse, et la panne n'apparaîtrait qu'au redémarrage.
+// The password is REUSED if it exists: regenerating it would leave Keycloak with
+// a password the database rejects, and the outage would only appear at restart.
 func ensureKeycloakDB(ctx context.Context) error {
 	coffre := secrets.DepuisEnvironnement()
 	entree := map[string]string{}
@@ -78,17 +78,17 @@ func ensureKeycloakDB(ctx context.Context) error {
 		entree = actuelle
 	case secrets.EntreeAbsente(err):
 	default:
-		return fmt.Errorf("coffre illisible pour keycloak/db : %w", err)
+		return fmt.Errorf("vault unreadable for keycloak/db: %w", err)
 	}
 	if entree["password"] != "" {
 		return nil
 	}
-	fmt.Println("∙ création du rôle PostgreSQL dédié à Keycloak")
+	fmt.Println("∙ creating the dedicated PostgreSQL role for Keycloak")
 	pw, err := genSecret(16)
 	if err != nil {
 		return err
 	}
-	// SQL passé en stdin (jamais en arg de commande).
+	// SQL passed on stdin (never as a command argument).
 	sql := fmt.Sprintf(
 		"CREATE ROLE %s LOGIN PASSWORD '%s';\nALTER DATABASE %s OWNER TO %s;\n",
 		dbUser, pw, dbName, dbUser)
@@ -100,7 +100,7 @@ func ensureKeycloakDB(ctx context.Context) error {
 	return secrets.EcrireDansCoffre(ctx, coffre, "keycloak", "db", entree)
 }
 
-// ensureAdminSecret garantit le compte d'administration DANS LE COFFRE.
+// ensureAdminSecret guarantees the admin account lives IN THE VAULT.
 func ensureAdminSecret(ctx context.Context) error {
 	coffre := secrets.DepuisEnvironnement()
 	entree := map[string]string{"username": "admin"}
@@ -112,12 +112,12 @@ func ensureAdminSecret(ctx context.Context) error {
 		}
 	case secrets.EntreeAbsente(err):
 	default:
-		return fmt.Errorf("coffre illisible pour keycloak/admin : %w", err)
+		return fmt.Errorf("vault unreadable for keycloak/admin: %w", err)
 	}
 	if entree["password"] != "" {
 		return nil
 	}
-	fmt.Println("∙ mot de passe admin Keycloak généré (absent du coffre)")
+	fmt.Println("∙ Keycloak admin password generated (absent from the vault)")
 	pw, err := genSecret(16)
 	if err != nil {
 		return err
@@ -126,9 +126,9 @@ func ensureAdminSecret(ctx context.Context) error {
 	return secrets.EcrireDansCoffre(ctx, coffre, "keycloak", "admin", entree)
 }
 
-// ensureServiceAccount pose l'identité que le rôle du coffre désigne (voir la note
-// équivalente côté Nextcloud : posée séparément pour ne pas décaler les arguments
-// d'un manifeste déjà numéroté).
+// ensureServiceAccount lays down the identity that the vault role designates (see the
+// equivalent note on the Nextcloud side: laid down separately so as not to shift the
+// arguments of an already-numbered manifest).
 func ensureServiceAccount(ctx context.Context) error {
 	return apply(ctx, fmt.Sprintf(`apiVersion: v1
 kind: ServiceAccount
@@ -140,7 +140,7 @@ metadata:
 
 func applyWorkload(ctx context.Context) error {
 	fmt.Println("∙ Keycloak " + keycloakImage)
-	// DEUX SOURCES POUR UN SEUL FICHIER : la base et le compte d'administration.
+	// TWO SOURCES FOR ONE FILE: the database and the admin account.
 	annotations := vault.AnnotationsAgent(8, "keycloak", "kv/data/ceffio/keycloak/db",
 		vault.GabaritMulti([]vault.Source{
 			{Chemin: "kv/data/ceffio/keycloak/db", Paires: [][2]string{
@@ -170,17 +170,17 @@ spec:
     metadata:
       labels:
         app: keycloak
-      # LES SECRETS SONT POSÉS PAR L'INJECTEUR D'OPENBAO (vault.AnnotationsAgent).
+      # SECRETS ARE LAID DOWN BY THE OPENBAO INJECTOR (vault.AnnotationsAgent).
       annotations:
 %s
     spec:
-      # C'EST CE ServiceAccount QUE LE RÔLE DU COFFRE DÉSIGNE.
+      # THIS ServiceAccount IS THE ONE THE VAULT ROLE DESIGNATES.
       serviceAccountName: keycloak
       containers:
         - name: keycloak
           image: %s
-          # L'ENTRÉE DE L'IMAGE EST kc.sh : on la rappelle explicitement, avec
-          # les mêmes arguments qu'avant (« start-dev »).
+          # THE IMAGE ENTRYPOINT IS kc.sh: we call it back explicitly, with the
+          # same arguments as before ("start-dev").
           command: ["/bin/bash", "-c"]
           args:
             - |
@@ -197,12 +197,12 @@ spec:
               value: "true"
             - name: KC_METRICS_ENABLED
               value: "true"
-            # KC_HOSTNAME n'est PAS défini ici : sa valeur était figée sur
-            # l'ancien domaine (auth.ceffio.local), et Keycloak s'en sert pour
-            # construire les endpoints qu'il ANNONCE — la redirection SSO partait
-            # donc vers un domaine inexistant. C'est la phase ingress
-            # (adoptKeycloakHost) qui pose KC_HOSTNAME / KC_HOSTNAME_URL avec le
-            # domaine courant. Un doublon figé ici ne ferait que la contredire.
+            # KC_HOSTNAME is NOT set here: its value was frozen on the old domain
+            # (auth.ceffio.local), and Keycloak uses it to build the endpoints it
+            # ANNOUNCES — so the SSO redirect went to a nonexistent domain. It is
+            # the ingress phase (adoptKeycloakHost) that sets KC_HOSTNAME /
+            # KC_HOSTNAME_URL with the current domain. A hardcoded duplicate here
+            # would only contradict it.
             - name: KC_HOSTNAME_STRICT
               value: "false"
           ports:
@@ -247,41 +247,41 @@ spec:
 }
 
 func waitKeycloakReady(ctx context.Context) error {
-	fmt.Println("∙ attente Keycloak Ready...")
+	fmt.Println("∙ waiting for Keycloak Ready...")
 	cmd := k8s.Command(ctx, "kubectl", "rollout", "status",
 		"deployment/keycloak", "-n", ns, "--timeout=300s")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("keycloak pas prêt: %w", err)
+		return fmt.Errorf("keycloak not ready: %w", err)
 	}
 	return nil
 }
 
-// ensureRealm crée le realm "ceffio" via kcadm, de façon idempotente : on ne
-// crée que si le realm n'est pas déjà dans la base. L'admin est relue depuis
-// l'environnement du pod (aucun secret à passer).
+// ensureRealm creates the "ceffio" realm via kcadm, idempotently: we only create
+// it if the realm is not already in the database. The admin is re-read from the
+// pod environment (no secret to pass).
 func ensureRealm(ctx context.Context) error {
 	out, err := queryKeycloakDB(ctx, `SELECT count(*) FROM realm WHERE name='ceffio';`)
 	if err == nil && strings.TrimSpace(out) == "1" {
-		fmt.Println("∙ realm ceffio déjà présent, rien à faire")
+		fmt.Println("∙ ceffio realm already present, nothing to do")
 		return nil
 	}
-	fmt.Println("∙ création du realm ceffio (kcadm)")
+	fmt.Println("∙ creating the ceffio realm (kcadm)")
 	cmd := k8s.Command(ctx, "kubectl", "exec", "-n", ns, "deploy/keycloak", "-c", "keycloak", "--",
 		"sh", "-c",
 		`/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user "$KC_BOOTSTRAP_ADMIN_USERNAME" --password "$KC_BOOTSTRAP_ADMIN_PASSWORD" >/dev/null && /opt/keycloak/bin/kcadm.sh create realms -s "realm=ceffio" -s enabled=true -s registrationAllowed=false -s loginWithEmailAllowed=true -s duplicateEmailsAllowed=false -s resetPasswordAllowed=true -s editUsernameAllowed=false -s sslRequired=external`)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("création du realm ceffio: %w", err)
+		return fmt.Errorf("creating the ceffio realm: %w", err)
 	}
 	return nil
 }
 
-// verifyRealm contrôle que le realm "ceffio" existe bien dans la base.
+// verifyRealm checks that the "ceffio" realm actually exists in the database.
 func verifyRealm(ctx context.Context) error {
-	fmt.Println("∙ vérification du realm ceffio")
+	fmt.Println("∙ verifying the ceffio realm")
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		out, err := queryKeycloakDB(ctx, `SELECT count(*) FROM realm WHERE name='ceffio';`)
@@ -294,7 +294,7 @@ func verifyRealm(ctx context.Context) error {
 		case <-time.After(3 * time.Second):
 		}
 	}
-	return fmt.Errorf("realm ceffio non trouvé dans la base après 30s")
+	return fmt.Errorf("ceffio realm not found in the database after 30s")
 }
 
 func psqlExec(ctx context.Context, sql string) error {

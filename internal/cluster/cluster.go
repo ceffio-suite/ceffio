@@ -1,5 +1,5 @@
-// Package cluster gère le provisionnement du runtime Kubernetes (K3s réel sur
-// Linux, k3d en environnement de dev) et la santé du cluster.
+// Package cluster handles provisioning of the Kubernetes runtime (real K3s on
+// Linux, k3d in dev environments) and cluster health.
 package cluster
 
 import (
@@ -13,21 +13,21 @@ import (
 	"time"
 )
 
-// Runtime identifie le mode de provisionnement.
+// Runtime identifies the provisioning mode.
 type Runtime string
 
 const (
-	RuntimeK3s Runtime = "k3s" // Linux : vrai K3s (single-node / appliance)
-	RuntimeDev Runtime = "dev" // environnement de dev : k3d (K3s dans Docker)
+	RuntimeK3s Runtime = "k3s" // Linux: real K3s (single-node / appliance)
+	RuntimeDev Runtime = "dev" // dev environment: k3d (K3s in Docker)
 )
 
-// Cluster décrit un cluster provisionné.
+// Cluster describes a provisioned cluster.
 type Cluster struct {
 	Runtime Runtime
 	Name    string
 }
 
-// Provision crée (ou réutilise, de façon idempotente) le cluster demandé.
+// Provision creates (or reuses, idempotently) the requested cluster.
 func Provision(ctx context.Context, rt Runtime, name string) (*Cluster, error) {
 	c := &Cluster{Runtime: rt, Name: name}
 	switch rt {
@@ -40,27 +40,27 @@ func Provision(ctx context.Context, rt Runtime, name string) (*Cluster, error) {
 			return nil, err
 		}
 	default:
-		return nil, fmt.Errorf("runtime de cluster inconnu %q", rt)
+		return nil, fmt.Errorf("unknown cluster runtime %q", rt)
 	}
 	return c, nil
 }
 
-// k3sDejaOperationnel dit si un cluster k3s tourne déjà sur cette machine.
+// k3sDejaOperationnel reports whether a k3s cluster is already running on
+// this machine.
 //
-// On teste le SERVICE et l'API, pas la présence d'un fichier : un binaire
-// présent mais un service arrêté doit déclencher la réparation, alors qu'un
-// fichier absent avec un service actif (installation système) ne doit rien
-// déclencher.
+// We test the SERVICE and the API, not the presence of a file: a binary that
+// exists alongside a stopped service must trigger the repair, while a missing
+// file with an active service (system install) must not trigger anything.
 //
-// Deux signaux, dans l'ordre du moins coûteux :
-//  1. le kubeconfig existe et kubectl répond -> le cluster est vivant ;
-//  2. le service systemd est actif.
+// Two signals, cheapest first:
+//  1. the kubeconfig exists and kubectl responds -> the cluster is alive;
+//  2. the systemd service is active.
 //
-// Si l'un des deux est vrai, on considère le cluster en place. Le risque de se
-// tromper est faible, et l'erreur symétrique (réinstaller un cluster sain) est
-// bien plus coûteuse : elle casse ce qui marchait.
+// If either holds, the cluster is considered in place. The risk of being
+// wrong is low, and the symmetric mistake (reinstalling a healthy cluster) is
+// far more costly: it breaks what was working.
 func k3sDejaOperationnel(ctx context.Context) bool {
-	// 1. kubectl répond-il ? C'est la preuve la plus directe.
+	// 1. Does kubectl respond? That is the most direct proof.
 	if _, err := os.Stat("/etc/rancher/k3s/k3s.yaml"); err == nil {
 		c := exec.CommandContext(ctx, "kubectl", "get", "nodes",
 			"--request-timeout=5s", "-o", "name")
@@ -68,14 +68,14 @@ func k3sDejaOperationnel(ctx context.Context) bool {
 			return true
 		}
 	}
-	// 2. le service tourne-t-il ?
+	// 2. Is the service running?
 	c := exec.CommandContext(ctx, "systemctl", "is-active", "--quiet", "k3s")
 	return c.Run() == nil
 }
 
 func provisionK3d(ctx context.Context, name string) error {
 	if k3dExists(ctx, name) {
-		fmt.Printf("cluster k3d %q existe déjà, réutilisation\n", name)
+		fmt.Printf("k3d cluster %q already exists, reusing\n", name)
 		return nil
 	}
 	cmd := exec.CommandContext(ctx, "k3d", "cluster", "create", name)
@@ -97,24 +97,24 @@ func k3dExists(ctx context.Context, name string) bool {
 	return false
 }
 
-// provisionK3s installe un vrai cluster K3s via le script officiel (Linux),
-// plus helm (prérequis de la pile) et le kubeconfig par défaut de l'utilisateur.
+// provisionK3s installs a real K3s cluster via the official script (Linux),
+// plus helm (a stack prerequisite) and the user's default kubeconfig.
 func provisionK3s(ctx context.Context) error {
-	// AVANT TOUT : un cluster vivant ne doit PAS être re-provisionné.
+	// FIRST AND FOREMOST: a live cluster must NOT be re-provisioned.
 	//
-	// POURQUOI CE CONTRÔLE EXISTE : sans lui, chaque `ceffio install` relance
-	// l'installeur k3s, qui interroge update.k3s.io pour connaître le canal de
-	// version. Sur un réseau qui filtre ce domaine (proxy, DPI, DNS menteur), la
-	// requête échoue en erreur de certificat et TOUT le déploiement s'arrête —
-	// alors que le cluster tournait parfaitement et qu'il n'y avait rien à
-	// installer. Une installation idempotente ne doit pas dépendre d'un appel
-	// réseau dont elle n'a pas besoin.
+	// WHY THIS CHECK EXISTS: without it, every `ceffio install` re-runs the
+	// k3s installer, which queries update.k3s.io to learn the version
+	// channel. On a network that filters that domain (proxy, DPI, lying DNS),
+	// the request fails with a certificate error and the WHOLE deployment
+	// stops — even though the cluster was running perfectly and there was
+	// nothing to install. An idempotent install must not depend on a network
+	// call it does not need.
 	if k3sDejaOperationnel(ctx) {
-		fmt.Println("∙ cluster k3s déjà opérationnel, réutilisation (aucune re-installation)")
+		fmt.Println("∙ k3s cluster already operational, reusing (no re-install)")
 		return nil
 	}
 
-	// TODO(phase-1) : flags HA (--cluster-init), version pin, options servi-extra.
+	// TODO(phase-1): HA flags (--cluster-init), version pin, service-extra options.
 	cmd := exec.CommandContext(ctx, "sh", "-c",
 		"curl -sfL https://get.k3s.io | INSTALL_K3S_SKIP_START=false sh -")
 	cmd.Stdout = os.Stdout
@@ -122,9 +122,9 @@ func provisionK3s(ctx context.Context) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("get.k3s.io: %w", err)
 	}
-	// helm : prérequis (charts jetstack, umbrella). Auto-install si absent.
+	// helm: prerequisite (jetstack and umbrella charts). Auto-install if missing.
 	if _, err := exec.LookPath("helm"); err != nil {
-		fmt.Println("∙ helm absent → installation via get-helm-3")
+		fmt.Println("∙ helm missing → installing via get-helm-3")
 		hcmd := exec.CommandContext(ctx, "sh", "-c",
 			"curl -sfL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | sh")
 		hcmd.Stdout = os.Stdout
@@ -133,18 +133,19 @@ func provisionK3s(ctx context.Context) error {
 			return fmt.Errorf("install helm: %w", err)
 		}
 	}
-	// Kubeconfig : le script K3s démarre le service en arrière-plan et écrit
-	// /etc/rancher/k3s/k3s.yaml seulement quelques secondes APRÈS le retour du
-	// script (K3s génère sa CA/certificats au premier boot). On l'attend donc
-	// activement : une lecture immédiate échoue et, comme elle est non bloquante,
-	// laisse la machine sans kubeconfig → kubectl/helm échouent ensuite en
-	// « permission denied » sur k3s.yaml, et le cluster paraît non-Ready.
-	// TOUJOURS réécrit : un ~/.kube/config périmé d'un précédent k3s (autre CA)
-	// ferait échouer helm/kubectl en « x509: certificate signed by unknown
-	// authority ». Les erreurs ne sont JAMAIS avalées.
+	// Kubeconfig: the K3s script starts the service in the background and
+	// writes /etc/rancher/k3s/k3s.yaml only a few seconds AFTER the script
+	// returns (K3s generates its CA/certificates on first boot). We therefore
+	// wait for it actively: an immediate read fails and, being non-blocking,
+	// leaves the machine without a kubeconfig → kubectl/helm then fail with
+	// "permission denied" on k3s.yaml, and the cluster looks not-Ready.
+	// ALWAYS rewritten: a stale ~/.kube/config from a previous k3s (a
+	// different CA) would make helm/kubectl fail with "x509: certificate
+	// signed by unknown authority". Errors are NEVER swallowed.
 	const k3sCfg = "/etc/rancher/k3s/k3s.yaml"
-	// Le CLI tourne en root (installer.sh → sudo) : lecture directe. En mode
-	// « sudo sans root » (ex. binaire lancé par un user), on retombe sur sudo cat.
+	// The CLI runs as root (installer.sh → sudo): direct read. In "sudo
+	// without root" mode (e.g. a binary run by a user), we fall back to
+	// sudo cat.
 	readCfg := func() ([]byte, error) {
 		if data, err := os.ReadFile(k3sCfg); err == nil {
 			return data, nil
@@ -154,7 +155,7 @@ func provisionK3s(ctx context.Context) error {
 			return nil, err
 		}
 		if len(out) == 0 {
-			return nil, fmt.Errorf("%s vide", k3sCfg)
+			return nil, fmt.Errorf("%s is empty", k3sCfg)
 		}
 		return out, nil
 	}
@@ -166,8 +167,8 @@ func provisionK3s(ctx context.Context) error {
 			break
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("kubeconfig %s indisponible après 90s: %w "+
-				"(k3s a-t-il démarré ? vérifier: systemctl status k3s)", k3sCfg, err)
+			return fmt.Errorf("kubeconfig %s unavailable after 90s: %w "+
+				"(did k3s start? check: systemctl status k3s)", k3sCfg, err)
 		}
 		select {
 		case <-ctx.Done():
@@ -177,36 +178,37 @@ func provisionK3s(ctx context.Context) error {
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
-		return fmt.Errorf("HOME introuvable pour écrire ~/.kube/config: %w", err)
+		return fmt.Errorf("cannot find HOME to write ~/.kube/config: %w", err)
 	}
 	kc := filepath.Join(home, ".kube")
 	if err := os.MkdirAll(kc, 0o700); err != nil {
-		return fmt.Errorf("création %s: %w", kc, err)
+		return fmt.Errorf("creating %s: %w", kc, err)
 	}
 	if err := os.WriteFile(filepath.Join(kc, "config"), data, 0o600); err != nil {
-		return fmt.Errorf("écriture ~/.kube/config: %w", err)
+		return fmt.Errorf("writing ~/.kube/config: %w", err)
 	}
 	return nil
 }
 
-// Destroy démonte le cluster provisionné et nettoie l'état local de Ceffio.
-// La dérivation des consommateurs est le reflet de Provision (même switch).
+// Destroy tears down the provisioned cluster and cleans up Ceffio's local
+// state. The consumer derivation mirrors Provision (same switch).
 func Destroy(ctx context.Context, rt Runtime, name string) error {
 	switch rt {
 	case RuntimeK3s:
-		// k3s-uninstall.sh arrête le service et purge /etc/rancher, /var/lib/rancher,
-		// les binaires et le service systemd (données/volumes local-path inclus). Leur
-		// trace (set -x) est redirigée vers un log : on n'affiche rien en cas de succès.
+		// k3s-uninstall.sh stops the service and purges /etc/rancher,
+		// /var/lib/rancher, the binaries and the systemd service (local-path
+		// data/volumes included). Its trace (set -x) is redirected to a log:
+		// nothing is printed on success.
 		cmd := exec.CommandContext(ctx, "sh", "-c",
-			"systemctl stop k3s 2>/dev/null; if [ -x /usr/local/bin/k3s-uninstall.sh ]; then /usr/local/bin/k3s-uninstall.sh >/tmp/ceffio-k3s-uninstall.log 2>&1; else echo 'k3s-uninstall.sh absent (k3s non installé via le script officiel)'; fi")
+			"systemctl stop k3s 2>/dev/null; if [ -x /usr/local/bin/k3s-uninstall.sh ]; then /usr/local/bin/k3s-uninstall.sh >/tmp/ceffio-k3s-uninstall.log 2>&1; else echo 'k3s-uninstall.sh missing (k3s not installed via the official script)'; fi")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("k3s-uninstall: %w (%s)", err, strings.TrimSpace(string(out)))
 		}
-		fmt.Println("✓ K3s démonté (k3s-uninstall.sh)")
+		fmt.Println("✓ K3s removed (k3s-uninstall.sh)")
 	case RuntimeDev:
 		if !k3dExists(ctx, name) {
-			fmt.Printf("cluster k3d %q absent, rien à supprimer\n", name)
+			fmt.Printf("k3d cluster %q absent, nothing to delete\n", name)
 		} else {
 			cmd := exec.CommandContext(ctx, "k3d", "cluster", "delete", name)
 			cmd.Stdout = os.Stdout
@@ -214,28 +216,28 @@ func Destroy(ctx context.Context, rt Runtime, name string) error {
 			if err := cmd.Run(); err != nil {
 				return fmt.Errorf("k3d cluster delete: %w", err)
 			}
-			fmt.Printf("✓ cluster k3d %q supprimé\n", name)
+			fmt.Printf("✓ k3d cluster %q deleted\n", name)
 		}
 	default:
-		return fmt.Errorf("runtime de cluster inconnu %q", rt)
+		return fmt.Errorf("unknown cluster runtime %q", rt)
 	}
 	return cleanupLocal(ctx, rt, name)
 }
 
-// cleanupLocal supprime l'état local de Ceffio. Le kubeconfig (~/.kube/config) est
-// laissé en place : il peut contenir d'autres clusters ; on ne touche pas d'un revers.
+// cleanupLocal removes Ceffio's local state. The kubeconfig (~/.kube/config)
+// is left in place: it may contain other clusters; we do not touch it.
 func cleanupLocal(ctx context.Context, rt Runtime, name string) error {
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		ce := filepath.Join(home, ".ceffio")
 		if _, err := os.Stat(ce); err == nil {
 			_ = os.RemoveAll(ce)
-			fmt.Println("✓ état local ~/.ceffio supprimé")
+			fmt.Println("✓ local state ~/.ceffio removed")
 		}
 	}
 	return nil
 }
 
-// Health liste les nœuds du cluster courant (via kubectl).
+// Health lists the nodes of the current cluster (via kubectl).
 func Health(ctx context.Context) ([]string, error) {
 	out, err := k8s.Command(ctx, "kubectl", "get", "nodes", "-o", "name").CombinedOutput()
 	if err != nil {
@@ -250,7 +252,7 @@ func Health(ctx context.Context) ([]string, error) {
 	return nodes, nil
 }
 
-// WaitReady attend que tous les nœuds soient Ready, avec un timeout.
+// WaitReady waits until all nodes are Ready, with a timeout.
 func WaitReady(ctx context.Context, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -263,7 +265,7 @@ func WaitReady(ctx context.Context, timeout time.Duration) error {
 		case <-time.After(3 * time.Second):
 		}
 	}
-	return fmt.Errorf("cluster non Ready après %s", timeout)
+	return fmt.Errorf("cluster not Ready after %s", timeout)
 }
 
 func allNodesReady(ctx context.Context) bool {
@@ -284,8 +286,8 @@ func allNodesReady(ctx context.Context) bool {
 	return true
 }
 
-// podsApplicatifsPrets indique si tous les pods des namespaces ceffio-* sont
-// prêts. Les pods terminés (Succeeded) sont ignorés : ce sont des jobs finis.
+// podsApplicatifsPrets reports whether all pods in the ceffio-* namespaces
+// are ready. Finished pods (Succeeded) are ignored: they are completed jobs.
 func podsApplicatifsPrets(ctx context.Context) bool {
 	out, err := k8s.Command(ctx, "kubectl", "get", "pods", "-A", "--no-headers").Output()
 	if err != nil {
@@ -296,7 +298,7 @@ func podsApplicatifsPrets(ctx context.Context) bool {
 		if len(f) < 4 || !strings.HasPrefix(f[0], "ceffio-") {
 			continue
 		}
-		// colonnes : NAMESPACE NAME READY STATUS RESTARTS AGE
+		// columns: NAMESPACE NAME READY STATUS RESTARTS AGE
 		statut := f[3]
 		if statut == "Succeeded" || statut == "Completed" {
 			continue

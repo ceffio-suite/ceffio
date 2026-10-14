@@ -16,34 +16,33 @@ func newRestoreCmd() *cobra.Command {
 
 	c := &cobra.Command{
 		Use:   "restore <backup>",
-		Short: "Restaurer un backup complet",
-		Long: `Restaure une installation Ceffio depuis une archive produite par « ceffio backup ».
+		Short: "Restore a complete backup",
+		Long: `Restores a Ceffio installation from an archive produced by "ceffio backup".
 
-Ordre d'application, imposé par les dépendances :
-  1. les Secrets       — sinon les mots de passe de base ne correspondent plus
-  2. les bases         — identités, comptes, métadonnées
-  3. les volumes       — les documents, qui référencent ces métadonnées
+Order of application, imposed by the dependencies:
+  1. the Secrets       — otherwise the database passwords no longer match
+  2. the databases     — identities, accounts, metadata
+  3. the volumes       — the documents, which reference that metadata
 
-L'archive est VÉRIFIÉE avant toute écriture (empreintes du manifeste) : une
-sauvegarde incomplète ou altérée est refusée plutôt que partiellement appliquée.
+The archive is VERIFIED before any write (manifest fingerprints): an
+incomplete or corrupted backup is refused rather than partially applied.
 
-La restauration des bases remplace le contenu existant (le dump a été pris avec
---clean). Les fichiers présents sur les volumes mais absents de l'archive ne sont
-PAS supprimés : une restauration ne doit pas détruire ce qu'elle ne sait pas
-remplacer.
+Restoring the databases replaces the existing content (the dump was taken
+with --clean). Files present on the volumes but missing from the archive are
+NOT deleted: a restore must not destroy what it does not know how to replace.
 
-Cette opération est destructive : elle demande confirmation, sauf avec --yes.`,
+This operation is destructive: it asks for confirmation, except with --yes.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			archive := args[0]
 
-			fmt.Println("Ceffio — restauration")
+			fmt.Println("Ceffio — restore")
 			fmt.Println()
 			fmt.Printf("Archive : %s\n", archive)
 			fmt.Println()
 
-			// 1. Inspection et vérification AVANT toute écriture.
-			fmt.Println("Vérification de l'archive...")
+			// 1. Inspection and verification BEFORE any write.
+			fmt.Println("Verifying the archive...")
 			man, err := backup.Verifier(archive)
 			if err != nil {
 				return err
@@ -53,37 +52,37 @@ Cette opération est destructive : elle demande confirmation, sauf avec --yes.`,
 					fmt.Printf("  ! %s\n", e)
 				}
 				fmt.Println()
-				fmt.Println("✗ Archive REFUSÉE : restaurer une sauvegarde incomplète ajouterait")
-				fmt.Println("  une panne à la panne. Vérifiez l'archive d'origine.")
+				fmt.Println("✗ Archive REFUSED: restoring an incomplete backup would add")
+				fmt.Println("  an outage on top of an outage. Check the original archive.")
 				os.Exit(1)
 			}
-			fmt.Printf("✓ %d élément(s), empreintes conformes\n", len(man.Entries))
+			fmt.Printf("✓ %d item(s), fingerprints match\n", len(man.Entries))
 			fmt.Println()
-			fmt.Println("Contenu :")
+			fmt.Println("Contents:")
 			printManifeste(man)
 
 			if seulementVerifier {
 				fmt.Println()
-				fmt.Println("--verify-only : aucune modification appliquée.")
+				fmt.Println("--verify-only: no change applied.")
 				return nil
 			}
 
-			// 2. Confirmation explicite.
+			// 2. Explicit confirmation.
 			if !oui {
 				fmt.Println()
-				fmt.Println("Cette opération va REMPLACER le contenu des bases et des volumes")
-				fmt.Println("de l'installation courante. Elle est irréversible.")
-				fmt.Print("Confirmer (tapez « oui ») : ")
+				fmt.Println("This operation will REPLACE the contents of the databases and volumes")
+				fmt.Println("of the current installation. It is irreversible.")
+				fmt.Print("Confirm (type \"yes\"): ")
 				rep, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-				if strings.TrimSpace(strings.ToLower(rep)) != "oui" {
-					fmt.Println("Annulé.")
+				if strings.TrimSpace(strings.ToLower(rep)) != "yes" {
+					fmt.Println("Canceled.")
 					return nil
 				}
 			}
 
-			// 3. Restauration.
+			// 3. Restore.
 			fmt.Println()
-			fmt.Println("Restauration...")
+			fmt.Println("Restoring...")
 			res, err := backup.Restaurer(cmd.Context(), archive, func(etape string) {
 				fmt.Printf("  · %s\n", etape)
 			})
@@ -93,22 +92,22 @@ Cette opération est destructive : elle demande confirmation, sauf avec --yes.`,
 			fmt.Println()
 
 			if len(res.Errors) > 0 {
-				fmt.Println("Erreurs pendant la restauration :")
+				fmt.Println("Errors during the restore:")
 				for _, e := range res.Errors {
 					fmt.Printf("  ! %s\n", e)
 				}
 				fmt.Println()
-				fmt.Println("✗ Restauration incomplète")
+				fmt.Println("✗ Incomplete restore")
 				os.Exit(1)
 			}
 
-			fmt.Println("✓ Restauration terminée")
+			fmt.Println("✓ Restore complete")
 
-			// 4. Vérification post-restauration : les données sont-elles
-			//    réellement là ? Compter ce qu'on vient de restaurer est la
-			//    seule façon de ne pas se contenter de « la commande a réussi ».
+			// 4. Post-restore check: is the data actually there? Counting what
+			//    was just restored is the only way not to settle for "the
+			//    command succeeded".
 			fmt.Println()
-			fmt.Println("Contrôle des données restaurées...")
+			fmt.Println("Checking the restored data...")
 			for _, e := range res.Entries {
 				if e.Kind != "base" {
 					continue
@@ -122,14 +121,14 @@ Cette opération est destructive : elle demande confirmation, sauf avec --yes.`,
 				fmt.Printf("  %s base %-12s %d table(s)\n", status, e.Name, n)
 			}
 			fmt.Println()
-			fmt.Println("Relancez les applications pour qu'elles reprennent la main :")
-			fmt.Println("  ceffio status   puis   kubectl rollout restart -n <ns> deploy")
+			fmt.Println("Restart the applications so they take over again:")
+			fmt.Println("  ceffio status   then   kubectl rollout restart -n <ns> deploy")
 			return nil
 		},
 	}
 
-	c.Flags().BoolVar(&oui, "yes", false, "Ne pas demander de confirmation")
-	c.Flags().BoolVar(&seulementVerifier, "verify-only", false, "Vérifier l'archive sans rien restaurer")
+	c.Flags().BoolVar(&oui, "yes", false, "Do not ask for confirmation")
+	c.Flags().BoolVar(&seulementVerifier, "verify-only", false, "Verify the archive without restoring anything")
 
 	return c
 }

@@ -14,44 +14,44 @@ func newExposeCmd() *cobra.Command {
 
 	c := &cobra.Command{
 		Use:   "expose",
-		Short: "Publier la suite derrière le pare-feu (OPNsense + os-caddy)",
-		Long: `Déclare les domaines publics de Ceffio côté pare-feu et les route vers la VM.
+		Short: "Publish the suite behind the firewall (OPNsense + os-caddy)",
+		Long: `Declares Ceffio's public domains on the firewall side and routes them to the VM.
 
-Déployer ne suffit pas à rendre la suite joignable : le pare-feu termine le TLS
-public et doit connaître chaque domaine. Sans cette étape, le DNS répond mais
-rien n'arrive au cluster.
+Deploying is not enough to make the suite reachable: the firewall terminates
+the public TLS and must know every domain. Without this step, the DNS answers
+but nothing reaches the cluster.
 
-Ordre complet d'une publication :
-  1. l'enregistrement DNS public existe          (créé par l'exploitant)
-  2. le certificat wildcard existe sur le pare-feu (créé par l'exploitant)
-  3. les domaines + handlers sont déclarés         <- cette commande
-  4. les hôtes publics sont ajoutés aux Ingress Traefik (fait par install/upgrade)
+Complete order of a publication:
+  1. the public DNS record exists                    (created by the operator)
+  2. the wildcard certificate exists on the firewall (created by the operator)
+  3. the domains + handlers are declared               <- this command
+  4. the public hosts are added to the Traefik Ingresses (done by install/upgrade)
 
-La configuration est lue dans un fichier (--config) : identifiants du pare-feu,
-domaine, cible interne. Aucune valeur n'est écrite dans le dépôt.`,
+The configuration is read from a file (--config): firewall credentials,
+domain, internal target. No value is written into the repository.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := expos.LireConfig(cfgFichier)
 			if err != nil {
 				return err
 			}
 
-			fmt.Println("Ceffio — publication derrière le pare-feu")
+			fmt.Println("Ceffio — publication behind the firewall")
 			fmt.Println()
-			fmt.Printf("Pare-feu : %s\n", cfg.HoteAPI)
-			fmt.Printf("Domaine  : %s\n", cfg.Domaine)
-			fmt.Printf("Cible    : %s:%s\n", cfg.IPInterne, cfg.PortInterne)
+			fmt.Printf("Firewall : %s\n", cfg.HoteAPI)
+			fmt.Printf("Domain   : %s\n", cfg.Domaine)
+			fmt.Printf("Target   : %s:%s\n", cfg.IPInterne, cfg.PortInterne)
 			fmt.Println()
 
 			if !oui {
-				fmt.Println("Les domaines suivants seront déclarés :")
+				fmt.Println("The following domains will be declared:")
 				for _, s := range cfg.SousDomaines {
 					fmt.Printf("  %s.%s\n", s, cfg.Domaine)
 				}
-				fmt.Print("\nConfirmer (tapez « oui ») : ")
+				fmt.Print("\nConfirm (type \"yes\"): ")
 				var rep string
 				fmt.Scanln(&rep)
-				if rep != "oui" {
-					fmt.Println("Annulé.")
+				if rep != "yes" {
+					fmt.Println("Canceled.")
 					return nil
 				}
 				fmt.Println()
@@ -61,9 +61,9 @@ domaine, cible interne. Aucune valeur n'est écrite dans le dépôt.`,
 				fmt.Printf("  · %s\n", e)
 			})
 			if err != nil {
-				if res != nil && len(res.Creés) > 0 {
+				if res != nil && len(res.Created) > 0 {
 					fmt.Println()
-					for _, d := range res.Creés {
+					for _, d := range res.Created {
 						fmt.Printf("  ✓ %s\n", d)
 					}
 				}
@@ -72,15 +72,15 @@ domaine, cible interne. Aucune valeur n'est écrite dans le dépôt.`,
 
 			fmt.Println()
 			for _, d := range res.Existants {
-				fmt.Printf("  = %s (déjà déclaré)\n", d)
+				fmt.Printf("  = %s (already declared)\n", d)
 			}
-			for _, d := range res.Creés {
+			for _, d := range res.Created {
 				fmt.Printf("  + %s\n", d)
 			}
 			fmt.Println()
-			fmt.Printf("✓ %d domaine(s) publié(s), certificat %s\n", len(res.Creés), res.Certificat)
+			fmt.Printf("✓ %d domain(s) published, certificate %s\n", len(res.Created), res.Certificat)
 			fmt.Println()
-			fmt.Println("Vérifiez depuis l'extérieur :")
+			fmt.Println("Check from outside:")
 			for _, d := range cfg.SousDomaines {
 				fmt.Printf("  curl -sI https://%s.%s/\n", d, cfg.Domaine)
 			}
@@ -88,8 +88,8 @@ domaine, cible interne. Aucune valeur n'est écrite dans le dépôt.`,
 		},
 	}
 
-	c.Flags().StringVar(&cfgFichier, "config", "ceffio-expose.json", "Fichier de configuration de publication")
-	c.Flags().BoolVar(&oui, "yes", false, "Ne pas demander de confirmation")
+	c.Flags().StringVar(&cfgFichier, "config", "ceffio-expose.json", "Publication configuration file")
+	c.Flags().BoolVar(&oui, "yes", false, "Do not ask for confirmation")
 
 	return c
 }

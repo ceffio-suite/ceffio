@@ -14,11 +14,11 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/k8s"
 )
 
-// client encapsule les appels HTTP à OpenBao.
+// client wraps the HTTP calls to OpenBao.
 //
-// On parle directement à l'API HTTP plutôt que d'embarquer le SDK : le besoin
-// est réduit (lire et écrire un KV), et une dépendance de plus dans un produit
-// qu'on veut auto-portant se paie à chaque mise à jour de sécurité.
+// We talk to the HTTP API directly rather than embedding the SDK: the need is
+// small (read and write a KV), and one more dependency in a product we want
+// self-contained costs at every security update.
 type client struct {
 	cfg  *Coffre
 	http *http.Client
@@ -27,38 +27,38 @@ type client struct {
 func nouveauClient(cfg *Coffre) *client {
 	return &client{
 		cfg: cfg,
-		// Un délai court : si le coffre ne répond pas vite, on veut se rabattre
-		// sur Kubernetes plutôt que de bloquer le déploiement.
+		// A short timeout: if the vault does not answer fast, we want to fall
+		// back to Kubernetes rather than block the deployment.
 		http: &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
-// entetes pose les entêtes communs à tous les appels.
+// entetes sets the headers common to all calls.
 func (c *client) entetes(req *http.Request) {
 	req.Header.Set("X-Vault-Token", c.cfg.Jeton)
-	// Le namespace se pose en entête, pas dans le chemin. Un jeton valide qui
-	// ne voit pas le moteur attendu vient presque toujours de là.
+	// The namespace is set in a header, not in the path. A valid token that
+	// does not see the expected engine almost always comes from there.
 	if c.cfg.Namespace != "" {
 		req.Header.Set("X-Vault-Namespace", c.cfg.Namespace)
 	}
 }
 
-// LireEntree rend TOUTES les clés d'une entrée du coffre.
+// LireEntree returns ALL keys of a vault entry.
 //
-// POURQUOI PAR ENTRÉE ET NON PAR CLÉ : la première version lisait une clé par
-// chemin (« ceffio/nextcloud/password »). Un coffre rangé ainsi ne se parcourt
-// pas — on y trouve « un mot de passe » sans savoir à quoi il ouvre, et chercher
-// un compte ne donne rien. Une entrée par COMPTE porte ses clés ensemble, et se
-// lit d'un coup d'œil.
+// WHY PER ENTRY AND NOT PER KEY: the first version read one key per path
+// ("ceffio/nextcloud/password"). A vault organized that way cannot be
+// browsed — you find "a password" without knowing what it opens, and
+// searching for an account returns nothing. One entry per ACCOUNT carries its
+// keys together, and reads at a glance.
 //
-// ErrEntreeAbsente distingue « cette entrée n'existe pas (encore) » de « le coffre
-// ne répond pas ». Les confondre ferait générer un secret neuf là où il suffisait
-// d'aller le chercher — exactement le risque qu'on veut éviter.
-var ErrEntreeAbsente = errors.New("entrée absente du coffre")
+// ErrEntreeAbsente distinguishes "this entry does not exist (yet)" from "the
+// vault does not answer". Confusing the two would generate a fresh secret
+// where it was enough to go and fetch it — exactly the risk we want to avoid.
+var ErrEntreeAbsente = errors.New("entry absent from vault")
 
-// La lecture se fait sur le chemin `data/` (KV versionné) : c'est celui qui
-// porte les VALEURS, alors que `metadata/` ne sert qu'à lister. Confondre les
-// deux donne `data: null` et fait croire à une entrée vide.
+// The read goes through the `data/` path (versioned KV): it is the one that
+// carries the VALUES, while `metadata/` only lists. Confusing the two gives
+// `data: null` and makes the entry look empty.
 func (c *client) LireEntree(ctx context.Context, composant, nom string) (map[string]string, error) {
 	chemin := fmt.Sprintf("%s/v1/%s/data/%s",
 		strings.TrimRight(c.cfg.Adresse, "/"), c.cfg.Moteur,
@@ -81,12 +81,12 @@ func (c *client) LireEntree(ctx context.Context, composant, nom string) (map[str
 		return nil, fmt.Errorf("%w : %s", ErrEntreeAbsente, c.cfg.Chemin(composant, nom))
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("coffre a refusé (HTTP %d) : %.150s",
+		return nil, fmt.Errorf("vault refused (HTTP %d): %.150s",
 			resp.StatusCode, string(brut))
 	}
 
-	// Forme de la réponse KV v2 :
-	// {"data":{"data":{"<clé>":"<valeur>"},"metadata":{...}}}
+	// Shape of the KV v2 response:
+	// {"data":{"data":{"<key>":"<value>"},"metadata":{...}}}
 	var corps struct {
 		Data struct {
 			Data map[string]string `json:"data"`
@@ -96,19 +96,19 @@ func (c *client) LireEntree(ctx context.Context, composant, nom string) (map[str
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(brut, &corps); err != nil {
-		return nil, fmt.Errorf("réponse illisible du coffre : %w", err)
+		return nil, fmt.Errorf("unreadable response from vault: %w", err)
 	}
 	if len(corps.Data.Data) == 0 {
-		return nil, fmt.Errorf("entrée vide dans le coffre : %s", c.cfg.Chemin(composant, nom))
+		return nil, fmt.Errorf("empty entry in vault: %s", c.cfg.Chemin(composant, nom))
 	}
 	return corps.Data.Data, nil
 }
 
-// Ecrire pose une valeur dans le coffre.
+// Ecrire puts a value in the vault.
 //
-// Idempotent au sens utile : réécrire la même valeur crée une nouvelle version,
-// ce qui est le comportement voulu — l'historique est conservé, et un secret
-// écrasé par erreur reste récupérable.
+// Idempotent in the useful sense: rewriting the same value creates a new
+// version, which is the intended behavior — history is kept, and a secret
+// overwritten by mistake stays recoverable.
 func (c *client) EcrireEntree(ctx context.Context, composant, nom string, donnees map[string]string) error {
 	chemin := fmt.Sprintf("%s/v1/%s/data/%s",
 		strings.TrimRight(c.cfg.Adresse, "/"), c.cfg.Moteur,
@@ -134,19 +134,19 @@ func (c *client) EcrireEntree(ctx context.Context, composant, nom string, donnee
 
 	if resp.StatusCode/100 != 2 {
 		brut, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("écriture refusée (HTTP %d) : %.150s",
+		return fmt.Errorf("write refused (HTTP %d): %.150s",
 			resp.StatusCode, string(brut))
 	}
 	return nil
 }
 
-// Lister rend les clés d'un préfixe. Sert au diagnostic (quels secrets sont
-// dans le coffre), jamais au fonctionnement : un composant lit ce qu'il
-// connaît, il n'explore pas.
+// Lister returns the keys of a prefix. Used for diagnosis (which secrets are
+// in the vault), never for operation: a component reads what it knows, it
+// does not explore.
 //
-// POURQUOI `metadata/` ET PAS LE CHEMIN DES VALEURS : sur un KV versionné,
-// lister le chemin des valeurs échoue avec « Invalid path for a versioned K/V
-// secrets engine ». C'est le chemin metadata qui liste.
+// WHY `metadata/` AND NOT THE VALUES PATH: on a versioned KV, listing the
+// values path fails with "Invalid path for a versioned K/V secrets engine".
+// It is the metadata path that lists.
 func (c *client) Lister(ctx context.Context, composant string) ([]string, error) {
 	chemin := fmt.Sprintf("%s/v1/%s/metadata/%s?list=true",
 		strings.TrimRight(c.cfg.Adresse, "/"), c.cfg.Moteur,
@@ -166,7 +166,7 @@ func (c *client) Lister(ctx context.Context, composant string) ([]string, error)
 
 	brut, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("listage refusé (HTTP %d)", resp.StatusCode)
+		return nil, fmt.Errorf("listing refused (HTTP %d)", resp.StatusCode)
 	}
 
 	var corps struct {
@@ -181,21 +181,21 @@ func (c *client) Lister(ctx context.Context, composant string) ([]string, error)
 }
 
 // ---------------------------------------------------------------------------
-// Accès avec repli
+// Access with fallback
 // ---------------------------------------------------------------------------
 
-// LireOuSecret rend un secret depuis le coffre s'il est configuré, sinon depuis
-// le Secret Kubernetes.
+// LireOuSecret returns a secret from the vault if configured, otherwise from
+// the Kubernetes Secret.
 //
-// C'EST LE CŒUR DE LA RÈGLE « OpenBao OPTIONNEL » : l'appelant demande une
-// valeur, sans savoir d'où elle vient. Si le coffre est absent ou injoignable,
-// on se rabat sur Kubernetes avec un avertissement — jamais une erreur fatale.
-// Un déploiement qui échoue parce qu'un coffre facultatif est en panne serait
-// une régression, pas une sécurité.
+// THIS IS THE HEART OF THE "OPTIONAL OpenBao" RULE: the caller asks for a
+// value, without knowing where it comes from. If the vault is absent or
+// unreachable, we fall back to Kubernetes with a warning — never a fatal
+// error. A deployment failing because an optional vault is down would be a
+// regression, not security.
 //
-// Ordre de priorité : coffre d'abord (c'est la source de vérité quand il est
-// là), Kubernetes en repli. C'est ce qui permet de faire tourner un secret en
-// l'écrivant dans le coffre, sans toucher au cluster.
+// Priority order: vault first (it is the source of truth when present),
+// Kubernetes as fallback. This is what allows rotating a secret by writing it
+// in the vault, without touching the cluster.
 func LireOuSecret(ctx context.Context, cfg *Coffre, composant, nom, cle, nsSecret, cleSecret string) (string, error) {
 	if cfg.Dispo() {
 		c := nouveauClient(cfg)
@@ -204,44 +204,45 @@ func LireOuSecret(ctx context.Context, cfg *Coffre, composant, nom, cle, nsSecre
 			if v, ok := entree[cle]; ok && v != "" {
 				return v, nil
 			}
-			// L'ENTRÉE EXISTE MAIS LA CLÉ MANQUE : on le dit, puis on se rabat.
-			// Ce n'est pas la même chose qu'une entrée absente — confondre les
-			// deux ferait passer un coffre incomplet pour un coffre vide, et la
-			// cause disparaîtrait du compte rendu.
-			fmt.Printf("  ∙ coffre : clé « %s » absente dans %s — repli sur le Secret Kubernetes\n",
+			// THE ENTRY EXISTS BUT THE KEY IS MISSING: we say so, then fall
+			// back. It is not the same as an absent entry — confusing the two
+			// would make an incomplete vault pass for an empty one, and the
+			// cause would disappear from the report.
+			fmt.Printf("  ∙ vault: key \"%s\" missing in %s — falling back to the Kubernetes Secret\n",
 				cle, cfg.Chemin(composant, nom))
 		} else {
-			// Un coffre configuré mais injoignable n'est pas une panne du
-			// déploiement : on prévient et on continue.
-			fmt.Printf("  ∙ coffre injoignable pour %s (%v) — repli sur le Secret Kubernetes\n",
+			// A configured but unreachable vault is not a deployment failure:
+			// we warn and continue.
+			fmt.Printf("  ∙ vault unreachable for %s (%v) — falling back to the Kubernetes Secret\n",
 				cfg.Chemin(composant, nom), err)
 		}
 	}
 	return lireSecretK8s(ctx, nsSecret, cleSecret)
 }
 
-// LireEntreeCoffre lit une entrée ENTIÈRE, et ne se rabat sur RIEN.
+// LireEntreeCoffre reads a WHOLE entry, and falls back on NOTHING.
 //
-// C'est la seule lecture qu'un composant migré doit utiliser : le coffre est la
-// source unique, et il n'existe plus de copie dans Kubernetes. Rendre l'erreur,
-// plutôt qu'une chaîne vide, permet de distinguer « entrée absente » de « coffre
-// injoignable » — le premier cas appelle une génération, le second un échec franc.
+// It is the only read a migrated component should use: the vault is the
+// single source, and no copy exists in Kubernetes anymore. Returning the
+// error, rather than an empty string, distinguishes "absent entry" from
+// "unreachable vault" — the first case calls for generation, the second for
+// a clean failure.
 func LireEntreeCoffre(ctx context.Context, cfg *Coffre, composant, nom string) (map[string]string, error) {
 	if cfg == nil || !cfg.Dispo() {
-		return nil, fmt.Errorf("aucun coffre configuré : impossible de lire %s/%s", composant, nom)
+		return nil, fmt.Errorf("no vault configured: cannot read %s/%s", composant, nom)
 	}
 	return nouveauClient(cfg).LireEntree(ctx, composant, nom)
 }
 
-// EntreeAbsente dit si l'erreur signifie « cette entrée n'existe pas encore ».
+// EntreeAbsente says whether the error means "this entry does not exist yet".
 func EntreeAbsente(err error) bool {
 	return errors.Is(err, ErrEntreeAbsente)
 }
 
-// EcrireDansCoffre pose un secret dans le coffre, si configuré.
+// EcrireDansCoffre puts a secret in the vault, if configured.
 //
-// Si aucun coffre n'est configuré, on ne fait RIEN et on le dit : le secret
-// reste dans Kubernetes, et c'est le comportement nominal d'une installation sans
+// If no vault is configured, we do NOTHING and say so: the secret stays in
+// Kubernetes, and this is the nominal behavior of an installation without
 // OpenBao.
 func EcrireDansCoffre(ctx context.Context, cfg *Coffre, composant, nom string, donnees map[string]string) error {
 	if !cfg.Dispo() {
@@ -249,15 +250,15 @@ func EcrireDansCoffre(ctx context.Context, cfg *Coffre, composant, nom string, d
 	}
 	c := nouveauClient(cfg)
 	if err := c.EcrireEntree(ctx, composant, nom, donnees); err != nil {
-		return fmt.Errorf("écriture dans le coffre impossible (%s/%s) : %w",
+		return fmt.Errorf("cannot write to vault (%s/%s): %w",
 			composant, nom, err)
 	}
-	// On n'affiche JAMAIS les valeurs — seulement le chemin et le nombre de clés.
-	fmt.Printf("  ∙ coffre : %s écrit (%d clé(s))\n", cfg.Chemin(composant, nom), len(donnees))
+	// We NEVER display the values — only the path and the number of keys.
+	fmt.Printf("  ∙ vault: %s written (%d key(s))\n", cfg.Chemin(composant, nom), len(donnees))
 	return nil
 }
 
-// lireSecretK8s lit un secret depuis un Secret Kubernetes (repli).
+// lireSecretK8s reads a secret from a Kubernetes Secret (fallback).
 func lireSecretK8s(ctx context.Context, ns, cle string) (string, error) {
 	out, err := kubeGet(ctx, "get", "secret", ns, "-o",
 		fmt.Sprintf("jsonpath={.data.%s}", cle))
@@ -265,12 +266,12 @@ func lireSecretK8s(ctx context.Context, ns, cle string) (string, error) {
 		return "", err
 	}
 	if out == "" {
-		return "", fmt.Errorf("secret %s/%s introuvable", ns, cle)
+		return "", fmt.Errorf("secret %s/%s not found", ns, cle)
 	}
 	return decoderBase64(out)
 }
 
-// kubeGet exécute kubectl et rend la sortie.
+// kubeGet runs kubectl and returns the output.
 func kubeGet(ctx context.Context, args ...string) (string, error) {
 	cmd := k8s.Command(ctx, "kubectl", args...)
 	cmd.Env = k8s.Env()
@@ -278,15 +279,15 @@ func kubeGet(ctx context.Context, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
-// decoderBase64 décode une valeur de Secret Kubernetes.
+// decoderBase64 decodes a Kubernetes Secret value.
 //
-// Kubernetes stocke les valeurs en base64 : on décode ici, une seule fois, au
-// lieu de laisser chaque appelant le faire — c'est la source classique d'un
-// mot de passe qui « ne marche pas » parce qu'il est comparé encodé.
+// Kubernetes stores values in base64: we decode here, once, instead of
+// letting each caller do it — the classic source of a password that "does not
+// work" because it is compared encoded.
 func decoderBase64(s string) (string, error) {
 	b, err := base64.StdEncoding.DecodeString(strings.TrimSpace(s))
 	if err != nil {
-		return "", fmt.Errorf("valeur base64 illisible : %w", err)
+		return "", fmt.Errorf("unreadable base64 value: %w", err)
 	}
 	return string(b), nil
 }

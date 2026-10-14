@@ -7,26 +7,27 @@ import (
 	"strings"
 )
 
-// ChargerDepuisFichier complète l'environnement avec les valeurs d'un fichier rendu
-// par l'injecteur d'OpenBao, SANS écraser ce qui est déjà défini.
+// ChargerDepuisFichier completes the environment with the values of a file
+// rendered by the OpenBao injector, WITHOUT overwriting what is already set.
 //
-// POURQUOI CE DÉTOUR EXISTE POUR LA CONSOLE : son image ne contient AUCUN shell —
-// c'est un binaire unique, sans /bin/sh —, donc la méthode employée partout ailleurs
-// (« set -a; . /secrets/env; set +a ») ne peut pas s'y appliquer. Le programme lit
-// donc lui-même le fichier que l'injecteur a rendu. Le format reste le même que pour
-// les autres composants : des lignes « export NOM='valeur' », pour qu'il n'y ait
-// qu'une seule forme à connaître dans toute la suite.
+// WHY THIS DETOUR EXISTS FOR THE CONSOLE: its image contains NO shell —
+// it is a single binary, without /bin/sh —, so the method used everywhere
+// else ("set -a; . /secrets/env; set +a") cannot apply there. The program
+// therefore reads itself the file the injector rendered. The format stays the
+// same as for the other components: "export NAME='value'" lines, so there is
+// only one shape to know across the whole suite.
 //
-// L'absence du fichier n'est PAS une erreur ici : elle signifie que l'injection n'a
-// pas eu lieu. L'appelant décide si les valeurs étaient obligatoires — et il vaut
-// mieux qu'il le décide, plutôt qu'un chargement muet qui laisserait tout vide.
+// The absence of the file is NOT an error here: it means the injection did
+// not happen. The caller decides whether the values were mandatory — and it
+// is better that it decides, rather than a silent load leaving everything
+// empty.
 func ChargerDepuisFichier(chemin string) error {
 	f, err := os.Open(chemin)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return fmt.Errorf("lecture de %s : %w", chemin, err)
+		return fmt.Errorf("reading %s: %w", chemin, err)
 	}
 	defer f.Close()
 
@@ -42,7 +43,7 @@ func ChargerDepuisFichier(chemin string) error {
 			continue
 		}
 		nom = strings.TrimSpace(nom)
-		// Les valeurs sont écrites entre apostrophes par le gabarit.
+		// Values are written between single quotes by the template.
 		valeur = strings.Trim(strings.TrimSpace(valeur), "'")
 		if nom != "" && os.Getenv(nom) == "" {
 			os.Setenv(nom, valeur)

@@ -1,19 +1,19 @@
-// Compte administrateur unique de la plateforme.
+// Single administration account of the platform.
 //
-// POURQUOI CE FICHIER : un seul compte doit administrer Nextcloud (applications),
-// Stalwart (mail) et cette console. Il vit dans KEYCLOAK, donc l'authentification
-// passe par le SSO et l'identité est la même partout.
+// WHY THIS FILE: a single account must administer Nextcloud (applications),
+// Stalwart (mail) and this console. It lives in KEYCLOAK, so authentication
+// goes through SSO and the identity is the same everywhere.
 //
-// CE QUE LA ROTATION PEUT VRAIMENT FAIRE :
-// Keycloak ne stocke qu'un HACHAGE du mot de passe — définitif, irréversible.
-// Aucune API ne peut donc le « relire ». La console en GÉNÈRE un nouveau et le
-// pousse dans chaque système. Il est ensuite affiché UNE SEULE FOIS, puis
-// oublié : c'est le seul instant où il existe en clair, et c'est voulu — c'est
-// la seule façon de te le communiquer.
+// WHAT ROTATION CAN ACTUALLY DO:
+// Keycloak only stores a HASH of the password — final and irreversible.
+// No API can therefore "read it back". The console GENERATES a new one and
+// pushes it into every system. It is then shown ONCE, and forgotten: this is
+// the only moment it exists in clear text, and that is intentional — it is
+// the only way to communicate it to you.
 //
-// L'ORDRE COMPTE : Keycloak d'abord. Si une étape suivante échoue, le mot de
-// passe SSO est déjà à jour et tu peux te connecter ; l'inverse te laisserait
-// avec un compte dont tu ignores le mot de passe.
+// ORDER MATTERS: Keycloak first. If a later step fails, the SSO password is
+// already up to date and you can still sign in; the reverse would leave you
+// with an account whose password you don't know.
 package console
 
 import (
@@ -33,12 +33,12 @@ import (
 )
 
 const (
-	// Compte administrateur de la plateforme : présent dans Keycloak (realm
-	// ceffio) et dans Nextcloud, où il est membre du groupe admin.
+	// Platform administration account: present in Keycloak (realm
+	// ceffio) and in Nextcloud, where it is a member of the admin group.
 	compteAdmin = "adminceffio"
 )
 
-// EtatAdmin décrit le compte administrateur, SANS jamais exposer son mot de passe.
+// EtatAdmin describes the administration account, WITHOUT ever exposing its password.
 type EtatAdmin struct {
 	Identifiant       string `json:"identifiant"`
 	Email             string `json:"email,omitempty"`
@@ -54,18 +54,18 @@ type EtatAdmin struct {
 	Note              string `json:"note,omitempty"`
 }
 
-// handleAdmin renvoie l'état du compte administrateur.
+// handleAdmin returns the state of the administration account.
 //
 //	GET /api/admin
 func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		apiErr(w, 405, "méthode non autorisée")
+		apiErr(w, 405, "method not allowed")
 		return
 	}
 	etat := EtatAdmin{Identifiant: compteAdmin}
-	// La console ne réimplémente PAS ces interfaces : elle y conduit.
-	// L'UI des apps de Nextcloud connaît son catalogue (catégories, compatibilité,
-	// avis) mieux qu'une page reconstruite ici.
+	// The console does NOT reimplement these interfaces: it takes you there.
+	// The Nextcloud apps UI knows its catalogue (categories, compatibility,
+	// reviews) better than a page rebuilt here.
 	etat.UrlAdminNextcloud = "https://cloud." + s.Domain + "/settings/apps"
 
 	// Keycloak
@@ -80,7 +80,7 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Nextcloud : présence + appartenance au groupe admin
+	// Nextcloud: presence + membership of the admin group
 	if resp, err := s.ncReq(r, http.MethodGet,
 		"/ocs/v2.php/cloud/users/"+url.PathEscape(compteAdmin)+"/groups?format=json", ""); err == nil {
 		defer resp.Body.Close()
@@ -103,18 +103,18 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Stalwart : admin SÉPARÉE, on se contente d'y conduire — et seulement si
-	// le service répond, sinon on enverrait vers une page morte.
+	// Stalwart: a SEPARATE admin, we just take you there — and only if
+	// the service responds, otherwise we would send you to a dead page.
 	etat.StalwartPresent = s.stalwartJoignable(r)
 	if etat.StalwartPresent {
 		etat.UrlAdminStalwart = "https://mail." + s.Domain + "/admin"
 	} else {
-		etat.Note = "Stalwart n'est pas déployé : la rotation ne concerne que Keycloak et Nextcloud."
+		etat.Note = "Stalwart is not deployed: rotation only covers Keycloak and Nextcloud."
 	}
 
-	// Coffre de secrets : même principe — on y CONDUIT, on ne le réimplémente pas.
-	// Son interface sait montrer les versions d'un secret, ses métadonnées et son
-	// historique, ce qu'une page refaite ici ne saurait pas faire.
+	// Secrets vault: same principle — we take you THERE, we don't reimplement it.
+	// Its interface knows how to show a secret's versions, its metadata and its
+	// history, which a page rebuilt here could not do.
 	etat.CoffrePresent = s.coffreJoignable(r)
 	if etat.CoffrePresent {
 		etat.UrlAdminCoffre = "https://bao." + s.Domain + "/ui/"
@@ -123,21 +123,21 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, etat)
 }
 
-// handleAdminRotate génère un nouveau mot de passe et le pose PARTOUT.
+// handleAdminRotate generates a new password and sets it EVERYWHERE.
 //
 //	POST /api/admin/rotate
 //
-// Le mot de passe n'est renvoyé qu'ici, une seule fois. Il n'est stocké en clair
-// nulle part. S'il est perdu, il suffit de refaire une rotation.
+// The password is only returned here, once. It is never stored in clear text
+// anywhere. If it is lost, just rotate again.
 func (s *Server) handleAdminRotate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		apiErr(w, 405, "méthode non autorisée")
+		apiErr(w, 405, "method not allowed")
 		return
 	}
 
 	mdp, err := motDePasseAleatoire(24)
 	if err != nil {
-		apiErr(w, 500, "génération du mot de passe : "+err.Error())
+		apiErr(w, 500, "password generation: "+err.Error())
 		return
 	}
 
@@ -156,18 +156,18 @@ func (s *Server) handleAdminRotate(w http.ResponseWriter, r *http.Request) {
 		return true
 	}
 
-	// 1. KEYCLOAK EN PREMIER : c'est la source d'identité. Une fois cette étape
-	//    passée, le mot de passe SSO est valide même si la suite échoue.
+	// 1. KEYCLOAK FIRST: it is the source of identity. Once this step
+	//    is done, the SSO password is valid even if the rest fails.
 	okKC := ajouter("Keycloak (SSO)", s.rotKeycloak(r, mdp))
 
-	// 2. Nextcloud : le compte local doit accepter le même mot de passe, sinon
-	//    la connexion directe (secours si le SSO tombe) échoue.
+	// 2. Nextcloud: the local account must accept the same password, otherwise
+	//    direct sign-in (fallback if SSO goes down) fails.
 	if okKC {
 		ajouter("Nextcloud", s.rotNextcloud(r, mdp))
 	}
 
-	// 3. Stalwart seulement s'il est déployé : sinon on rapporterait un échec là
-	//    où il n'y a simplement rien à faire.
+	// 3. Stalwart only if deployed: otherwise we would report a failure where
+	//    there is simply nothing to do.
 	if okKC && s.stalwartJoignable(r) {
 		ajouter("Stalwart (mail)", s.rotStalwart(r, mdp))
 	}
@@ -175,9 +175,9 @@ func (s *Server) handleAdminRotate(w http.ResponseWriter, r *http.Request) {
 	rep := map[string]any{"etapes": etapes, "ok": okKC}
 	if okKC {
 		rep["mot_de_passe"] = mdp
-		rep["message"] = "Mot de passe régénéré. Notez-le maintenant : il ne sera plus affiché."
+		rep["message"] = "Password regenerated. Note it down now: it will not be shown again."
 	} else {
-		rep["message"] = "Échec : le mot de passe de Keycloak n'a pas pu être changé."
+		rep["message"] = "Failed: the Keycloak password could not be changed."
 	}
 	writeJSON(w, 200, rep)
 }
@@ -186,10 +186,10 @@ func (s *Server) handleAdminRotate(w http.ResponseWriter, r *http.Request) {
 // Keycloak
 // ---------------------------------------------------------------------------
 
-// rotKeycloak change le mot de passe via l'API admin du realm.
+// rotKeycloak changes the password via the realm's admin API.
 //
-// temporary=false : l'utilisateur n'aura pas à le changer à la première
-// connexion — il vient de le noter, le lui redemander serait absurde.
+// temporary=false: the user will not have to change it at first sign-in —
+// they just noted it down, asking again would be absurd.
 func (s *Server) rotKeycloak(r *http.Request, mdp string) error {
 	resp, err := s.kcReq(r, http.MethodGet,
 		"/admin/realms/"+realm+"/users?username="+url.QueryEscape(compteAdmin)+"&exact=true", "")
@@ -200,7 +200,7 @@ func (s *Server) rotKeycloak(r *http.Request, mdp string) error {
 	json.NewDecoder(resp.Body).Decode(&users)
 	resp.Body.Close()
 	if len(users) == 0 {
-		return fmt.Errorf("utilisateur %q introuvable dans Keycloak", compteAdmin)
+		return fmt.Errorf("user %q not found in Keycloak", compteAdmin)
 	}
 
 	corps, _ := json.Marshal(map[string]any{
@@ -214,7 +214,7 @@ func (s *Server) rotKeycloak(r *http.Request, mdp string) error {
 	defer resp2.Body.Close()
 	if resp2.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp2.Body)
-		return fmt.Errorf("Keycloak a refusé (%d) : %s", resp2.StatusCode, tronquer(string(b), 160))
+		return fmt.Errorf("Keycloak refused (%d): %s", resp2.StatusCode, tronquer(string(b), 160))
 	}
 	return nil
 }
@@ -223,22 +223,21 @@ func (s *Server) rotKeycloak(r *http.Request, mdp string) error {
 // Nextcloud
 // ---------------------------------------------------------------------------
 
-// rotNextcloud change le mot de passe du compte local via occ.
+// rotNextcloud changes the local account's password via occ.
 //
-// occ plutôt que l'API OCS : occ fixe un mot de passe SANS connaître l'ancien,
-// ce que l'API n'autorise pas aussi directement. Le droit pods/exec est déjà
-// acquis (Role ceffio-console-occ dans ceffio-files).
+// occ rather than the OCS API: occ sets a password WITHOUT knowing the old one,
+// which the API does not allow as directly. The pods/exec right is already
+// granted (Role ceffio-console-occ in ceffio-files).
 //
-// Le mot de passe passe par l'ENVIRONNEMENT du processus, pas par la ligne de
-// commande : les arguments sont lisibles dans la table des processus, pas
-// l'environnement.
+// The password travels through the process ENVIRONMENT, not the command line:
+// arguments are readable in the process table, the environment is not.
 func (s *Server) rotNextcloud(r *http.Request, mdp string) error {
-	// occ lit OC_PASS quand --password-from-env est fourni. On injecte donc la
-	// variable dans la commande exécutée dans le pod.
+	// occ reads OC_PASS when --password-from-env is provided. So we inject the
+	// variable into the command executed in the pod.
 	script := "OC_PASS=" + shellQuote(mdp) + " php occ user:resetpassword --password-from-env " + shellQuote(compteAdmin)
 	sortie, err := s.occScript(r.Context(), script)
 	if err != nil {
-		return fmt.Errorf("occ user:resetpassword : %w: %s", err, tronquer(sortie, 160))
+		return fmt.Errorf("occ user:resetpassword: %w: %s", err, tronquer(sortie, 160))
 	}
 	return nil
 }
@@ -247,12 +246,12 @@ func (s *Server) rotNextcloud(r *http.Request, mdp string) error {
 // Stalwart
 // ---------------------------------------------------------------------------
 
-// stalwartJoignable indique si l'admin de Stalwart répond.
+// stalwartJoignable reports whether the Stalwart admin responds.
 //
-// On interroge /healthz/live : c'est l'endpoint que Stalwart expose sans
-// authentification, et celui que son propre Dockerfile déclare comme sonde.
-// /api/healthz n'existe pas (404) et /api/account exige des identifiants
-// (401) — les deux feraient croire à un service absent alors qu'il est sain.
+// We query /healthz/live: the endpoint Stalwart exposes without
+// authentication, and the one its own Dockerfile declares as a probe.
+// /api/healthz does not exist (404) and /api/account requires credentials
+// (401) — both would make the service look absent when it is healthy.
 func (s *Server) stalwartJoignable(r *http.Request) bool {
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet,
 		"https://mail."+s.Domain+"/healthz/live", nil)
@@ -267,17 +266,17 @@ func (s *Server) stalwartJoignable(r *http.Request) bool {
 	return rep.StatusCode < 500
 }
 
-// coffreJoignable dit si le coffre de secrets répond.
+// coffreJoignable says whether the secrets vault responds.
 //
-// L'ADRESSE INTERROGÉE EST CELLE DE LA SANTÉ, et c'est le seul point du coffre
-// joignable sans jeton : il suffit à répondre à la question posée, « le service
-// est-il là ? ».
+// THE ADDRESS QUERIED IS THE HEALTH ONE, and it is the only vault endpoint
+// reachable without a token: it is enough to answer the question asked, "is
+// the service there?".
 //
-// ON ACCEPTE TOUT CODE DE RÉPONSE, y compris 503. Contrairement au serveur de
-// mail, où une erreur serveur veut dire « pas prêt », un coffre qui répond 503
-// est un coffre SCELLÉ — donc bien présent, et dont l'interface a quelque chose à
-// dire à qui s'y connecte. Ne retenir que les codes inférieurs à 500 ferait
-// disparaître le lien exactement quand on en a besoin.
+// WE ACCEPT ANY RESPONSE CODE, including 503. Unlike the mail server, where a
+// server error means "not ready", a vault answering 503 is a SEALED vault —
+// therefore present, and its interface has something to tell whoever connects
+// to it. Keeping only codes below 500 would make the link disappear exactly
+// when it is needed.
 func (s *Server) coffreJoignable(r *http.Request) bool {
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet,
 		"https://bao."+s.Domain+"/v1/sys/health", nil)
@@ -292,10 +291,11 @@ func (s *Server) coffreJoignable(r *http.Request) bool {
 	return true
 }
 
-// rotStalwart change le mot de passe de l'administrateur du mail.
+// rotStalwart changes the mail administrator's password.
 //
-// Stalwart expose une API REST d'administration. L'appel n'est fait que si le
-// service répond : sinon on dégraderait la rotation pour un service inexistant.
+// Stalwart exposes a REST administration API. The call is only made if the
+// service responds: otherwise rotation would be degraded for a nonexistent
+// service.
 func (s *Server) rotStalwart(r *http.Request, mdp string) error {
 	corps, _ := json.Marshal(map[string]any{"password": mdp})
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodPatch,
@@ -311,20 +311,20 @@ func (s *Server) rotStalwart(r *http.Request, mdp string) error {
 	defer rep.Body.Close()
 	if rep.StatusCode >= 300 {
 		b, _ := io.ReadAll(rep.Body)
-		return fmt.Errorf("Stalwart a refusé (%d) : %s", rep.StatusCode, tronquer(string(b), 160))
+		return fmt.Errorf("Stalwart refused (%d): %s", rep.StatusCode, tronquer(string(b), 160))
 	}
 	return nil
 }
 
 // ---------------------------------------------------------------------------
-// Utilitaires
+// Utilities
 // ---------------------------------------------------------------------------
 
-// motDePasseAleatoire produit un mot de passe sans caractère ambigu.
+// motDePasseAleatoire produces a password without ambiguous characters.
 //
-// On écarte 0/O, 1/l/I, +/ : recopier un mot de passe à la main depuis un écran
-// est une source d'erreur classique, et la rotation est justement le moment où
-// on le note. L'alphabet restant garde largement assez d'entropie.
+// We drop 0/O, 1/l/I, +/: copying a password by hand from a screen is a
+// classic source of error, and rotation is precisely the moment when it is
+// noted down. The remaining alphabet still keeps plenty of entropy.
 func motDePasseAleatoire(n int) (string, error) {
 	const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%&*"
 	out := make([]byte, 0, n)
@@ -338,17 +338,17 @@ func motDePasseAleatoire(n int) (string, error) {
 	return string(out), nil
 }
 
-// occScript exécute un SCRIPT shell dans le pod Nextcloud.
+// occScript executes a SHELL script inside the Nextcloud pod.
 //
-// POURQUOI UN SCRIPT PLUTÔT QUE des arguments : occ exige le mot de passe par
-// l'environnement (--password-from-env), et PodExecOptions ne permet pas de
-// poser une variable d'environnement. On passe donc par « sh -c » avec la
-// variable posée à la volée. Les arguments de occ, eux, restent échappés par
-// shellQuote — sans quoi un mot de passe contenant !@#$%&* serait interprété
-// par le shell et le mot de passe appliqué ne serait pas celui qu'on affiche.
+// WHY A SCRIPT RATHER THAN arguments: occ requires the password through the
+// environment (--password-from-env), and PodExecOptions does not allow
+// setting an environment variable. So we go through "sh -c" with the variable
+// set on the fly. The occ arguments themselves stay escaped by shellQuote —
+// otherwise a password containing !@#$%&* would be interpreted by the shell
+// and the applied password would not be the one displayed.
 func (s *Server) occScript(ctx context.Context, script string) (string, error) {
 	if s.kube == nil {
-		return "", fmt.Errorf("client Kubernetes indisponible")
+		return "", fmt.Errorf("Kubernetes client unavailable")
 	}
 	pod, err := s.podNextcloud(ctx)
 	if err != nil {
@@ -356,7 +356,7 @@ func (s *Server) occScript(ctx context.Context, script string) (string, error) {
 	}
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
-		return "", fmt.Errorf("configuration du cluster illisible : %w", err)
+		return "", fmt.Errorf("cluster configuration unreadable: %w", err)
 	}
 	req := s.kube.CoreV1().RESTClient().Post().
 		Resource("pods").Name(pod).Namespace("ceffio-files").
@@ -370,7 +370,7 @@ func (s *Server) occScript(ctx context.Context, script string) (string, error) {
 
 	executeur, err := remotecommand.NewSPDYExecutor(cfg, "POST", req.URL())
 	if err != nil {
-		return "", fmt.Errorf("exécuteur indisponible : %w", err)
+		return "", fmt.Errorf("executor unavailable: %w", err)
 	}
 	var sortie, errs strings.Builder
 	if err := executeur.StreamWithContext(ctx, remotecommand.StreamOptions{
@@ -381,14 +381,14 @@ func (s *Server) occScript(ctx context.Context, script string) (string, error) {
 	return sortie.String() + errs.String(), nil
 }
 
-// ncReq exécute une requête authentifiée vers l'API OCS de Nextcloud.
+// ncReq executes an authenticated request to the Nextcloud OCS API.
 //
-// L'authentification utilise le compte de service « ceffio-console » (mot de
-// passe d'application révocable), jamais le compte admin : un changement du
-// mot de passe admin casserait la console.
+// Authentication uses the "ceffio-console" service account (revocable
+// application password), never the admin account: changing the admin password
+// would break the console.
 func (s *Server) ncReq(r *http.Request, method, chemin, corps string) (*http.Response, error) {
 	if s.ncUser == "" || s.ncPass == "" {
-		return nil, fmt.Errorf("compte de service Nextcloud non configuré")
+		return nil, fmt.Errorf("Nextcloud service account not configured")
 	}
 	var lecteur io.Reader
 	if corps != "" {
@@ -407,11 +407,11 @@ func (s *Server) ncReq(r *http.Request, method, chemin, corps string) (*http.Res
 	return http.DefaultClient.Do(req)
 }
 
-// shellQuote met une valeur entre apostrophes pour un shell POSIX.
+// shellQuote wraps a value in single quotes for a POSIX shell.
 //
-// Nécessaire pour transmettre un mot de passe contenant !@#$%&* ou des
-// apostrophes : sans échappement, le shell les interpréterait et le mot de
-// passe envoyé ne serait pas celui généré.
+// Needed to pass a password containing !@#$%&* or apostrophes: without
+// escaping, the shell would interpret them and the sent password would not be
+// the one generated.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

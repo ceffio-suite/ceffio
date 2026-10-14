@@ -1,13 +1,13 @@
-// Package ingress — correctifs issus du deploiement reel derriere OPNsense.
+// Package ingress — fixes born from the real deployment behind OPNsense.
 //
-// Ce fichier ajoute ce qui manquait pour qu'un deploiement Ceffio soit
-// utilisable derriere un proxy amont qui termine le TLS (le cas normal : le
-// pare-feu expose *.domaine, Traefik ne voit que du HTTP).
+// This file adds what was missing for a Ceffio deployment to be usable behind
+// an upstream proxy that terminates TLS (the normal case: the firewall exposes
+// *.domain, Traefik only sees HTTP).
 //
-// Sans ces correctifs, les applications generent des redirections en http://
-// et vers l'ancien domaine : le service repond, mais la navigation casse.
-// Constaté en production : keycloak redirigeait vers http://keycloak.demo.local
-// depuis un client en https.
+// Without these fixes, the applications generate redirects to http:// and to
+// the old domain: the service answers, but navigation breaks.
+// Observed in production: keycloak redirected to http://keycloak.demo.local
+// from an https client.
 package ingress
 
 import (
@@ -18,34 +18,34 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/k8s"
 )
 
-// candidatsAnciensDomaines liste les domaines qu'une installation a pu porter
-// avant sa migration. On les retire des configurations au moment d'adopter un
-// nouveau domaine : sinon les redirections continuent de pointer vers eux
-// (cas vecu : demo.local restait code en dur dans Keycloak, Nextcloud, Element
-// et Synapse apres la bascule vers *.ceffio.example.com).
+// candidatsAnciensDomaines lists the domains an installation may have carried
+// before its migration. We remove them from the configurations when adopting a
+// new domain: otherwise the redirects keep pointing at them (lived case:
+// demo.local stayed hardcoded in Keycloak, Nextcloud, Element and Synapse after
+// the switch to *.ceffio.example.com).
 var candidatsAnciensDomaines = []string{
 	"demo.local",
 	"ceffio.local",
 }
 
-// ProxyAmont configure Traefik pour qu'il croie a l'en-tete X-Forwarded-Proto
-// venant du proxy superieur (OPNsense, Caddy, nginx...).
+// ProxyAmont configures Traefik to trust the X-Forwarded-Proto header coming
+// from the upper proxy (OPNsense, Caddy, nginx...).
 //
-// POURQUOI c'est necessaire, et pourquoi ailleurs ca ne marche pas :
-// Quand un pare-feu termine le TLS et transmet en HTTP, Traefik annonce aux
-// applications « la requete est arrivee en HTTP ». Les applications honorant
-// correctement cet en-tete (Keycloak, Nextcloud, ONLYOFFICE) construisent alors
-// leurs redirections en http://, et l'utilisateur bascule en clair ou tombe sur
-// une URL inexistante. Configurer KC_HOSTNAME_URL en https ne suffit PAS : le
-// proto de redirection vient de l'en-tete, pas de cette variable.
+// WHY this is necessary, and why elsewhere it does not work:
+// When a firewall terminates TLS and forwards in HTTP, Traefik announces to the
+// applications "the request arrived over HTTP". Applications that honor this
+// header correctly (Keycloak, Nextcloud, ONLYOFFICE) then build their redirects
+// to http://, and the user switches to clear text or lands on a nonexistent
+// URL. Setting KC_HOSTNAME_URL to https is NOT enough: the redirect proto comes
+// from the header, not from that variable.
 //
-// La correction se fait donc dans Traefik, seul endroit ou l'information est
-// disponible de facon fiable, et non dans chaque application.
+// The fix therefore happens in Traefik, the only place where the information is
+// reliably available, and not in each application.
 //
-// SECURITE : forwardedHeaders.insecure fait confiance a l'en-tete entrant. Ce
-// n'est acceptable que si Traefik n'est joignable QUE depuis un reseau de
-// confiance (le pare-feu amont). Sur une machine exposee directement, il
-// faudrait une liste d'IP de confiance explicite.
+// SECURITY: forwardedHeaders.insecure trusts the incoming header. That is only
+// acceptable if Traefik is reachable ONLY from a trusted network (the upstream
+// firewall). On a directly exposed machine, an explicit trusted-IP list would be
+// required.
 func ProxyAmont(ctx context.Context) error {
 	manifest := fmt.Sprintf(`apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
@@ -64,24 +64,24 @@ spec:
 	if err := rolloutRestart(ctx, "deploy/traefik@kube-system"); err != nil {
 		return err
 	}
-	fmt.Println("✓ Traefik configuré pour un proxy amont (X-Forwarded-Proto respecté)")
+	fmt.Println("✓ Traefik configured for an upstream proxy (X-Forwarded-Proto honored)")
 	return nil
 }
 
-// NettoyerAncienDomaine retire un ancien domaine des configurations des
-// applications, en le remplacant par le domaine courant.
+// NettoyerAncienDomaine removes an old domain from the application
+// configurations, replacing it with the current domain.
 //
-// Cibles : les ConfigMaps et variables d'environnement ou un ancien nom peut
-// rester code en dur. On remplace partout ou il apparait, puis on redemarre les
-// deployments concernes. Idempotent : si l'ancien domaine n'est plus present,
-// rien n'est modifie.
+// Targets: the ConfigMaps and environment variables where an old name can stay
+// hardcoded. We replace it wherever it appears, then restart the concerned
+// deployments. Idempotent: if the old domain is no longer present, nothing is
+// modified.
 func NettoyerAncienDomaine(ctx context.Context, ancien, nouveau string) error {
 	if ancien == "" || nouveau == "" || ancien == nouveau {
 		return nil
 	}
-	fmt.Printf("Nettoyage de l'ancien domaine %s -> %s...\n", ancien, nouveau)
+	fmt.Printf("Cleaning the old domain %s -> %s...\n", ancien, nouveau)
 
-	// 1) ConfigMaps : Element, Synapse (+ tout autre qui contiendrait le nom).
+	// 1) ConfigMaps: Element, Synapse (+ any other that would contain the name).
 	cibles := []struct{ ns, cm, cle string }{}
 	for _, c := range cibles {
 		data, err := cmData(ctx, c.ns, c.cm, c.cle)
@@ -92,11 +92,11 @@ func NettoyerAncienDomaine(ctx context.Context, ancien, nouveau string) error {
 		if err := applyCMData(ctx, c.ns, c.cm, c.cle, data); err != nil {
 			return fmt.Errorf("%s/%s : %w", c.ns, c.cm, err)
 		}
-		fmt.Printf("  ✓ %s/%s mis à jour\n", c.ns, c.cm)
+		fmt.Printf("  ✓ %s/%s updated\n", c.ns, c.cm)
 	}
 
-	// 2) Deployments : variables d'environnement contenant l'ancien nom.
-	//    Keycloak est le cas critique — son KC_HOSTNAME pointe le domaine public.
+	// 2) Deployments: environment variables containing the old name.
+	//    Keycloak is the critical case — its KC_HOSTNAME points to the public domain.
 	deps := []struct{ ns, nom string }{
 		{"ceffio-identity", "keycloak"},
 	}
@@ -122,10 +122,10 @@ func NettoyerAncienDomaine(ctx context.Context, ancien, nouveau string) error {
 		if out, err := k8s.Command(ctx, "kubectl", kargs...).CombinedOutput(); err != nil {
 			return fmt.Errorf("%s/%s : %w : %s", d.ns, d.nom, err, string(out))
 		}
-		fmt.Printf("  ✓ %s/%s : %s\n", d.ns, d.nom, strings.Join(args, ", "))
+		fmt.Printf("  ✓ %s/%s: %s\n", d.ns, d.nom, strings.Join(args, ", "))
 	}
 
-	// 3) Nextcloud : occ, plusieurs cles peuvent citer l'ancien nom.
+	// 3) Nextcloud: occ, several keys may cite the old name.
 	for _, cmd := range [][]string{
 		{"config:system:get", "overwritehost"},
 		{"config:system:get", "overwrite.cli.url"},
@@ -134,16 +134,16 @@ func NettoyerAncienDomaine(ctx context.Context, ancien, nouveau string) error {
 			"deploy/nextcloud", "--", "su", "-s", "/bin/sh", "www-data", "-c",
 			"php occ "+strings.Join(cmd, " ")).Output()
 		if err == nil && strings.Contains(string(res), ancien) {
-			fmt.Printf("  · Nextcloud : %s contient encore l'ancien domaine\n", cmd[1])
+			fmt.Printf("  · Nextcloud: %s still contains the old domain\n", cmd[1])
 		}
 	}
 
-	// 4) Redemarrer ce qui a ete modifie.
+	// 4) Restart what was modified.
 	return nil
 }
 
-// DomainesConnus renvoie la liste des anciens domaines a nettoyer pour un
-// domaine cible donne (tous ceux qui ne sont pas le domaine courant).
+// DomainesConnus returns the list of old domains to clean up for a given target
+// domain (all those that are not the current domain).
 func DomainesConnus(courant string) []string {
 	var out []string
 	for _, d := range candidatsAnciensDomaines {

@@ -1,26 +1,26 @@
-// Package backup sauvegarde et restaure une installation Ceffio.
+// Package backup backs up and restores a Ceffio installation.
 //
-// Principe : une sauvegarde n'est un filet de sécurité que si sa restauration a
-// été exercée. Ce package va donc par paires — Sauvegarder écrit une archive
-// autoportante, Restaurer la relit et la remet en place en vérifiant au passage
-// l'intégrité de chaque élément.
+// Principle: a backup is only a safety net if its restore has been
+// exercised. This package therefore works in pairs — Sauvegarder writes a
+// self-contained archive, Restaurer re-reads it and puts it back in place,
+// verifying the integrity of each item along the way.
 //
-// Ce qui est sauvegardé, et pourquoi ce choix :
+// What gets backed up, and why this choice:
 //
-//  1. Les bases PostgreSQL (logical dump par base) — mysuite, keycloak,
-//     nextcloud. C'est le cœur de la plateforme : identités, comptes,
-//     métadonnées de fichiers, conversations.
-//  2. Les volumes (tar) — nextcloud-data (fichiers réels des utilisateurs),
-//     onlyoffice-data. Un dump SQL ne suffit pas :
-//     les documents et les pièces jointes vivent sur disque.
-//  3. Les Secrets applicatifs — sans eux, une restauration rend des données
-//     orphelines : les mots de passe de base ne correspondent plus, les clés de
-//     signature Matrix et ONLYOFFICE ne concordent plus.
-//  4. Un manifeste — versions, empreintes SHA-256 et taille de chaque élément,
-//     pour pouvoir dire « l'archive est complète » au moment de restaurer.
+//  1. The PostgreSQL databases (logical dump per database) — mysuite,
+//     keycloak, nextcloud. This is the heart of the platform: identities,
+//     accounts, file metadata, conversations.
+//  2. The volumes (tar) — nextcloud-data (users' actual files),
+//     onlyoffice-data. A SQL dump is not enough:
+//     documents and attachments live on disk.
+//  3. The application Secrets — without them, a restore leaves orphaned
+//     data: the database passwords no longer match, the Matrix and
+//     ONLYOFFICE signing keys no longer agree.
+//  4. A manifest — versions, SHA-256 fingerprints and size of each item,
+//     so we can say "the archive is complete" at restore time.
 //
-// Les données sont extraites via kubectl exec puis rapatriées en flux : rien
-// n'est écrit sur le nœud, qui n'a pas forcément la place.
+// Data is extracted via kubectl exec then streamed back: nothing is written
+// to the node, which may not have the space.
 package backup
 
 import (
@@ -40,13 +40,13 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/k8s"
 )
 
-// Bases PostgreSQL de la plateforme. Toutes vivent dans le cluster CNPG
-// ceffio-pg ; les nommer explicitement évite de dépendre d'une découverte
-// dynamique qui inclurait un jour une base technique.
+// PostgreSQL databases of the platform. They all live in the CNPG cluster
+// ceffio-pg; naming them explicitly avoids depending on a dynamic discovery
+// that might one day include a technical database.
 var Bases = []string{"mysuite", "keycloak", "nextcloud"}
 
-// Volumes à sauvegarder : namespace, nom du PVC, et le sous-chemin utile
-// (certains volumes contiennent à côté des données un état sans intérêt).
+// Volumes to back up: namespace, PVC name, and the useful subpath (some
+// volumes hold, alongside the data, state of no interest).
 var Volumes = []Volume{
 	{Namespace: "ceffio-files", PVC: "nextcloud-data", PodLabel: "app=nextcloud",
 		Path: "/var/www/html/data", UID: 33, GID: 33}, // www-data
@@ -54,26 +54,26 @@ var Volumes = []Volume{
 		Path: "/var/lib/onlyoffice", UID: 0, GID: 0},
 }
 
-// Secrets applicatifs : sans eux, les données restaurées sont orphelines.
+// Application Secrets: without them, the restored data is orphaned.
 //
-// Liste établie depuis l'inventaire réel du cluster (2026-10-07), et non depuis
-// une supposition : les mots de passe de base, les identifiants OIDC et la clé
-// de la console. Les secrets
-// TLS ne sont PAS listés : cert-manager les régénère depuis les Certificate, qui
-// sont eux-mêmes recréés par le déploiement. Les secrets d'opérateur (CNPG,
-// webhooks, tokens de service) sont recréés par leurs opérateurs respectifs.
+// List established from the cluster's real inventory (2026-10-07), and not
+// from a guess: the database passwords, the OIDC credentials and the console
+// key. TLS secrets are NOT listed: cert-manager regenerates them from the
+// Certificates, which are themselves recreated by the deployment. Operator
+// secrets (CNPG, webhooks, service tokens) are recreated by their respective
+// operators.
 var Secrets = []struct{ Name, Namespace string }{
-	// base de données
+	// database
 	{"ceffio-pg-app", "ceffio-data"},
-	// identité
+	// identity
 	{"keycloak-admin", "ceffio-identity"},
 	{"keycloak-db", "ceffio-identity"},
-	// fichiers
+	// files
 	{"nextcloud-admin", "ceffio-files"},
 	{"nextcloud-db", "ceffio-files"},
-	// bureau
+	// office
 	{"onlyoffice-secret", "ceffio-office"},
-	// console d'administration
+	// admin console
 	{"ceffio-console-key", "ceffio-system"},
 }
 
@@ -82,23 +82,23 @@ type Volume struct {
 	PVC       string `json:"pvc"`
 	PodLabel  string `json:"-"`
 	Path      string `json:"path"`
-	// UID/GID que l'application attend sur ce volume. Indispensable à la
-	// restauration : sans ce rétablissement, les fichiers extraits restent
-	// propriété de root et l'application — qui tourne sous un autre compte —
-	// perd le droit d'écrire (cas vécu : Nextcloud en 503 après restauration).
+	// UID/GID the application expects on this volume. Essential for
+	// restore: without this restoration, the extracted files remain owned
+	// by root and the application — which runs under another account —
+	// loses write access (real case: Nextcloud 503ing after a restore).
 	UID int `json:"uid"`
 	GID int `json:"gid"`
 }
 
-// Entry décrit un élément sauvegardé : c'est ce qui permet de vérifier
-// l'archive avant de restaurer, plutôt que de découvrir un trou en route.
+// Entry describes one backed-up item: this is what lets us verify the
+// archive before restoring, rather than discovering a hole along the way.
 type Entry struct {
 	Kind      string `json:"kind"` // base | volume | secret
 	Name      string `json:"name"`
 	File      string `json:"file"`
 	Bytes     int64  `json:"bytes"`
 	SHA256    string `json:"sha256"`
-	Rows      string `json:"rows,omitempty"` // bases : nombre de lignes estimé
+	Rows      string `json:"rows,omitempty"` // databases: estimated row count
 	PGVersion string `json:"pg_version,omitempty"`
 }
 
@@ -113,9 +113,9 @@ type Manifest struct {
 	Complete   bool     `json:"complete"`
 }
 
-// Sauvegarder produit l'archive et renvoie son chemin.
+// Sauvegarder produces the archive and returns its path.
 //
-// progress reçoit une ligne par étape (nil accepté).
+// progress receives one line per step (nil accepted).
 func Sauvegarder(ctx context.Context, dir string, progress func(string)) (string, error) {
 	if progress == nil {
 		progress = func(string) {}
@@ -144,10 +144,10 @@ func Sauvegarder(ctx context.Context, dir string, progress func(string)) (string
 		man.Domain = d
 	}
 
-	// 1. Bases PostgreSQL.
+	// 1. PostgreSQL databases.
 	pod := pgPodName(ctx)
 	if pod == "" {
-		man.Errors = append(man.Errors, "pod PostgreSQL introuvable : bases non sauvegardées")
+		man.Errors = append(man.Errors, "PostgreSQL pod not found: databases not backed up")
 	} else {
 		for _, base := range Bases {
 			progress("base " + base)
@@ -173,7 +173,7 @@ func Sauvegarder(ctx context.Context, dir string, progress func(string)) (string
 		progress("volume " + v.PVC)
 		podName := podFor(ctx, v.Namespace, v.PodLabel)
 		if podName == "" {
-			man.Errors = append(man.Errors, fmt.Sprintf("volume %s : aucun pod %s dans %s", v.PVC, v.PodLabel, v.Namespace))
+			man.Errors = append(man.Errors, fmt.Sprintf("volume %s : no pod %s in %s", v.PVC, v.PodLabel, v.Namespace))
 			continue
 		}
 		rel := filepath.Join("volumes", v.PVC+".tar.gz")
@@ -189,8 +189,8 @@ func Sauvegarder(ctx context.Context, dir string, progress func(string)) (string
 		man.Entries = append(man.Entries, e)
 	}
 
-	// 3. Secrets applicatifs (indispensables : sans eux, données orphelines).
-	progress("secrets applicatifs")
+	// 3. Application secrets (essential: without them, orphaned data).
+	progress("application secrets")
 	secRel := filepath.Join("secrets", "applicatifs.json")
 	if err := dumpSecrets(ctx, filepath.Join(work, secRel)); err != nil {
 		man.Errors = append(man.Errors, "secrets : "+err.Error())
@@ -214,7 +214,7 @@ func Sauvegarder(ctx context.Context, dir string, progress func(string)) (string
 	manRaw, _ := json.MarshalIndent(man, "", "  ")
 	os.WriteFile(filepath.Join(work, "manifest.json"), manRaw, 0o600)
 
-	// Archive finale : l'ensemble est mis dans un .tar.gz unique.
+	// Final archive: everything is put into a single .tar.gz.
 	name := fmt.Sprintf("ceffio-backup-%s.tar.gz", time.Now().Format("20060102-150405"))
 	out := filepath.Join(dir, name)
 	if err := compress(work, out); err != nil {
@@ -225,12 +225,12 @@ func Sauvegarder(ctx context.Context, dir string, progress func(string)) (string
 }
 
 // ---------------------------------------------------------------------------
-// Vérification
+// Verification
 // ---------------------------------------------------------------------------
 
-// Verifier relit une archive et contrôle chaque empreinte contre le manifeste.
-// C'est le contrôle qui manque à la plupart des sauvegardes : sans lui, on ne
-// sait pas si l'archive est exploitable avant le jour où on en a besoin.
+// Verifier re-reads an archive and checks every fingerprint against the
+// manifest. This is the check most backups lack: without it, we do not know
+// whether the archive is usable until the day we need it.
 func Verifier(archive string) (*Manifest, error) {
 	dir, err := os.MkdirTemp("", "ceffio-verif-")
 	if err != nil {
@@ -242,25 +242,25 @@ func Verifier(archive string) (*Manifest, error) {
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
 	if err != nil {
-		return nil, fmt.Errorf("manifeste absent : archive illisible")
+		return nil, fmt.Errorf("manifest missing: unreadable archive")
 	}
 	var man Manifest
 	if err := json.Unmarshal(raw, &man); err != nil {
-		return nil, fmt.Errorf("manifeste corrompu : %w", err)
+		return nil, fmt.Errorf("corrupt manifest: %w", err)
 	}
 	for i, e := range man.Entries {
 		p := filepath.Join(dir, e.File)
 		n, h, err := empreinte(p)
 		if err != nil {
-			man.Errors = append(man.Errors, fmt.Sprintf("%s : fichier manquant", e.Name))
+			man.Errors = append(man.Errors, fmt.Sprintf("%s : missing file", e.Name))
 			continue
 		}
 		if h != e.SHA256 {
-			man.Errors = append(man.Errors, fmt.Sprintf("%s : empreinte differente (archive alteree)", e.Name))
+			man.Errors = append(man.Errors, fmt.Sprintf("%s : fingerprint differs (tampered archive)", e.Name))
 			continue
 		}
 		if n != e.Bytes {
-			man.Errors = append(man.Errors, fmt.Sprintf("%s : taille differente", e.Name))
+			man.Errors = append(man.Errors, fmt.Sprintf("%s : size differs", e.Name))
 		}
 		man.Entries[i] = e
 	}
@@ -269,7 +269,7 @@ func Verifier(archive string) (*Manifest, error) {
 }
 
 // ---------------------------------------------------------------------------
-// Outils internes
+// Internal tools
 // ---------------------------------------------------------------------------
 
 func empreinte(path string) (int64, string, error) {
@@ -294,8 +294,9 @@ func dumpBase(ctx context.Context, pod, base, dst string) error {
 	defer f.Close()
 	cmd := k8s.Command(ctx, "kubectl", "exec", "-c", "postgres", "-n", "ceffio-data", pod,
 		"--", "pg_dump", "-U", "postgres", "--clean", "--if-exists", "-d", base)
-	// Stdout vers le fichier, stderr capturé À PART : on ne peut pas brancher
-	// Stdout et appeler CombinedOutput() en même temps (« Stdout already set »).
+	// Stdout to the file, stderr captured SEPARATELY: you cannot wire
+	// Stdout and call CombinedOutput() at the same time ("Stdout already
+	// set").
 	cmd.Stdout = f
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -313,8 +314,8 @@ func tarVolume(ctx context.Context, ns, pod, path, dst string) error {
 		return err
 	}
 	defer f.Close()
-	// tar -czf - : on écrit dans la sortie standard du conteneur, rapatriée telle
-	// quelle. Le chemin est vérifié avant : aucun risque d'écrire sur le nœud.
+	// tar -czf -: we write to the container's standard output, streamed back
+	// as-is. The path is checked beforehand: no risk of writing to the node.
 	cmd := k8s.Command(ctx, "kubectl", "exec", "-n", ns, pod, "--",
 		"sh", "-c", "tar czf - -C "+path+" .")
 	cmd.Stdout = f
@@ -326,7 +327,7 @@ func tarVolume(ctx context.Context, ns, pod, path, dst string) error {
 		return fmt.Errorf("tar : %w : %s", err, oneLine(stderr.String()))
 	}
 	if fi, _ := f.Stat(); fi != nil && fi.Size() < 32 {
-		return fmt.Errorf("archive vide (chemin %s inexistant dans le pod ?)", path)
+		return fmt.Errorf("empty archive (path %s missing in the pod?)", path)
 	}
 	return nil
 }
@@ -359,17 +360,17 @@ func dumpSecrets(ctx context.Context, dst string) error {
 		all = append(all, item{Name: doc.Metadata.Name, Namespace: doc.Metadata.Namespace, Data: doc.Data})
 	}
 	if len(all) == 0 {
-		return fmt.Errorf("aucun secret sauvegardé (manquants : %s)", strings.Join(manques, ", "))
+		return fmt.Errorf("no secret backed up (missing: %s)", strings.Join(manques, ", "))
 	}
-	// Un secret absent signale une couche non installée (visio par exemple) :
-	// on le signale sans faire échouer la sauvegarde, car ce n'est pas une panne.
+	// A missing secret signals an uninstalled layer (video, for example): we
+	// report it without failing the backup, since it is not an outage.
 	_ = manques
 	raw, _ := json.MarshalIndent(map[string]any{
 		"secrets": all, "manquants": manques,
 	}, "", "  ")
 	os.MkdirAll(filepath.Dir(dst), 0o700)
-	// 0600 : ce fichier contient des secrets en clair, il ne doit pas être lisible
-	// par un autre compte que le propriétaire de la sauvegarde.
+	// 0600: this file contains secrets in cleartext, it must not be readable
+	// by any account other than the backup's owner.
 	if err := os.WriteFile(dst, raw, 0o600); err != nil {
 		return err
 	}
@@ -406,14 +407,14 @@ func podFor(ctx context.Context, ns, label string) string {
 	return strings.TrimPrefix(lines[0], "pod/")
 }
 
-// query exécute une requête SQL dans une base donnée et renvoie le résultat brut.
+// query runs a SQL query against a given database and returns the raw
+// result.
 //
-// Attention à l'ordre : le nom de base part avec `-d`, la requête vient EN
-// DERNIER. Une version antérieure passait la base en premier argument sans `-d`,
-// si bien que psql la lisait comme la requête SQL et que la vraie requête
-// devenait un argument parasite — psql sortait alors en succès avec un résultat
-// vide, ce qui rendait le bug invisible : le comptage retournait 0 au lieu
-// d'échouer.
+// Mind the order: the database name goes with `-d`, the query comes LAST.
+// An earlier version passed the database as the first argument without `-d`,
+// so psql read it as the SQL query and the real query became a stray
+// argument — psql then exited successfully with an empty result, which made
+// the bug invisible: the count returned 0 instead of failing.
 func query(ctx context.Context, pod, base, sql string) string {
 	a := []string{"exec", "-c", "postgres", "-n", "ceffio-data", pod,
 		"--", "psql", "-U", "postgres", "-d", base, "-tAc", sql}
@@ -424,7 +425,7 @@ func query(ctx context.Context, pod, base, sql string) string {
 	return out
 }
 
-// DetectDomain déduit le domaine de base depuis les ingress.
+// DetectDomain infers the base domain from the ingresses.
 func DetectDomain(ctx context.Context) string {
 	out, err := kubectlOut(ctx, "get", "ingress", "-A",
 		"-o", "jsonpath={range .items[*]}{.spec.rules[*].host}{\"\\n\"}{end}")
@@ -457,7 +458,7 @@ func oneLine(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// compress crée un .tar.gz à partir d'un répertoire.
+// compress creates a .tar.gz from a directory.
 func compress(srcDir, dst string) error {
 	out, err := os.Create(dst)
 	if err != nil {
@@ -517,7 +518,7 @@ func decompress(src, dstDir string) error {
 	defer f.Close()
 	gz, err := newGunzip(f)
 	if err != nil {
-		return fmt.Errorf("archive illisible : %w", err)
+		return fmt.Errorf("unreadable archive: %w", err)
 	}
 	tr := tar.NewReader(gz)
 	for {
@@ -528,11 +529,11 @@ func decompress(src, dstDir string) error {
 		if err != nil {
 			return err
 		}
-		// Protection contre une archive piégée : un chemin relatif qui remonte
-		// au-delà du répertoire de destination est refusé.
+		// Protection against a booby-trapped archive: a relative path that
+		// escapes above the destination directory is refused.
 		clean := filepath.Clean(hdr.Name)
 		if strings.HasPrefix(clean, "..") || filepath.IsAbs(clean) {
-			return fmt.Errorf("archive refusée : chemin suspect %q", hdr.Name)
+			return fmt.Errorf("archive refused: suspicious path %q", hdr.Name)
 		}
 		p := filepath.Join(dstDir, clean)
 		if hdr.FileInfo().IsDir() {

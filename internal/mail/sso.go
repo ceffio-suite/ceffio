@@ -1,17 +1,17 @@
-// Configuration de l'authentification unique de Stalwart (SSO Keycloak).
+// Configuration of Stalwart's single sign-on (Keycloak SSO).
 //
-// POURQUOI CE FICHIER EXISTE : tout ce qui suit a été établi à la main, sur un
-// serveur en service, en cherchant pourquoi l'interface d'administration
-// refusait l'accès. Chaque réglage correspond à un échec réel, souvent
-// silencieux. Les reproduire ici évite de refaire la même chasse.
+// WHY THIS FILE EXISTS: everything that follows was established by hand, on a
+// live server, while hunting for the reason the admin interface refused access.
+// Each setting corresponds to a real failure, often a silent one. Reproducing
+// them here avoids redoing the same hunt.
 //
-// LA PANNE QUI A COÛTÉ LE PLUS : l'objet Authentication de Stalwart avait ses
-// quatre tables de rôles VIDES. Ces tables sont ce qui traduit un rôle
-// (User/Admin) en permissions effectives. Vides, tout compte authentifié par
-// l'annuaire externe reçoit zéro permission — donc pas « authenticate » — et
-// l'interface répond « 403 Forbidden » après une connexion pourtant réussie.
-// Le jeton était valide, le compte résolu, le rôle correct : seule la
-// correspondance rôle → permissions manquait.
+// THE MOST EXPENSIVE OUTAGE: Stalwart's Authentication object had its four role
+// tables EMPTY. Those tables are what translate a role (User/Admin) into
+// effective permissions. Empty, any account authenticated by the external
+// directory receives zero permissions — hence no "authenticate" — and the
+// interface answers "403 Forbidden" after a nevertheless successful login.
+// The token was valid, the account resolved, the role correct: only the
+// role → permissions mapping was missing.
 package mail
 
 import (
@@ -24,24 +24,24 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/k8s"
 )
 
-// compteGestion est l'identifiant du compte d'administration interne de
-// Stalwart, celui que porte STALWART_RECOVERY_ADMIN. Il contourne l'annuaire :
-// c'est ce qui permet de configurer le serveur même quand l'OIDC est cassé.
+// compteGestion is the identifier of Stalwart's internal admin account, the one
+// carried by STALWART_RECOVERY_ADMIN. It bypasses the directory: that is what
+// allows configuring the server even when OIDC is broken.
 const compteGestion = "d333333"
 
-// rôlesParDéfaut décrit, pour chaque table de l'objet Authentication, les rôles
-// qu'elle doit référencer.
+// rolesByDefault describes, for each table of the Authentication object, the
+// roles it must reference.
 //
-// POURQUOI PAR LIBELLÉ ET NON PAR IDENTIFIANT : les identifiants courts (« b »,
-// « e »…) ne sont pas garantis stables d'une version ou d'une installation à
-// l'autre. Le libellé, lui, est stable. On lit donc les rôles réellement
-// présents et on les apparie sur leur description.
+// WHY BY LABEL AND NOT BY IDENTIFIER: the short identifiers ("b", "e"…) are not
+// guaranteed stable across versions or installations. The label, however, is
+// stable. So we read the roles actually present and match them on their
+// description.
 //
-// POURQUOI L'ADMIN PORTE AUSSI « User » : c'est la composition du défaut
-// d'usine de Stalwart. Un administrateur est d'abord un utilisateur — il doit
-// conserver l'accès aux services ordinaires (boîte, envoi). Ne référencer que
-// le rôle d'administration le prive de ces permissions.
-var rôlesParDéfaut = []struct {
+// WHY THE ADMIN ALSO CARRIES "User": that is the composition of Stalwart's
+// factory default. An administrator is first of all a user — they must keep
+// access to the ordinary services (mailbox, sending). Referencing only the
+// admin role would deprive them of those permissions.
+var rolesByDefault = []struct {
 	champ        string
 	descriptions []string
 }{
@@ -51,40 +51,40 @@ var rôlesParDéfaut = []struct {
 	{"defaultAdminRoleIds", []string{"System Administrator", "User"}},
 }
 
-// SSO décrit l'authentification unique à mettre en place.
+// SSO describes the single sign-on to put in place.
 type SSO struct {
-	Hote         string // hôte public, ex. « mail.ceffio.example.com »
-	Issuer       string // URL du realm, ex. « https://keycloak.…/realms/ceffio »
-	ClientID     string // client OIDC du WebUI, ex. « stalwart-webui »
-	DomaineAdmin string // domaine des comptes d'admin, HORS messagerie, ex. « ceffio.local »
-	CompteAdmin  string // nom du compte d'administration, ex. « adminceffio »
+	Hote         string // public host, e.g. "mail.ceffio.example.com"
+	Issuer       string // realm URL, e.g. "https://keycloak.…/realms/ceffio"
+	ClientID     string // WebUI OIDC client, e.g. "stalwart-webui"
+	DomaineAdmin string // domain of the admin accounts, OUTSIDE mail, e.g. "ceffio.local"
+	CompteAdmin  string // name of the admin account, e.g. "adminceffio"
 }
 
-// ConfigurerSSO applique l'authentification déléguée à Stalwart.
+// ConfigurerSSO applies delegated authentication to Stalwart.
 //
-// Idempotent : chaque objet est créé s'il manque, mis à jour sinon. Rejouer la
-// fonction sur une installation déjà configurée ne casse rien.
+// Idempotent: each object is created if missing, updated otherwise. Replaying
+// the function on an already-configured installation breaks nothing.
 func ConfigurerSSO(ctx context.Context, domaineMessagerie string, o SSO) error {
 	if o.Issuer == "" || o.ClientID == "" || o.DomaineAdmin == "" || o.CompteAdmin == "" {
-		return fmt.Errorf("SSO incomplet : issuer, clientID, domaineAdmin et compteAdmin sont requis")
+		return fmt.Errorf("incomplete SSO: issuer, clientID, domaineAdmin and compteAdmin are required")
 	}
-	fmt.Println("∙ authentification unique (Keycloak)")
+	fmt.Println("∙ single sign-on (Keycloak)")
 
-	// --- 1. l'annuaire OIDC -------------------------------------------------
-	// Il doit exister AVANT les domaines : chacun le référence.
+	// --- 1. the OIDC directory ------------------------------------------------
+	// It must exist BEFORE the domains: each one references it.
 	idAnnuaire, err := assurerAnnuaireOIDC(ctx, o)
 	if err != nil {
 		return err
 	}
 
-	// --- 2. les domaines ---------------------------------------------------
-	// Le domaine de messagerie reçoit le courrier ; le domaine d'administration
-	// n'en reçoit pas. Les séparer évite que le compte d'admin soit une adresse
-	// de courrier ordinaire — il n'a pas à être joignable depuis l'extérieur.
+	// --- 2. the domains -------------------------------------------------------
+	// The mail domain receives mail; the admin domain does not. Separating them
+	// avoids the admin account being an ordinary mail address — it has no reason
+	// to be reachable from outside.
 	//
-	// CHAQUE DOMAINE PORTE SON PROPRE directoryId, en plus du réglage global :
-	// c'est par lui que Stalwart sait quel annuaire interroger pour un domaine
-	// donné. Resté vide, le compte n'est jamais résolu (discussion
+	// EACH DOMAIN CARRIES ITS OWN directoryId, on top of the global setting: it
+	// is through it that Stalwart knows which directory to query for a given
+	// domain. Left empty, the account is never resolved (discussion
 	// stalwartlabs/stalwart#3049).
 	idMessagerie, err := assurerDomaine(ctx, domaineMessagerie, idAnnuaire)
 	if err != nil {
@@ -95,73 +95,73 @@ func ConfigurerSSO(ctx context.Context, domaineMessagerie string, o SSO) error {
 		return err
 	}
 
-	// --- 3. les rôles : c'est ICI que se jouait le 403 ---------------------
+	// --- 3. the roles: THIS is where the 403 played out ----------------------
 	if err := assurerRoles(ctx); err != nil {
 		return err
 	}
 
-	// --- 4. l'annuaire actif ------------------------------------------------
-	// Sans ce réglage, Stalwart continue d'utiliser son annuaire interne.
+	// --- 4. the active directory ----------------------------------------------
+	// Without this setting, Stalwart keeps using its internal directory.
 	if err := majJMAP(ctx, "x:Authentication/set", map[string]any{
 		"update": map[string]any{"singleton": map[string]any{"directoryId": idAnnuaire}},
 	}); err != nil {
-		return fmt.Errorf("annuaire actif : %w", err)
+		return fmt.Errorf("active directory: %w", err)
 	}
 
-	// --- 5. domaine par défaut ---------------------------------------------
-	// Le WebUI interroge l'API SANS nom d'utilisateur. Stalwart retombe alors
-	// sur le domaine par défaut pour savoir quel annuaire consulter. S'il vaut
-	// le domaine intégré (sans annuaire), le compte n'est jamais résolu.
-	// defaultHostname est obligatoire dès qu'on écrit dans cet objet.
+	// --- 5. default domain ----------------------------------------------------
+	// The WebUI queries the API WITHOUT a username. Stalwart then falls back to
+	// the default domain to know which directory to consult. If it is the
+	// built-in domain (without a directory), the account is never resolved.
+	// defaultHostname is mandatory as soon as we write into this object.
 	if err := majJMAP(ctx, "x:SystemSettings/set", map[string]any{
 		"update": map[string]any{"singleton": map[string]any{
 			"defaultHostname": o.Hote,
 			"defaultDomainId": idMessagerie,
 		}},
 	}); err != nil {
-		return fmt.Errorf("domaine par défaut : %w", err)
+		return fmt.Errorf("default domain: %w", err)
 	}
 
-	// --- 6. le compte d'administration -------------------------------------
-	// OIDC ne provisionne RIEN : un compte absent de Stalwart est inconnu du
-	// serveur, et le courrier qui lui est adressé est refusé.
+	// --- 6. the admin account -------------------------------------------------
+	// OIDC provisions NOTHING: an account absent from Stalwart is unknown to the
+	// server, and mail addressed to it is refused.
 	if err := assurerCompteAdmin(ctx, o.CompteAdmin, idAdmin); err != nil {
 		return err
 	}
 
-	// --- 7. le client OIDC du WebUI ----------------------------------------
-	// Sans oauthClientId, la page /admin n'annonce aucun client et n'affiche
-	// que son formulaire interne : pas de bouton SSO.
+	// --- 7. the WebUI OIDC client ---------------------------------------------
+	// Without oauthClientId, the /admin page announces no client and only shows
+	// its internal form: no SSO button.
 	if err := assurerClientWebUI(ctx, o.ClientID); err != nil {
 		return err
 	}
 
-	// --- 8. redémarrage : OBLIGATOIRE --------------------------------------
-	// Les annuaires et les tables de rôles sont lus UNE FOIS au démarrage dans
-	// un instantané mémoire. Écrire la configuration ne suffit pas : sans
-	// redémarrage, /api/discover renvoie encore les endpoints internes de
-	// Stalwart et les permissions restent vides.
-	fmt.Println("      redémarrage (la configuration est lue au démarrage)")
+	// --- 8. restart: MANDATORY -------------------------------------------------
+	// Directories and role tables are read ONCE at startup into an in-memory
+	// snapshot. Writing the configuration is not enough: without a restart,
+	// /api/discover still returns Stalwart's internal endpoints and the
+	// permissions stay empty.
+	fmt.Println("      restarting (configuration is read at startup)")
 	if out, err := k8s.Command(ctx, "kubectl", "-n", ns, "rollout", "restart",
 		"deployment/stalwart").CombinedOutput(); err != nil {
-		return fmt.Errorf("redémarrage : %w: %s", err, tronquer(string(out), 200))
+		return fmt.Errorf("restart: %w: %s", err, tronquer(string(out), 200))
 	}
-	// On attend la FIN du redémarrage, et pas seulement qu'un pod soit prêt :
-	// pendant la transition, l'ancien pod répond encore et `kubectl exec
-	// deploy/stalwart` peut s'adresser à lui — la vérification ci-dessous
-	// échouait alors sur une connexion refusée.
+	// We wait for the END of the restart, not just for a pod to be ready: during
+	// the transition, the old pod still answers and `kubectl exec
+	// deploy/stalwart` may reach it — the verification below then failed on a
+	// refused connection.
 	if out, err := k8s.Command(ctx, "kubectl", "-n", ns, "rollout", "status",
 		"deployment/stalwart", "--timeout=240s").CombinedOutput(); err != nil {
-		return fmt.Errorf("attente du redémarrage : %w: %s", err, tronquer(string(out), 200))
+		return fmt.Errorf("waiting for the restart: %w: %s", err, tronquer(string(out), 200))
 	}
 	if err := waitReady(ctx); err != nil {
 		return err
 	}
 
-	// --- 9. vérification : la découverte doit pointer vers le fournisseur ---
-	// C'est le seul contrôle qui distingue « configuré » de « actif ». On
-	// réessaie quelques fois : juste après un redémarrage, le service peut
-	// n'avoir pas encore réouvert son port.
+	// --- 9. verification: discovery must point to the provider ---------------
+	// This is the only check that distinguishes "configured" from "active". We
+	// retry a few times: right after a restart, the service may not have
+	// reopened its port yet.
 	compte := o.CompteAdmin + "@" + o.DomaineAdmin
 	var dernier string
 	for essai := 0; essai < 6; essai++ {
@@ -171,7 +171,7 @@ func ConfigurerSSO(ctx context.Context, domaineMessagerie string, o SSO) error {
 		if err == nil {
 			dernier = string(out)
 			if strings.Contains(dernier, o.Issuer) {
-				fmt.Printf("  ✓ SSO actif : %s renvoie vers %s\n", compte, o.Issuer)
+				fmt.Printf("  ✓ SSO active: %s redirects to %s\n", compte, o.Issuer)
 				return nil
 			}
 		}
@@ -181,55 +181,55 @@ func ConfigurerSSO(ctx context.Context, domaineMessagerie string, o SSO) error {
 		case <-time.After(5 * time.Second):
 		}
 	}
-	return fmt.Errorf("la découverte ne renvoie pas le fournisseur attendu (%s) : %s",
+	return fmt.Errorf("discovery does not return the expected provider (%s): %s",
 		o.Issuer, tronquer(dernier, 200))
 }
 
-// assurerDomaine crée le domaine s'il manque et renvoie son identifiant.
+// assurerDomaine creates the domain if missing and returns its identifier.
 //
-// Le domaine est rattaché à l'annuaire OIDC : c'est ce lien qui permet à
-// Stalwart de savoir où résoudre les comptes de ce domaine.
+// The domain is attached to the OIDC directory: that link is what allows
+// Stalwart to know where to resolve this domain's accounts.
 func assurerDomaine(ctx context.Context, nom, idAnnuaire string) (string, error) {
 	existant, err := chercherID(ctx, "x:Domain/get", "name", nom)
 	if err != nil {
-		return "", fmt.Errorf("lecture des domaines : %w", err)
+		return "", fmt.Errorf("reading domains: %w", err)
 	}
 	if existant != "" {
 		if err := majJMAPObjet(ctx, "x:Domain/set", existant, map[string]any{
 			"directoryId": idAnnuaire,
 		}); err != nil {
-			return "", fmt.Errorf("rattachement du domaine %s : %w", nom, err)
+			return "", fmt.Errorf("attaching domain %s: %w", nom, err)
 		}
 		return existant, nil
 	}
-	fmt.Printf("  ∙ domaine créé : %s\n", nom)
-	créé, err := créerObjet(ctx, "x:Domain/set", map[string]any{
+	fmt.Printf("  ∙ domain created: %s\n", nom)
+	cree, err := creerObjet(ctx, "x:Domain/set", map[string]any{
 		"name":        nom,
 		"directoryId": idAnnuaire,
 	})
 	if err != nil {
-		return "", fmt.Errorf("création du domaine %s : %w", nom, err)
+		return "", fmt.Errorf("creating domain %s: %w", nom, err)
 	}
-	return créé, nil
+	return cree, nil
 }
 
-// assurerAnnuaireOIDC crée ou met à jour l'annuaire OIDC et renvoie son id.
+// assurerAnnuaireOIDC creates or updates the OIDC directory and returns its id.
 //
-// TROIS RÉGLAGES QUI ONT CHACUN PROVOQUÉ UN ÉCHEC :
+// THREE SETTINGS THAT EACH CAUSED A FAILURE:
 //
-//   - requireAudience : sa valeur par défaut est « stalwart ». Keycloak
-//     n'émet jamais cette valeur, donc TOUS les jetons étaient rejetés et la
-//     session retombait en anonyme. On l'aligne sur l'identifiant du client,
-//     qu'un mapper d'audience ajoute au jeton côté Keycloak.
-//   - requireScopes : le WebUI n'envoie pas la liste attendue par défaut
-//     (openid+email) ; on n'exige donc rien. La valeur vide s'écrit {} — « null »
-//     est refusé par l'API.
-//   - usernameDomain : le domaine ajouté au nom d'utilisateur du jeton pour
-//     former le compte complet (utilisateur@domaine).
+//   - requireAudience: its default value is "stalwart". Keycloak never emits
+//     that value, so ALL tokens were rejected and the session fell back to
+//     anonymous. We align it with the client identifier, which an audience
+//     mapper adds to the token on the Keycloak side.
+//   - requireScopes: the WebUI does not send the list expected by default
+//     (openid+email); so we require nothing. The empty value is written as {} —
+//     "null" is refused by the API.
+//   - usernameDomain: the domain added to the token's username to form the
+//     full account (user@domain).
 func assurerAnnuaireOIDC(ctx context.Context, o SSO) (string, error) {
 	corps := map[string]any{
 		"@type":           "Oidc",
-		"description":     "Annuaire OIDC de la plateforme",
+		"description":     "OIDC directory of the platform",
 		"issuerUrl":       o.Issuer,
 		"requireAudience": o.ClientID,
 		"requireScopes":   map[string]any{},
@@ -238,44 +238,44 @@ func assurerAnnuaireOIDC(ctx context.Context, o SSO) (string, error) {
 		"claimName":       "name",
 		"claimGroups":     "groups",
 	}
-	// L'annuaire se reconnaît à son URL d'émetteur, pas à sa description.
+	// The directory is recognized by its issuer URL, not by its description.
 	id, err := chercherIDParIssuer(ctx, o.Issuer)
 	if err != nil {
 		return "", err
 	}
 	if id == "" {
-		créé, err := créerObjet(ctx, "x:Directory/set", corps)
+		cree, err := creerObjet(ctx, "x:Directory/set", corps)
 		if err != nil {
-			return "", fmt.Errorf("création de l'annuaire OIDC : %w", err)
+			return "", fmt.Errorf("creating the OIDC directory: %w", err)
 		}
-		fmt.Printf("  ∙ annuaire OIDC créé : %s\n", o.Issuer)
-		return créé, nil
+		fmt.Printf("  ∙ OIDC directory created: %s\n", o.Issuer)
+		return cree, nil
 	}
 	if err := majJMAPObjet(ctx, "x:Directory/set", id, corps); err != nil {
-		return "", fmt.Errorf("mise à jour de l'annuaire OIDC : %w", err)
+		return "", fmt.Errorf("updating the OIDC directory: %w", err)
 	}
 	return id, nil
 }
 
-// assurerRoles renseigne les quatre tables de rôles de l'objet Authentication.
+// assurerRoles fills in the four role tables of the Authentication object.
 //
-// C'est LE correctif du « 403 après une connexion réussie ». Les tables sont
-// lues depuis les rôles réellement présents, appariés sur leur description.
+// This is THE fix for the "403 after a successful login". The tables are read
+// from the roles actually present, matched on their description.
 func assurerRoles(ctx context.Context) error {
 	roles, err := lireChamps(ctx, "x:Role/get", "description")
 	if err != nil {
-		return fmt.Errorf("lecture des rôles : %w", err)
+		return fmt.Errorf("reading roles: %w", err)
 	}
 	if len(roles) == 0 {
-		return fmt.Errorf("aucun rôle déclaré : le serveur n'est pas initialisé")
+		return fmt.Errorf("no declared role: the server is not initialized")
 	}
 	maj := map[string]any{}
-	for _, table := range rôlesParDéfaut {
+	for _, table := range rolesByDefault {
 		composition := map[string]any{}
 		for _, description := range table.descriptions {
 			id, ok := roles[description]
 			if !ok {
-				return fmt.Errorf("rôle « %s » introuvable : l'installation est incomplète", description)
+				return fmt.Errorf("role %q not found: the installation is incomplete", description)
 			}
 			composition[id] = true
 		}
@@ -284,17 +284,17 @@ func assurerRoles(ctx context.Context) error {
 	if err := majJMAP(ctx, "x:Authentication/set", map[string]any{
 		"update": map[string]any{"singleton": maj},
 	}); err != nil {
-		return fmt.Errorf("tables de rôles : %w", err)
+		return fmt.Errorf("role tables: %w", err)
 	}
-	fmt.Println("  ✓ rôles → permissions (User, Group, Tenant Admin, System Admin)")
+	fmt.Println("  ✓ roles → permissions (User, Group, Tenant Admin, System Admin)")
 	return nil
 }
 
-// assurerCompteAdmin crée le compte d'administration s'il manque.
+// assurerCompteAdmin creates the admin account if missing.
 func assurerCompteAdmin(ctx context.Context, nom, idDomaine string) error {
 	id, err := chercherID(ctx, "x:Account/get", "name", nom)
 	if err != nil {
-		return fmt.Errorf("lecture des comptes : %w", err)
+		return fmt.Errorf("reading accounts: %w", err)
 	}
 	corps := map[string]any{
 		"@type":    "User",
@@ -303,64 +303,64 @@ func assurerCompteAdmin(ctx context.Context, nom, idDomaine string) error {
 		"roles":    map[string]any{"@type": "Admin"},
 	}
 	if id == "" {
-		if _, err := créerObjet(ctx, "x:Account/set", corps); err != nil {
-			return fmt.Errorf("création du compte %s : %w", nom, err)
+		if _, err := creerObjet(ctx, "x:Account/set", corps); err != nil {
+			return fmt.Errorf("creating account %s: %w", nom, err)
 		}
-		fmt.Printf("  ∙ compte d'administration créé : %s\n", nom)
+		fmt.Printf("  ∙ admin account created: %s\n", nom)
 		return nil
 	}
-	// Le compte existe : on s'assure qu'il porte bien le rôle d'admin et qu'il
-	// est rattaché au domaine d'administration.
+	// The account exists: we make sure it carries the admin role and that it is
+	// attached to the admin domain.
 	if err := majJMAPObjet(ctx, "x:Account/set", id, map[string]any{
 		"domainId": idDomaine,
 		"roles":    map[string]any{"@type": "Admin"},
 	}); err != nil {
-		return fmt.Errorf("mise à jour du compte %s : %w", nom, err)
+		return fmt.Errorf("updating account %s: %w", nom, err)
 	}
 	return nil
 }
 
-// assurerClientWebUI déclare le client OIDC utilisé par l'interface d'admin.
+// assurerClientWebUI declares the OIDC client used by the admin interface.
 //
-// Sans lui, la page /admin n'expose aucun client : le bouton SSO n'apparaît
-// pas et seul le formulaire interne est proposé.
+// Without it, the /admin page exposes no client: the SSO button does not appear
+// and only the internal form is offered.
 func assurerClientWebUI(ctx context.Context, clientID string) error {
 	existants, err := lireChamps(ctx, "x:Application/get", "oauthClientId")
 	if err != nil {
-		return fmt.Errorf("lecture des applications : %w", err)
+		return fmt.Errorf("reading applications: %w", err)
 	}
 	if _, ok := existants[clientID]; ok {
 		return nil
 	}
-	// Une seule application sert le WebUI : on complète la première déclarée
-	// plutôt que d'en ajouter une seconde, qui ne serait jamais servie.
+	// A single application serves the WebUI: we complete the first one declared
+	// rather than adding a second, which would never be served.
 	ids, err := lireIDs(ctx, "x:Application/get")
 	if err != nil || len(ids) == 0 {
-		return fmt.Errorf("aucune application WebUI déclarée : %v", err)
+		return fmt.Errorf("no WebUI application declared: %v", err)
 	}
 	if err := majJMAPObjet(ctx, "x:Application/set", ids[0], map[string]any{
 		"oauthClientId": clientID,
 	}); err != nil {
-		return fmt.Errorf("client OIDC du WebUI : %w", err)
+		return fmt.Errorf("WebUI OIDC client: %w", err)
 	}
-	fmt.Printf("  ∙ client OIDC du WebUI : %s\n", clientID)
+	fmt.Printf("  ∙ WebUI OIDC client: %s\n", clientID)
 	return nil
 }
 
 // ---------------------------------------------------------------------------
-// Accès JMAP
+// JMAP access
 //
-// FORMAT : toute la configuration de Stalwart v0.16 est un objet JMAP. On passe
-// par le pod (et non par l'Ingress) : l'appel reste sur le réseau interne et
-// STALWART_RECOVERY_ADMIN est déjà dans l'environnement du conteneur — le secret
-// ne transite donc jamais par une ligne de commande.
+// FORMAT: all of Stalwart v0.16 configuration is a JMAP object. We go through
+// the pod (and not through the Ingress): the call stays on the internal network
+// and STALWART_RECOVERY_ADMIN is already in the container environment — the
+// secret therefore never travels through a command line.
 // ---------------------------------------------------------------------------
 
-// appelJMAP envoie une requête JMAP et renvoie le premier corps de réponse.
-func appelJMAP(ctx context.Context, méthode string, args map[string]any) (map[string]any, error) {
+// appelJMAP sends a JMAP request and returns the first response body.
+func appelJMAP(ctx context.Context, methode string, args map[string]any) (map[string]any, error) {
 	enveloppe := map[string]any{
 		"using":       []string{},
-		"methodCalls": []any{[]any{méthode, args, "c1"}},
+		"methodCalls": []any{[]any{methode, args, "c1"}},
 	}
 	brut, err := json.Marshal(enveloppe)
 	if err != nil {
@@ -373,87 +373,87 @@ func appelJMAP(ctx context.Context, méthode string, args map[string]any) (map[s
 	cmd.Stdin = strings.NewReader(string(brut))
 	sortie, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("appel JMAP %s : %w: %s", méthode, err, tronquer(string(sortie), 200))
+		return nil, fmt.Errorf("JMAP call %s: %w: %s", methode, err, tronquer(string(sortie), 200))
 	}
 
-	var réponse struct {
+	var reponse struct {
 		MethodResponses []json.RawMessage `json:"methodResponses"`
 	}
-	if err := json.Unmarshal(sortie, &réponse); err != nil {
-		return nil, fmt.Errorf("réponse JMAP illisible (%s) : %w", tronquer(string(sortie), 200), err)
+	if err := json.Unmarshal(sortie, &reponse); err != nil {
+		return nil, fmt.Errorf("unreadable JMAP response (%s): %w", tronquer(string(sortie), 200), err)
 	}
-	if len(réponse.MethodResponses) == 0 {
-		return nil, fmt.Errorf("réponse JMAP vide : %s", tronquer(string(sortie), 200))
+	if len(reponse.MethodResponses) == 0 {
+		return nil, fmt.Errorf("empty JMAP response: %s", tronquer(string(sortie), 200))
 	}
 	var couple []json.RawMessage
-	if err := json.Unmarshal(réponse.MethodResponses[0], &couple); err != nil || len(couple) < 2 {
-		return nil, fmt.Errorf("réponse JMAP inattendue : %s", tronquer(string(sortie), 200))
+	if err := json.Unmarshal(reponse.MethodResponses[0], &couple); err != nil || len(couple) < 2 {
+		return nil, fmt.Errorf("unexpected JMAP response: %s", tronquer(string(sortie), 200))
 	}
 	var nom string
 	_ = json.Unmarshal(couple[0], &nom)
 	var corps map[string]any
 	if err := json.Unmarshal(couple[1], &corps); err != nil {
-		return nil, fmt.Errorf("corps JMAP illisible : %w", err)
+		return nil, fmt.Errorf("unreadable JMAP body: %w", err)
 	}
-	// L'API signale ses refus dans le corps, pas par un code HTTP.
+	// The API reports its refusals in the body, not through an HTTP code.
 	if _, estErreur := corps["type"]; estErreur && nom == "error" {
-		return nil, fmt.Errorf("refus de Stalwart : %s", tronquer(string(couple[1]), 300))
+		return nil, fmt.Errorf("Stalwart refusal: %s", tronquer(string(couple[1]), 300))
 	}
-	for _, clé := range []string{"notCreated", "notUpdated", "notDestroyed"} {
-		if v, ok := corps[clé]; ok {
-			return nil, fmt.Errorf("Stalwart a refusé (%s) : %v", clé, tronquer(fmt.Sprint(v), 300))
+	for _, cle := range []string{"notCreated", "notUpdated", "notDestroyed"} {
+		if v, ok := corps[cle]; ok {
+			return nil, fmt.Errorf("Stalwart refused (%s): %v", cle, tronquer(fmt.Sprint(v), 300))
 		}
 	}
 	return corps, nil
 }
 
-// majJMAP envoie une modification et ne renvoie rien.
-func majJMAP(ctx context.Context, méthode string, args map[string]any) error {
+// majJMAP sends a modification and returns nothing.
+func majJMAP(ctx context.Context, methode string, args map[string]any) error {
 	args["accountId"] = compteGestion
-	_, err := appelJMAP(ctx, méthode, args)
+	_, err := appelJMAP(ctx, methode, args)
 	return err
 }
 
-// majJMAPObjet met à jour un objet précis.
-func majJMAPObjet(ctx context.Context, méthode, id string, champs map[string]any) error {
-	return majJMAP(ctx, méthode, map[string]any{"update": map[string]any{id: champs}})
+// majJMAPObjet updates one specific object.
+func majJMAPObjet(ctx context.Context, methode, id string, champs map[string]any) error {
+	return majJMAP(ctx, methode, map[string]any{"update": map[string]any{id: champs}})
 }
 
-// créerObjet crée un objet et renvoie son identifiant.
-func créerObjet(ctx context.Context, méthode string, champs map[string]any) (string, error) {
-	corps, err := appelJMAP(ctx, méthode, map[string]any{
+// creerObjet creates an object and returns its identifier.
+func creerObjet(ctx context.Context, methode string, champs map[string]any) (string, error) {
+	corps, err := appelJMAP(ctx, methode, map[string]any{
 		"accountId": compteGestion,
 		"create":    map[string]any{"n1": champs},
 	})
 	if err != nil {
 		return "", err
 	}
-	créés, ok := corps["created"].(map[string]any)
+	crees, ok := corps["created"].(map[string]any)
 	if !ok {
-		return "", fmt.Errorf("création sans identifiant renvoyé")
+		return "", fmt.Errorf("creation without a returned identifier")
 	}
-	for _, v := range créés {
+	for _, v := range crees {
 		if m, ok := v.(map[string]any); ok {
 			if id, ok := m["id"].(string); ok {
 				return id, nil
 			}
 		}
 	}
-	return "", fmt.Errorf("création sans identifiant renvoyé")
+	return "", fmt.Errorf("creation without a returned identifier")
 }
 
-// chercherID renvoie l'identifiant du premier objet dont le champ vaut valeur.
-func chercherID(ctx context.Context, méthode, champ, valeur string) (string, error) {
-	trouvés, err := lireChamps(ctx, méthode, champ)
+// chercherID returns the identifier of the first object whose field equals the value.
+func chercherID(ctx context.Context, methode, champ, valeur string) (string, error) {
+	trouves, err := lireChamps(ctx, methode, champ)
 	if err != nil {
 		return "", err
 	}
-	return trouvés[valeur], nil
+	return trouves[valeur], nil
 }
 
-// lireChamps renvoie, pour chaque objet, la valeur de champ associée à son id.
-func lireChamps(ctx context.Context, méthode, champ string) (map[string]string, error) {
-	corps, err := appelJMAP(ctx, méthode, map[string]any{
+// lireChamps returns, for each object, the value of the field associated with its id.
+func lireChamps(ctx context.Context, methode, champ string) (map[string]string, error) {
+	corps, err := appelJMAP(ctx, methode, map[string]any{
 		"accountId":  compteGestion,
 		"properties": []string{"id", champ},
 	})
@@ -461,7 +461,7 @@ func lireChamps(ctx context.Context, méthode, champ string) (map[string]string,
 		return nil, err
 	}
 	liste, _ := corps["list"].([]any)
-	résultat := map[string]string{}
+	resultat := map[string]string{}
 	for _, e := range liste {
 		m, ok := e.(map[string]any)
 		if !ok {
@@ -470,15 +470,15 @@ func lireChamps(ctx context.Context, méthode, champ string) (map[string]string,
 		id, _ := m["id"].(string)
 		val, _ := m[champ].(string)
 		if id != "" && val != "" {
-			résultat[val] = id
+			resultat[val] = id
 		}
 	}
-	return résultat, nil
+	return resultat, nil
 }
 
-// lireIDs renvoie tous les identifiants d'un type d'objet.
-func lireIDs(ctx context.Context, méthode string) ([]string, error) {
-	corps, err := appelJMAP(ctx, méthode, map[string]any{
+// lireIDs returns all identifiers of an object type.
+func lireIDs(ctx context.Context, methode string) ([]string, error) {
+	corps, err := appelJMAP(ctx, methode, map[string]any{
 		"accountId":  compteGestion,
 		"properties": []string{"id"},
 	})
@@ -497,17 +497,17 @@ func lireIDs(ctx context.Context, méthode string) ([]string, error) {
 	return ids, nil
 }
 
-// chercherIDParIssuer retrouve l'annuaire OIDC par son URL d'émetteur.
+// chercherIDParIssuer finds the OIDC directory by its issuer URL.
 //
-// On ne se fie pas à la description : elle est libre, et la modifier ferait
-// croire à un annuaire manquant — donc à un doublon.
+// We do not trust the description: it is free-form, and changing it would make
+// us believe a directory is missing — hence a duplicate.
 func chercherIDParIssuer(ctx context.Context, issuer string) (string, error) {
 	corps, err := appelJMAP(ctx, "x:Directory/get", map[string]any{
 		"accountId":  compteGestion,
 		"properties": []string{"id", "issuerUrl"},
 	})
 	if err != nil {
-		return "", fmt.Errorf("lecture des annuaires : %w", err)
+		return "", fmt.Errorf("reading directories: %w", err)
 	}
 	liste, _ := corps["list"].([]any)
 	for _, e := range liste {
@@ -523,8 +523,8 @@ func chercherIDParIssuer(ctx context.Context, issuer string) (string, error) {
 	return "", nil
 }
 
-// attendreStabilité laisse à Stalwart le temps de recharger sa configuration.
-func attendreStabilité(ctx context.Context) error {
+// attendreStabilite gives Stalwart time to reload its configuration.
+func attendreStabilite(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()

@@ -1,5 +1,5 @@
-// Package bootstrap détecte le profil matériel/OS de la machine cible et
-// valide qu'elle peut héberger Ceffio.
+// Package bootstrap detects the hardware/OS profile of the target machine and
+// validates that it can host Ceffio.
 package bootstrap
 
 import (
@@ -11,15 +11,15 @@ import (
 	"strings"
 )
 
-// Hardware résume la machine sur laquelle Ceffio va tourner.
+// Hardware summarizes the machine Ceffio will run on.
 type Hardware struct {
 	OS            string // "linux" | "darwin" | …
 	Arch          string // "amd64" | "arm64" | …
 	CPUs          int
-	MemoryTotalMB uint64 // 0 si non détecté
+	MemoryTotalMB uint64 // 0 if not detected
 }
 
-// Detect retourne le profil matériel/OS de la machine courante.
+// Detect returns the hardware/OS profile of the current machine.
 func Detect() Hardware {
 	mem, _ := detectMemory()
 	return Hardware{
@@ -30,34 +30,34 @@ func Detect() Hardware {
 	}
 }
 
-// normalizeArch aligne GOARCH sur les valeurs attendues par l'installateur.
+// normalizeArch aligns GOARCH with the values expected by the installer.
 func normalizeArch(goarch string) string {
 	return goarch
 }
 
-// SupportedOS indique si l'OS est supporté.
-// darwin est accepté uniquement pour le développement (k3d) ; la production vise Linux.
+// SupportedOS says whether the OS is supported.
+// darwin is accepted only for development (k3d); production targets Linux.
 func SupportedOS(osName string) bool {
 	return osName == "linux" || osName == "darwin"
 }
 
-// SupportedArch indique si l'architecture est supportée.
+// SupportedArch says whether the architecture is supported.
 func SupportedArch(arch string) bool {
 	return arch == "amd64" || arch == "arm64"
 }
 
-// Validate vérifie qu'un couple (OS, arch) est exploitable par Ceffio.
+// Validate checks that an (OS, arch) pair is usable by Ceffio.
 func Validate(osName, arch string) error {
 	if !SupportedOS(osName) {
-		return fmt.Errorf("OS non supporté %q (attendu linux ou darwin)", osName)
+		return fmt.Errorf("unsupported OS %q (expected linux or darwin)", osName)
 	}
 	if !SupportedArch(arch) {
-		return fmt.Errorf("architecture non supportée %q (attendu amd64 ou arm64)", arch)
+		return fmt.Errorf("unsupported architecture %q (expected amd64 or arm64)", arch)
 	}
 	return nil
 }
 
-// MinHardware est le minimum de conception (budget, pas un benchmark).
+// MinHardware is the design minimum (a budget, not a benchmark).
 func MinHardware() Hardware {
 	return Hardware{CPUs: 2, MemoryTotalMB: 2048}
 }
@@ -84,7 +84,7 @@ func detectMemory() (uint64, error) {
 			return 0, err
 		}
 		by, _ := strconv.ParseUint(strings.TrimSpace(string(out)), 10, 64)
-		return by / 1024 / 1024, nil // octets → MB
+		return by / 1024 / 1024, nil // bytes → MB
 	default:
 		return 0, nil
 	}

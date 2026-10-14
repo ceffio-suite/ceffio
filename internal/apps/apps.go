@@ -1,24 +1,24 @@
-// Package apps installe et configure les applications Nextcloud retenues pour
-// Ceffio.
+// Package apps installs and configures the Nextcloud applications selected
+// for Ceffio.
 //
-// POURQUOI CE MODULE EXISTE : une app Nextcloud installée à la main ne fait
-// partie d'aucune installation. Elle vit dans /var/www/html/custom_apps — donc
-// dans le conteneur, sur un volume persistant : elle survit aux redémarrages,
-// mais disparaît dès qu'on déploie sur une machine neuve. Sans ce module, une
-// installation Ceffio n'aurait AUCUNE de ces apps, et le travail de sélection
-// serait à refaire à chaque fois.
+// WHY THIS MODULE EXISTS: a Nextcloud app installed by hand is part of no
+// installation. It lives in /var/www/html/custom_apps — hence in the
+// container, on a persistent volume: it survives restarts, but disappears as
+// soon as one deploys on a fresh machine. Without this module, a Ceffio
+// installation would have NONE of these apps, and the selection work would
+// have to be redone every time.
 //
-// CE QUI DÉCIDE DU CONTENU DE LA LISTE :
-//   - licence LIBRE sans restriction d'usage commercial (AGPL-3.0, jamais de
-//     quota d'utilisateurs ni de licence propriétaire) ;
-//   - version STABLE publiée (pas de beta) ;
-//   - apport réel à un travail à plusieurs.
+// WHAT DECIDES THE CONTENT OF THE LIST:
+//   - FREE license without restriction on commercial use (AGPL-3.0, never a
+//     user quota nor a proprietary license);
+//   - STABLE published version (no beta);
+//   - real contribution to multi-user work.
 //
-// Ce qui est VOLONTAIREMENT EXCLU :
-//   - richdocuments (Collabora) : ONLYOFFICE est déjà déployé, un second
-//     serveur d'édition bureautique doublerait charge et maintenance pour la
-//     même fonction ;
-//   - les apps de thème/décor : elles n'apportent rien à la collaboration.
+// What is VOLUNTARILY EXCLUDED:
+//   - richdocuments (Collabora): ONLYOFFICE is already deployed, a second
+//     office-editing server would double the load and maintenance for the
+//     same function;
+//   - theme/decoration apps: they bring nothing to collaboration.
 package apps
 
 import (
@@ -30,131 +30,131 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/k8s"
 )
 
-// categorie distingue les apps selon ce qu'elles exigent en plus d'elles-mêmes.
-// C'est la distinction qui compte pour un déploiement : une app de catégorie
-// serveur ne fonctionnera pas après un simple `app:install`.
+// categorie distinguishes apps by what they require beyond themselves. This is
+// the distinction that matters for a deployment: a server-category app will
+// not work after a plain `app:install`.
 type categorie int
 
 const (
-	// simple : l'app vit dans custom_apps et fonctionne dès l'activation.
+	// simple: the app lives in custom_apps and works as soon as it is enabled.
 	simple categorie = iota
-	// serveur : l'app a besoin d'un service séparé pour être pleinement
-	// fonctionnelle (temps réel, calcul lourd). Installée sans lui, elle
-	// s'active mais reste limitée.
+	// serveur: the app needs a separate service to be fully functional
+	// (real-time, heavy computation). Installed without it, it enables but
+	// stays limited.
 	serveur
 )
 
-// App décrit une application installée par Ceffio.
+// App describes an application installed by Ceffio.
 type App struct {
-	ID        string    // identifiant app store (= nom du dossier custom_apps)
-	Nom       string    // nom lisible
-	Role      string    // à quoi elle sert, en une ligne
-	Licence   string    // licence constatée sur l'app store
+	ID        string    // app store identifier (= custom_apps folder name)
+	Nom       string    // human-readable name
+	Role      string    // what it is for, in one line
+	Licence   string    // license observed on the app store
 	Cat       categorie //
-	DependsOn string    // service requis, vide si aucun
-	// Avertissement signale un RISQUE, pas une dépendance : l'app peut
-	// s'activer, mais pas à la légère. Distinct de DependsOn, qui signifie
-	// « il manque un service, ne l'active pas ».
+	DependsOn string    // required service, empty if none
+	// Avertissement signals a RISK, not a dependency: the app can be enabled,
+	// but not lightly. Distinct from DependsOn, which means "a service is
+	// missing, do not enable it".
 	Avertissement string
 }
 
-// Catalogue : l'inventaire retenu, vérifié sur l'app store officiel pour
-// Nextcloud 34. TOUTES les entrées sont en licence libre (AGPL-3.0), sans
-// restriction d'usage commercial ni quota d'utilisateurs.
+// Catalogue: the selected inventory, checked on the official app store for
+// Nextcloud 34. ALL entries are under a free license (AGPL-3.0), with no
+// restriction on commercial use and no user quota.
 //
-// La catégorie sépare deux choses que l'utilisateur ne doit PAS confondre :
+// The category separates two things the user must NOT confuse:
 //
-//	simple  → l'app fonctionne dès l'activation (page 1, installable)
-//	serveur → l'app a besoin d'un service séparé (page 2, lecture seule)
+//	simple  → the app works as soon as it is enabled (page 1, installable)
+//	serveur → the app needs a separate service (page 2, read-only)
 //
-// Les deux listes sont DISJOINTES : une app apparaît sur une seule page.
+// The two lists are DISJOINT: an app appears on a single page.
 var Catalogue = []App{
-	// ── Page 1 : sans dépendance, installables ──────────────────────────
+	// ── Page 1: no dependency, installable ──────────────────────────────
 	{ID: "deck", Nom: "Deck", Cat: simple, Licence: "AGPL-3.0",
-		Role: "tableaux Kanban partagés (gestion de projet)"},
+		Role: "shared Kanban boards (project management)"},
 	{ID: "collectives", Nom: "Collectives", Cat: simple, Licence: "AGPL-3.0",
-		Role: "wiki et documentation d'équipe"},
+		Role: "team wiki and documentation"},
 	{ID: "forms", Nom: "Forms", Cat: simple, Licence: "AGPL-3.0",
-		Role: "formulaires et sondages"},
+		Role: "forms and surveys"},
 	{ID: "polls", Nom: "Polls", Cat: simple, Licence: "AGPL-3.0",
-		Role: "sondages de disponibilité (planifier une réunion)"},
+		Role: "availability polls (plan a meeting)"},
 	{ID: "tasks", Nom: "Tasks", Cat: simple, Licence: "AGPL-3.0",
-		Role: "tâches et listes partagées"},
+		Role: "shared tasks and lists"},
 	{ID: "calendar", Nom: "Calendar", Cat: simple, Licence: "AGPL-3.0",
-		Role: "calendrier partagé"},
+		Role: "shared calendar"},
 	{ID: "contacts", Nom: "Contacts", Cat: simple, Licence: "AGPL-3.0",
-		Role: "carnet de contacts partagé"},
+		Role: "shared contact book"},
 	{ID: "tables", Nom: "Tables", Cat: simple, Licence: "AGPL-3.0",
-		Role: "tableaux structurés (base de données légère)"},
+		Role: "structured tables (lightweight database)"},
 	{ID: "notes", Nom: "Notes", Cat: simple, Licence: "AGPL-3.0",
-		Role: "prise de notes (markdown)"},
-	{ID: "groupfolders", Nom: "Dossiers d'équipe", Cat: simple, Licence: "AGPL-3.0",
-		Role: "dossiers partagés par groupe (et non utilisateur à utilisateur)"},
-	{ID: "appointments", Nom: "Rendez-vous", Cat: simple, Licence: "AGPL-3.0",
-		Role: "prise de rendez-vous avec lien public"},
+		Role: "note-taking (markdown)"},
+	{ID: "groupfolders", Nom: "Team folders", Cat: simple, Licence: "AGPL-3.0",
+		Role: "group-shared folders (not user-to-user)"},
+	{ID: "appointments", Nom: "Appointments", Cat: simple, Licence: "AGPL-3.0",
+		Role: "appointment booking with a public link"},
 	{ID: "mail", Nom: "Mail", Cat: simple, Licence: "AGPL-3.0",
-		Role: "client mail intégré"},
-	{ID: "announcementcenter", Nom: "Annonces", Cat: simple, Licence: "AGPL-3.0",
-		Role: "annonces d'administration à tous les utilisateurs"},
-	{ID: "files_retention", Nom: "Rétention", Cat: simple, Licence: "AGPL-3.0",
-		Role: "suppression automatique des fichiers après une durée"},
-	{ID: "files_accesscontrol", Nom: "Contrôle d'accès", Cat: simple, Licence: "AGPL-3.0",
-		Role: "règles d'accès aux fichiers (interdire un type, un groupe…)"},
-	{ID: "bookmarks", Nom: "Signets", Cat: simple, Licence: "AGPL-3.0",
-		Role: "signets partagés"},
-	{ID: "external", Nom: "Sites externes", Cat: simple, Licence: "AGPL-3.0",
-		Role: "liens vers des sites externes dans l'interface"},
-	{ID: "group_everyone", Nom: "Groupe « tous »", Cat: simple, Licence: "AGPL-3.0",
-		Role: "groupe automatique contenant tous les utilisateurs"},
+		Role: "integrated mail client"},
+	{ID: "announcementcenter", Nom: "Announcements", Cat: simple, Licence: "AGPL-3.0",
+		Role: "admin announcements to all users"},
+	{ID: "files_retention", Nom: "Retention", Cat: simple, Licence: "AGPL-3.0",
+		Role: "automatic deletion of files after a duration"},
+	{ID: "files_accesscontrol", Nom: "Access control", Cat: simple, Licence: "AGPL-3.0",
+		Role: "file access rules (forbid a type, a group…)"},
+	{ID: "bookmarks", Nom: "Bookmarks", Cat: simple, Licence: "AGPL-3.0",
+		Role: "shared bookmarks"},
+	{ID: "external", Nom: "External sites", Cat: simple, Licence: "AGPL-3.0",
+		Role: "links to external sites in the interface"},
+	{ID: "group_everyone", Nom: "Everyone group", Cat: simple, Licence: "AGPL-3.0",
+		Role: "automatic group containing all users"},
 
-	// ── Page 2 : dépendance externe, NON installables ───────────────────
+	// ── Page 2: external dependency, NOT installable ───────────────────
 	{
 		ID: "whiteboard", Nom: "Whiteboard", Cat: serveur, Licence: "AGPL-3.0",
-		Role:      "tableau blanc collaboratif (temps réel)",
-		DependsOn: "serveur WebSocket à déployer (port 3002)",
+		Role:      "collaborative whiteboard (real-time)",
+		DependsOn: "WebSocket server to deploy (port 3002)",
 	},
 	{
 		ID: "recognize", Nom: "Recognize", Cat: serveur, Licence: "AGPL-3.0",
-		Role:      "recherche et classification par IA dans les documents",
-		DependsOn: "modèles IA à télécharger (plusieurs centaines de Mo)",
+		Role:      "AI search and classification in documents",
+		DependsOn: "AI models to download (several hundred MB)",
 	},
 	{
 		ID: "files_antivirus", Nom: "Antivirus", Cat: serveur, Licence: "AGPL-3.0",
-		Role:      "analyse antivirus des fichiers déposés",
-		DependsOn: "serveur ClamAV à déployer séparément",
+		Role:      "antivirus scanning of uploaded files",
+		DependsOn: "ClamAV server to deploy separately",
 	},
 	{
-		ID: "encryption", Nom: "Chiffrement du stockage", Cat: serveur, Licence: "AGPL-3.0",
-		Role: "chiffrement des fichiers au repos",
-		// ATTENTION : ce n'est PAS une dépendance manquante, c'est un RISQUE.
-		// On la laisse donc installable (DependsOn vide) mais on la signale
-		// séparément — la désactiver automatiquement serait excessif, l'activer
-		// en silence serait dangereux.
-		Avertissement: "irréversible : une fois activé, déchiffrer prend des jours",
+		ID: "encryption", Nom: "Storage encryption", Cat: serveur, Licence: "AGPL-3.0",
+		Role: "encryption of files at rest",
+		// CAUTION: this is NOT a missing dependency, it is a RISK.
+		// We therefore leave it installable (empty DependsOn) but we flag it
+		// separately — disabling it automatically would be excessive, enabling
+		// it silently would be dangerous.
+		Avertissement: "irreversible: once enabled, decrypting takes days",
 	},
 }
 
-// Deploy installe et active les applications retenues, de façon idempotente.
+// Deploy installs and enables the selected applications, idempotently.
 //
-// Idempotent au sens strict : `app:install` échoue si l'app est déjà là et
-// `app:enable` réussit sans rien faire. On NE traite donc PAS l'échec de
-// l'installation comme une erreur — sinon un second passage signalerait une
-// panne là où tout va bien.
+// Idempotent in the strict sense: `app:install` fails if the app is already
+// there and `app:enable` succeeds doing nothing. We therefore do NOT treat
+// the install failure as an error — otherwise a second pass would report a
+// failure where everything is fine.
 //
-// CE QU'ON N'ACTIVE PAS, ET POURQUOI : une application dont DependsOn est
-// renseigné exige un service qui n'est PAS déployé par Ceffio (serveur
-// WebSocket du tableau blanc, ClamAV, modèles d'IA…). L'activer quand même
-// l'installe dans un état où elle s'interpose et casse ce qu'elle touche :
-// constaté avec files_antivirus, activée sans clamscan, qui faisait échouer
-// TOUTE connexion en erreur 500 (« No connection to anti virus »). On
-// l'installe donc sans l'activer : elle est présente, visible, et il suffit de
-// déployer sa dépendance puis de l'activer pour s'en servir.
+// WHAT WE DO NOT ENABLE, AND WHY: an application whose DependsOn is set
+// requires a service that is NOT deployed by Ceffio (whiteboard WebSocket
+// server, ClamAV, AI models…). Enabling it anyway installs it in a state
+// where it gets in the way and breaks whatever it touches: observed with
+// files_antivirus, enabled without clamscan, which made EVERY connection fail
+// with error 500 ("No connection to anti virus"). We therefore install it
+// without enabling it: it is present, visible, and one only has to deploy its
+// dependency then enable it to use it.
 func Deploy(ctx context.Context) error {
-	fmt.Println("\nInstallation des applications Nextcloud (Phase 12)...")
+	fmt.Println("\nInstalling Nextcloud applications (Phase 12)...")
 
-	// 1. État initial : « présente » et « active » sont DEUX choses.
-	//    On lit les deux, car une app à dépendance externe doit rester
-	//    présente sans être active.
+	// 1. Initial state: "present" and "active" are TWO things.
+	//    We read both, because an app with an external dependency must stay
+	//    present without being active.
 	deja := appsInstallees(ctx)
 	actives0 := appsActives(ctx)
 
@@ -163,81 +163,81 @@ func Deploy(ctx context.Context) error {
 		if _, ok := deja[a.ID]; !ok {
 			nouvelles = append(nouvelles, a.Nom)
 		}
-		// 2. Installer si absent.
+		// 2. Install if absent.
 		if err := occ(ctx, "app:install", a.ID); err != nil &&
 			!strings.Contains(err.Error(), "already installed") {
-			// Un échec réel : on le signale et on continue. Une app
-			// indisponible ne doit pas empêcher les autres de s'installer.
-			fmt.Printf("  ! %s : installation impossible (%v)\n", a.Nom, err)
+			// A real failure: we report it and continue. An unavailable app
+			// must not prevent the others from installing.
+			fmt.Printf("  ! %s: installation impossible (%v)\n", a.Nom, err)
 			continue
 		}
 
-		// 3. Dépendance externe non fournie : on pose SANS activer.
-		//    L'activer la ferait tourner sans son service et casserait
-		//    l'instance — c'est exactement le piège de files_antivirus.
+		// 3. External dependency not provided: we install WITHOUT enabling.
+		//    Enabling it would make it run without its service and break the
+		//    instance — that is exactly the files_antivirus trap.
 		if a.DependsOn != "" {
-			// Si elle avait été activée par une version précédente, on la
-			// désactive : le correctif doit s'appliquer aux instances
-			// existantes, pas seulement aux installations neuves.
+			// If it had been enabled by a previous version, we disable it: the
+			// fix must apply to existing instances, not only to fresh
+			// installs.
 			if _, active := actives0[a.ID]; active {
 				if err := occ(ctx, "app:disable", a.ID); err == nil {
-					fmt.Printf("  ∙ %s : désactivée (dépendance absente : %s)\n",
+					fmt.Printf("  ∙ %s: disabled (missing dependency: %s)\n",
 						a.Nom, a.DependsOn)
 				}
 			}
 			posees = append(posees, a.Nom)
-			enAttente = append(enAttente, fmt.Sprintf("%s (requiert %s)", a.Nom, a.DependsOn))
+			enAttente = append(enAttente, fmt.Sprintf("%s (requires %s)", a.Nom, a.DependsOn))
 			continue
 		}
 
 		if err := occ(ctx, "app:enable", a.ID); err != nil {
-			fmt.Printf("  ! %s : activation impossible (%v)\n", a.Nom, err)
+			fmt.Printf("  ! %s: activation impossible (%v)\n", a.Nom, err)
 			continue
 		}
 		actives = append(actives, a.Nom)
 	}
 
 	if len(nouvelles) > 0 {
-		fmt.Printf("  ∙ %d nouvelle(s) : %s\n",
+		fmt.Printf("  ∙ %d new: %s\n",
 			len(nouvelles), strings.Join(nouvelles, ", "))
 	} else {
-		fmt.Println("  ∙ toutes les applications étaient déjà installées")
+		fmt.Println("  ∙ all applications were already installed")
 	}
-	fmt.Printf("  ✓ %d applications actives : %s\n",
+	fmt.Printf("  ✓ %d active applications: %s\n",
 		len(actives), strings.Join(actives, ", "))
 
-	// 4. Signaler les apps posées mais laissées INACTIVES, avec ce qu'il
-	//    faudrait pour les activer. Transparence : sans ce message,
-	//    l'utilisateur les croirait disponibles.
+	// 4. Report the apps installed but left INACTIVE, with what it would take
+	//    to enable them. Transparency: without this message, the user would
+	//    believe they are available.
 	if len(posees) > 0 {
-		fmt.Printf("  ∙ %d application(s) installée(s) mais laissée(s) inactive(s) :\n", len(posees))
+		fmt.Printf("  ∙ %d application(s) installed but left inactive:\n", len(posees))
 		for _, e := range enAttente {
 			fmt.Println("      " + e)
 		}
-		fmt.Println("      → déployez la dépendance, puis activez l'app dans Nextcloud")
+		fmt.Println("      → deploy the dependency, then enable the app in Nextcloud")
 	}
 
-	// 4. Nettoyer le cache d'applications : sans ça, Nextcloud peut continuer
-	//    à servir une liste d'apps périmée après une installation.
+	// 4. Clean the app cache: without this, Nextcloud can keep serving a
+	//    stale app list after an installation.
 	if err := occ(ctx, "maintenance:repair", "--include-expensive"); err != nil {
-		// Non bloquant : le réparateur peut échouer sur des détails sans
-		// conséquence, et l'installation des apps est déjà faite.
-		fmt.Printf("  (réparation du cache ignorée : %v)\n", err)
+		// Non-blocking: the repairer can fail on inconsequential details, and
+		// the app installation is already done.
+		fmt.Printf("  (cache repair ignored: %v)\n", err)
 	}
 
-	fmt.Println("✓ Applications Nextcloud installées")
+	fmt.Println("✓ Nextcloud applications installed")
 	return nil
 }
 
-// appsInstallees rend l'ensemble des identifiants d'apps déjà présents.
+// appsInstallees returns the set of app identifiers already present.
 func appsInstallees(ctx context.Context) map[string]struct{} {
 	out, err := occSortie(ctx, "app:list", "--output=json")
 	if err != nil {
 		return map[string]struct{}{}
 	}
-	// On ne parse pas le JSON : on cherche simplement les identifiants connus
-	// dans la sortie. Un parsing strict serait fragile, et il ne sert à rien
-	// ici — on veut seulement savoir « déjà là » ou pas.
+	// We do not parse the JSON: we simply look for the known identifiers in
+	// the output. Strict parsing would be fragile, and it serves no purpose
+	// here — we only want to know "already there" or not.
 	connus := map[string]struct{}{}
 	for _, a := range Catalogue {
 		if strings.Contains(out, `"`+a.ID+`"`) {
@@ -247,21 +247,21 @@ func appsInstallees(ctx context.Context) map[string]struct{} {
 	return connus
 }
 
-// appsActives rend l'ensemble des identifiants d'apps ACTIVES.
+// appsActives returns the set of ACTIVE app identifiers.
 //
-// POURQUOI SÉPARÉ DE appsInstallees : `app:list` contient deux sections,
-// « enabled » et « disabled ». Une app peut être PRÉSENTE sans être active —
-// c'est justement l'état dans lequel on veut laisser celles à dépendance
-// externe. Chercher l'identifiant dans toute la sortie ne dit donc pas si
-// l'app tourne : il faut lire la section « enabled ».
+// WHY SEPARATE FROM appsInstallees: `app:list` contains two sections,
+// "enabled" and "disabled". An app can be PRESENT without being active —
+// which is exactly the state we want to leave the external-dependency ones
+// in. Searching for the identifier in the whole output therefore does not say
+// whether the app runs: one must read the "enabled" section.
 func appsActives(ctx context.Context) map[string]struct{} {
 	out, err := occSortie(ctx, "app:list", "--output=json")
 	if err != nil {
 		return map[string]struct{}{}
 	}
-	// Section « enabled » uniquement. Si le JSON change de forme, on ne
-	// renvoie rien : mieux vaut ne rien désactiver par erreur que toucher à
-	// une app dont on a mal interprété l'état.
+	// "enabled" section only. If the JSON changes shape, we return nothing:
+	// better to disable nothing by mistake than to touch an app whose state we
+	// misread.
 	var liste struct {
 		Enabled map[string]any `json:"enabled"`
 	}
@@ -275,13 +275,13 @@ func appsActives(ctx context.Context) map[string]struct{} {
 	return actives
 }
 
-// occ exécute une commande occ dans le pod Nextcloud.
+// occ runs an occ command in the Nextcloud pod.
 func occ(ctx context.Context, args ...string) error {
 	_, err := occSortie(ctx, args...)
 	return err
 }
 
-// occSortie exécute occ et rend la sortie standard.
+// occSortie runs occ and returns the standard output.
 func occSortie(ctx context.Context, args ...string) (string, error) {
 	complet := append([]string{
 		"exec", "-n", "ceffio-files", "deploy/nextcloud", "-c", "nextcloud", "--",

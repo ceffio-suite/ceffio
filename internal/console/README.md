@@ -1,163 +1,184 @@
-# Console d'administration Ceffio
+# Ceffio administration console
 
-Interface web d'exploitation de la pile Ceffio. Elle répond à une question que
-la ligne de commande ne rend pas confortable : **« qu'est-ce qui tourne, et
-est-ce que tout va bien ? »** — sans avoir à taper `kubectl` sur la VM.
+Web operations interface for the Ceffio stack. It answers the question the
+command line does not make comfortable: **"what is running, and is everything
+fine?"** — without typing `kubectl` on the VM.
 
     https://admin.ceffio.example.com
 
-## Ce qu'elle montre
+## What it shows
 
-Trois vues, dérivées de l'état réel du cluster (jamais d'un cache ni d'une
-liste écrite à la main) :
+Views derived from the cluster's real state (never from a cache or a
+hand-written list):
 
-| Vue | Ce qu'elle expose |
+| View | What it exposes |
 |---|---|
-| **Applications utilisateurs** | Chaque service rendu aux utilisateurs, avec son URL, son rôle, et l'état calculé de ses pods (prêts/total) |
-| **Certificats** | Chaque certificat TLS, son hôte, sa date d'expiration et le nombre de jours restants |
-| **Infrastructure** | Les couches techniques (données, identité, fichiers, bureautique, visio, système), pod par pod, avec le nombre de redémarrages |
+| **User applications** | Every service rendered to users, with its URL, its role, and the computed state of its pods (ready/total) |
+| **Certificates** | Every TLS certificate, its host, its expiry date and the number of days left |
+| **Infrastructure** | The technical layers (data, identity, files, office, video, system), pod by pod, with the restart count |
+| **Users** | The SSO accounts of the Keycloak realm `ceffio` |
+| **Nextcloud apps** | The collaboration applications, grouped by category, with their license, their documentation link and a button to enable or disable them |
 
-Le statut d'un service n'est pas déclaré : il est **calculé** depuis les pods qui
-le portent. Un service dont tous les pods sont prêts est vert ; un pod qui
-redémarre en boucle se voit immédiatement, avec son compteur.
+A service's status is not declared: it is **computed** from the pods that
+carry it. A service whose pods are all ready is green; a pod restarting in a
+loop shows immediately, with its counter.
 
-| **Apps Nextcloud** | Les applications de collaboration, groupées par catégorie, avec leur licence, leur lien de documentation et un bouton pour les activer ou les désactiver |
+## What it lets you do
 
-## Ce qu'elle permet de faire
+- **See** the stack's state on one page (dashboard)
+- **Manage SSO accounts** — list, create, deactivate, reactivate, reset the
+  password in the Keycloak realm `ceffio`
+- **Manage Nextcloud applications** — enable or disable catalog apps (see the
+  dedicated section below)
+- **Follow certificate expiry** before they break a service
+- **Rotate secrets** — the console reads and writes them through the OpenBao
+  vault
 
-- **Voir** l'état de la pile en une page (dashboard)
-- **Gérer les comptes SSO** — lister, créer, désactiver, changer le mot de passe
-  dans le realm Keycloak `ceffio`
-- **Gérer les applications Nextcloud** — activer ou désactiver les apps du
-  catalogue (voir la section dédiée ci-dessous)
-- **Suivre l'expiration des certificats** avant qu'ils ne cassent un service
+### The administration account is not a user like the others
 
-## Gérer les applications Nextcloud
+The account used by the vault's OIDC role (`adminceffio`) is presented in its
+own card, apart from the ordinary account list. It carries no destructive
+buttons — and that is not only cosmetic: **the API itself refuses** any
+deactivation, reactivation, password reset, or creation of a homonymous
+account against it, whatever the identifier used (id, name, different case).
+A protection that lived only in the page would be one `curl` away from
+nothing. Deactivate always has its inverse: the `reactivate` action exists,
+because an account deactivated by mistake must not be a dead end.
 
-La page « Apps Nextcloud » présente deux listes **séparées, jamais mélangées** :
+## Managing Nextcloud applications
 
-```
-Applications installables      cases à cocher — un clic active ou désactive
-Applications à dépendance      lecture seule — un service séparé est requis
-externe
-```
-
-**Pourquoi cette séparation :** une application qui exige un serveur supplémentaire
-(Whiteboard et son serveur WebSocket, Recognize et ses modèles IA, l'antivirus et
-son serveur ClamAV) **ne fonctionne pas** après un simple clic. La présenter
-cochable laisserait croire le contraire, et l'utilisateur chercherait ensuite
-pourquoi la fonction ne marche pas. Elle est donc listée pour information, avec sa
-dépendance écrite noir sur blanc, mais **non installable** depuis cette page.
-
-Ce que fait un clic :
+The "Nextcloud apps" page presents two **separate, never mixed** lists:
 
 ```
-activer      → l'application devient disponible pour les utilisateurs
-désactiver   → l'application disparaît de l'interface, mais reste sur le disque
-                et peut être réactivée (aucune donnée n'est détruite)
+Installable applications        checkboxes — one click enables or disables
+Applications with an external   read-only — a separate service is required
+dependency
 ```
 
-**Comment ça marche techniquement :** la console appelle l'**API OCS de
-Nextcloud** (`/ocs/v2.php/cloud/apps`), avec un compte de service dédié
-(`ceffio-console`) et un mot de passe d'application révocable. Elle n'exécute
-aucune commande dans le cluster et n'obtient aucun droit d'administration
-Kubernetes : elle fait des appels HTTP authentifiés, rien d'autre.
+**Why this separation:** an application that requires an extra server
+(Whiteboard and its WebSocket server, Recognize and its AI models, the
+antivirus and its ClamAV server) **does not work** after a simple click.
+Presenting it as checkable would suggest otherwise, and the user would then
+look for why the feature does not work. It is therefore listed for
+information, with its dependency written in black and white, but **not
+installable** from this page.
 
-> Une première version passait par des Jobs Kubernetes exécutant `occ` dans le pod
-> Nextcloud. C'était beaucoup de pièces mobiles — ServiceAccount d'exécution,
-> montage du PVC (qui ne traverse pas les namespaces), un pod par opération,
-> lecture de logs — pour un résultat que l'API donne en un appel. L'API est la
-> bonne approche ; les Jobs ont été retirés.
+What a click does:
 
-## Ce qu'elle NE fait PAS
+```
+enable    → the application becomes available to users
+disable   → the application disappears from the interface, but stays on disk
+            and can be re-enabled (no data is destroyed)
+```
 
-À dire clairement, pour éviter les fausses attentes :
+**How it works technically:** the console calls the **Nextcloud OCS API**
+(`/ocs/v2.php/cloud/apps`), with a dedicated service account
+(`ceffio-console`) and a revocable application password. It runs no command in
+the cluster and obtains no Kubernetes administration right: it makes
+authenticated HTTP calls, nothing else.
 
-- Elle ne **redémarre** ni ne **déploie** rien (le déploiement passe par la CLI
-  `ceffio install`)
-- Elle ne **télécharge pas** d'application depuis l'app store : le catalogue est
-  maîtrisé, pas ouvert
-- Elle ne **supprime pas** définitivement une application ni ses données (la
-  désactivation est réversible, la destruction ne l'est pas)
-- Elle ne gère **pas** les sauvegardes (voir `ceffio backup` / `ceffio restore`)
-- Elle n'expose **aucune** donnée utilisateur : ni fichiers, ni messages, ni
-  contenu de réunion
+> A first version went through Kubernetes Jobs running `occ` inside the
+> Nextcloud pod. That was a lot of moving parts — execution ServiceAccount,
+> PVC mount (which does not cross namespaces), one pod per operation, log
+> reading — for a result the API gives in one call. The API is the right
+> approach; the Jobs were removed.
 
-## Authentification
+## What it does NOT do
 
-L'accès est protégé par une **clé unique** (jeton), stockée dans un Secret
-Kubernetes :
+Stated clearly, to avoid false expectations:
 
-    kubectl get secret ceffio-console-key -n ceffio-system -o jsonpath='{.data.key}' | base64 -d
+- It neither **restarts** nor **deploys** anything (deployment goes through
+  the CLI `ceffio install`)
+- It does not **download** applications from the app store: the catalog is
+  controlled, not open
+- It does not permanently **delete** an application or its data (deactivation
+  is reversible, destruction is not)
+- It does not manage **backups** (see `ceffio backup` / `ceffio restore`)
+- It exposes **no** user data: no files, no messages, no meeting content
 
-La page publique (`/`) est servie sans authentification — c'est elle qui demande
-la clé en JavaScript, puis l'envoie en en-tête `Authorization: Bearer` sur
-chaque appel `/api/*`. Autrement dit : **aucune donnée n'est accessible sans la
-clé**, la page nue ne contient rien.
+## Authentication and secrets
 
-> **Limite assumée :** c'est un jeton statique, pas un SSO. Le verrouillage SSO
-> Keycloak complet est prévu en durcissement, mais n'est pas encore en place.
-> Traiter cette clé comme un secret d'administration.
+Access is protected by a **single key** (token) that lives in the OpenBao
+vault, at `kv/ceffio/console/api`. Like every other secret of the suite, it
+reaches the console pod through the **OpenBao agent injector**: the pod reads
+the rendered `/secrets/env` file itself (the console image has no shell), and
+no application credential exists as a Kubernetes Secret anymore.
+
+The public page (`/`) is served without authentication — it is the page that
+asks for the key in JavaScript, then sends it in the `Authorization: ***
+header on every `/api/*` call. In other words: **no data is accessible without
+the key**, the bare page contains nothing.
+
+> **Accepted limit:** the API key is a static token. Human users reach the
+> vault itself through OIDC (Keycloak); full SSO lockdown of the console is
+> planned as hardening. Treat this key as an administration secret.
 
 ## API
 
-Points d'entrée, tous derrière la clé :
+Entry points, all behind the key:
 
-    GET  /api/status                     état complet : services, certificats, couches
-    GET  /api/users                      liste des comptes du realm
-    POST /api/users                      création (mot de passe non temporaire)
-    POST /api/users/{id}/{action}        action = deactivate | password
-    GET  /api/apps                       catalogue + état réel des applications
-    POST /api/apps/{id}/install          active une application
-    POST /api/apps/{id}/uninstall        désactive une application
+    GET  /api/status                     full state: services, certificates, layers
+    GET  /api/users                      list of the realm's accounts (the
+                                         administration account carries
+                                         "protege": true)
+    POST /api/users                      creation (password not temporary; the
+                                         reserved name is refused)
+    POST /api/users/{id}/{action}        action = deactivate | reactivate | password
+    GET  /api/apps                       catalog + real state of the applications
+    POST /api/apps/{id}/install          enables an application
+    POST /api/apps/{id}/uninstall        disables an application
 
-Les réponses sont du JSON brut. Un appel sans clé valide répond `401` — jamais
-partiel, jamais silencieux.
+Responses are raw JSON. A call without a valid key answers `401` — never
+partial, never silent. Any action attempted against the protected
+administration account answers `403`, by id as well as by name.
 
-## Comment elle est construite
+## How it is built
 
-Le serveur tourne **dans le cluster** (`ceffio-system`), et c'est ce qui rend
-l'implémentation simple : il parle à l'API Kubernetes avec le compte de service
-`ceffio-admin`, et à Keycloak via son service interne. Aucun accès depuis
-l'extérieur n'est nécessaire.
+The server runs **inside the cluster** (`ceffio-system`), and that is what
+makes the implementation simple: it talks to the Kubernetes API with the
+`ceffio-admin` service account, and to Keycloak through its internal service.
+No access from outside is necessary.
 
     internal/console/
-      console.go    serveur HTTP, routes, authentification par clé
-      status.go     collecte de l'état (pods, certificats, services)
-      users.go      gestion des comptes Keycloak
-      apps.go       gestion des applications Nextcloud (API OCS)
-      deploy.go     déploiement de la console elle-même dans le cluster
+      console.go    HTTP server, routes, key authentication
+      status.go     state collection (pods, certificates, services)
+      users.go      Keycloak account management (incl. the protected account)
+      apps.go       Nextcloud application management (OCS API)
+      deploy.go     deployment of the console itself into the cluster
       web/
-        index.html  page unique (HTML + CSS + JS, sans dépendance externe)
+        index.html  single page (HTML + CSS + JS, no external dependency)
 
-L'interface est **un seul fichier HTML**, sans framework ni CDN : il est
-embarqué dans le binaire Go et servi tel quel. Pas de chaîne de build front, pas
-de `node_modules`, rien à installer pour la modifier.
+The interface is **a single HTML file**, without framework or CDN: it is
+embedded in the Go binary and served as-is. No front build chain, no
+`node_modules`, nothing to install to modify it.
 
-La gestion des applications passe par **l'API OCS de Nextcloud**, avec un compte
-de service dédié et un mot de passe d'application. Deux points pratiques : les
-identifiants vivent dans le Secret `nextcloud-console-api`, et Nextcloud doit
-autoriser les plages internes du cluster à opérer sans confirmation de mot de
-passe (`allowed_no_password_confirmation_ranges`) — sans quoi toute modification
-d'application est refusée avec « Password confirmation is required ».
+Application management goes through the **Nextcloud OCS API**, with a
+dedicated service account and an application password. Two practical points:
+the credentials live in the vault (`kv/ceffio/console/nextcloud-api`), and
+Nextcloud must authorize the cluster's internal ranges to operate without
+password confirmation (`allowed_no_password_confirmation_ranges`) — without
+which any application change is refused with "Password confirmation is
+required".
 
-L'appel à Keycloak passe par `kcadm` (l'outil d'administration livré avec
-Keycloak) : c'est la seule voie qui garantit un état que Keycloak considère comme
-cohérent. Jamais d'écriture directe en base.
+The call to Keycloak goes through `kcadm` (the administration tool shipped
+with Keycloak): it is the only path that guarantees a state Keycloak considers
+coherent. Never a direct database write. Every `kubectl exec` names its
+container (`-c keycloak`): the injector adds an init-container to the pods,
+and an exec without `-c` no longer knows which container to target.
 
-## Droits nécessaires
+## Required rights
 
-La console utilise un `ClusterRole` dédié (`ceffio-admin`), limité à la
-**lecture** des pods, services, déploiements, ingress et certificats. Elle n'a
-pas le droit d'écrire dans le cluster — le déploiement reste l'affaire de la CLI.
+The console uses a dedicated `ClusterRole` (`ceffio-admin`), limited to
+**reading** pods, services, deployments, ingresses and certificates. It has no
+right to write in the cluster — deployment remains the CLI's business.
 
-## Déploiement
+## Deployment
 
-Assuré par `ceffio install` (phase 11), qui construit l'image, la charge dans le
-cluster et crée l'ingress `admin.<domaine>`. Pour la reconstruire seule :
+Handled by `ceffio install` (phase 11), which builds the image, loads it into
+the cluster and creates the ingress `admin.<domain>`. The published image is
+built by the
+[`ceffio-suite/ceffio-console`](https://github.com/ceffio-suite/ceffio-console)
+repository and versioned there. To rebuild it alone:
 
     cd internal/console
     docker build -t localhost/ceffio-console:<version> .
-
-Le secret Keycloakadmin est **copié** dans `ceffio-system` : un `secretKeyRef` ne
-traverse pas les namespaces, donc la console lit sa propre copie.

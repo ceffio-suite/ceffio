@@ -1,5 +1,5 @@
-// Package charts embarque les charts Helm signés (data incluses) dans le
-// binaire, pour qu'une installation soit autoportante (pas de dépôt relatif).
+// Package charts embeds the signed Helm charts (data included) into the
+// binary, so an installation is self-contained (no relative repo).
 package charts
 
 import "embed"

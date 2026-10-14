@@ -10,37 +10,37 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// newTalkCmd déploie la pile Talk (HPB) SEULE.
+// newTalkCmd deploys the Talk stack (HPB) ALONE.
 //
-// MÊME RAISON QUE POUR LA MESSAGERIE, LA BUREAUTIQUE ET LA CONSOLE : Talk n'était
-// déployable que par `install`, qui rejoue toute la pile. Or c'est le composant
-// dont DEUX secrets sont partagés avec Nextcloud — donc celui qu'on veut pouvoir
-// redéployer seul après une rotation, sans toucher au reste.
+// SAME REASON AS FOR MAIL, OFFICE AND THE CONSOLE: Talk was only deployable
+// through `install`, which replays the whole stack. Yet it is the component
+// whose TWO secrets are shared with Nextcloud — so the one we want to be able
+// to redeploy alone after a rotation, without touching the rest.
 func newTalkCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "talk",
-		Short: "Déployer la pile Talk (coturn, Janus, NATS, signaling) seule",
-		Long: `Déploie le serveur de signalisation haute performance et son raccordement à Nextcloud.
+		Short: "Deploy the Talk stack (coturn, Janus, NATS, signaling) alone",
+		Long: `Deploys the high-performance signaling server and its hookup to Nextcloud.
 
-LES SECRETS VIENNENT DU COFFRE, ET DE NULLE PART AILLEURS. Les deux charges qui les
-consomment — coturn et le signaling — les lisent à leur démarrage par un agent, et
-le raccordement Nextcloud lit la MÊME entrée. C'est ce qui garantit que le secret
-partagé du signaling et celui des serveurs TURN restent identiques des deux côtés :
-une rotation n'en touche jamais un sans l'autre.`,
+THE SECRETS COME FROM THE VAULT, AND FROM NOWHERE ELSE. The two workloads that
+consume them — coturn and signaling — read them at startup through an agent,
+and the Nextcloud hookup reads the SAME entry. That is what guarantees that the
+shared signaling secret and the TURN servers' secret stay identical on both
+sides: a rotation never touches one without the other.`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(c *cobra.Command, args []string) error {
-			// On résout l'accès au coffre AVANT tout le reste : sans cela, la
-			// commande ne pourrait ni lire ni écrire les secrets, et le
-			// raccordement Nextcloud échouerait sans dire pourquoi.
+			// We resolve vault access BEFORE everything else: without it, the
+			// command could neither read nor write the secrets, and the
+			// Nextcloud hookup would fail without saying why.
 			if client, err := k8sapi.Nouveau(); err == nil {
 				if adresse, jeton, err := vault.Acces(c.Context(), client); err == nil {
 					os.Setenv("BAO_ADDR", adresse)
 					os.Setenv("BAO_TOKEN", jeton)
 					os.Setenv("BAO_MOTEUR", "kv")
-					fmt.Printf("  ∙ coffre : %s (source unique des secrets)\n", adresse)
+					fmt.Printf("  ∙ vault: %s (single source of secrets)\n", adresse)
 				} else {
-					fmt.Printf("  ∙ coffre non résolu (%v) — le déploiement va échouer : c'est voulu\n", err)
+					fmt.Printf("  ∙ vault unresolved (%v) — the deployment is going to fail: that is intended\n", err)
 				}
 			}
 			return talk.Deploy(c.Context())

@@ -15,19 +15,19 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/stacks"
 )
 
-// Redeployer rejoue le déploiement complet d'une installation existante.
+// Redeployer replays the full deployment of an existing installation.
 //
-// Utilisé par `ceffio upgrade` : chaque module vise la version épinglée de son
-// registre, et chacun est idempotent (il applique le manifeste, remplace les
-// images si elles diffèrent). Rejouer le déploiement est donc la façon correcte
-// de mettre à niveau — il n'y a pas de « chemin de mise à jour » séparé à
-// maintenir, et donc pas de dérive possible entre les deux chemins.
+// Used by `ceffio upgrade`: each module targets the pinned version of its
+// registry, and each is idempotent (it applies the manifest, replaces images
+// if they differ). Replaying the deployment is therefore the correct way to
+// upgrade — there is no separate "upgrade path" to maintain, and hence no
+// possible drift between the two paths.
 //
-// L'ordre respecte les dépendances réelles : plateforme et données d'abord,
-// identité ensuite (elle a besoin de sa base), puis les couches applicatives,
-// et enfin l'ingress et le SSO qui écrivent dans toutes les applications.
+// The order follows the real dependencies: platform and data first, identity
+// next (it needs its database), then the application layers, and finally
+// ingress and SSO, which write into all the applications.
 func Redeployer(ctx context.Context, domain string) error {
-	// 1. Plateforme et données : indépendantes l'une de l'autre.
+	// 1. Platform and data: independent of each other.
 	if err := platform.Deploy(ctx); err != nil {
 		return err
 	}
@@ -35,27 +35,27 @@ func Redeployer(ctx context.Context, domain string) error {
 		return err
 	}
 
-	// 2. Identité : dépend de la base.
+	// 2. Identity: depends on the database.
 	if err := identity.Deploy(ctx); err != nil {
 		return err
 	}
 
-	// 3. Couches applicatives : indépendantes entre elles.
+	// 3. Application layers: independent of each other.
 	if err := files.Deploy(ctx); err != nil {
 		return err
 	}
 
-	// 4. Bureau : après les fichiers (le connecteur passe par occ).
+	// 4. Office: after files (the connector goes through occ).
 	if err := office.Deploy(ctx); err != nil {
 		return err
 	}
 
-	// 5. SSO puis ingress : ces étapes écrivent dans les applications, elles
-	//    passent donc en dernier.
+	// 5. SSO then ingress: these steps write into the applications, so they
+	//    come last.
 	if err := sso.EnsureOIDCClients(ctx, domain); err != nil {
 		return err
 	}
-	// Talk remplace chat ET visio : nettoyage de l'ancienne pile.
+	// Talk replaces chat AND video: cleanup of the old stack.
 	if err := stacks.RetirerMatrixEtJitsi(ctx, domain); err != nil {
 		return err
 	}
@@ -74,17 +74,17 @@ func Redeployer(ctx context.Context, domain string) error {
 		}
 	}
 
-	// 6. Attendre que les pods applicatifs soient prêts. On n'utilise PAS
-	//    WaitReady : celui-ci surveille les NŒUDS, qui étaient déjà prêts avant
-	//    l'opération — il rendrait la main immédiatement, et la relecture qui
-	//    suit verrait encore les anciens pods tourner, donc conclurait à tort
-	//    qu'aucune version n'a changé.
+	// 6. Wait for the application pods to be ready. We do NOT use
+	//    WaitReady: it watches NODES, which were already ready before the
+	//    operation — it would return immediately, and the re-read that
+	//    follows would still see the old pods running, and so would wrongly
+	//    conclude that no version changed.
 	return attentePodsPrets(ctx, 5*time.Minute)
 }
 
-// attentePodsPrets attend que tous les pods ceffio-* soient prêts, ou expire.
-// L'expiration n'est pas une erreur : un upgrade peut légitimement laisser un
-// pod en cours de démarrage, et c'est `ceffio status` qui doit le dire.
+// attentePodsPrets waits until all ceffio-* pods are ready, or expires.
+// Expiry is not an error: an upgrade may legitimately leave a pod still
+// starting, and it is `ceffio status`'s job to say so.
 func attentePodsPrets(ctx context.Context, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {

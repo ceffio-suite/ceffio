@@ -1,9 +1,9 @@
-// Package ingress rend la suite joignable depuis un navigateur : issuers TLS
-// cert-manager (CA auto-signée pour les domaines sans ACME public — dev/PME)
-// et Ingresses Traefik avec hosts propres (*.<domain>).
+// Package ingress makes the suite reachable from a browser: cert-manager TLS
+// issuers (self-signed CA for domains without public ACME — dev/SME) and
+// Traefik Ingresses with their own hosts (*.<domain>).
 //
-// Prérequis : cert-manager installé (Phase 2) et un contrôleur Ingress
-// "traefik" (natif k3s ; sur k3d, prévoir un contrôleur compatible).
+// Prerequisites: cert-manager installed (Phase 2) and a "traefik" Ingress
+// controller (native to k3s; on k3d, plan for a compatible controller).
 package ingress
 
 import (
@@ -17,31 +17,31 @@ import (
 	"strings"
 )
 
-// Deploy applique de façon idempotente la CA + les Ingresses pour le domaine.
-// domain : domaine de base, ex. "company.fr" → cloud.company.fr, chat.company.fr...
+// Deploy applies idempotently the CA + the Ingresses for the domain.
+// domain: base domain, e.g. "company.fr" → cloud.company.fr, chat.company.fr...
 func Deploy(ctx context.Context, domain string) error {
-	fmt.Printf("\nIngress / TLS (Phase 9) pour domain=%s...\n", domain)
+	fmt.Printf("\nIngress / TLS (Phase 9) for domain=%s...\n", domain)
 	if err := apply(ctx, caManifest()); err != nil {
 		return err
 	}
 	if err := apply(ctx, ingressesManifest(domain)); err != nil {
 		return err
 	}
-	fmt.Println("✓ Ingress / TLS configuré (Traefik + ClusterIssuer CA + hosts *." + domain + ")")
+	fmt.Println("✓ Ingress / TLS configured (Traefik + ClusterIssuer CA + hosts *." + domain + ")")
 	return nil
 }
 
-// AdoptURLs rend les apps pleinement utilisables via les URLs publiques de
-// l'ingress : homeserver réel pour Element, public_baseurl Synapse, protocole
-// https Nextcloud, redirect URIs SSO et URL du connecteur ONLYOFFICE.
+// AdoptURLs makes the apps fully usable through the ingress public URLs:
+// real homeserver for Element, Synapse public_baseurl, Nextcloud https
+// protocol, SSO redirect URIs and the ONLYOFFICE connector URL.
 func AdoptURLs(ctx context.Context, domain string) error {
-	fmt.Printf("\nAdoption des URLs publiques *.%s...\n", domain)
+	fmt.Printf("\nAdopting public URLs *.%s...\n", domain)
 	cloud := "cloud." + domain
 	office := "office." + domain
 
-	// 3) Nextcloud : protocole https + URL publique + SSRF + proxy derrière Traefik.
-	// Le HttpClient de Nextcloud bloque par défaut les adresses privées (SSRF) :
-	// or Keycloak/ONLYOFFICE sont en IP de cluster → autoriser les serveurs locaux.
+	// 3) Nextcloud: https protocol + public URL + SSRF + proxy behind Traefik.
+	// Nextcloud's HttpClient blocks private addresses by default (SSRF): but
+	// Keycloak/ONLYOFFICE are on cluster IPs → allow local servers.
 	if err := occSet(ctx, "config:system:set", "allow_local_remote_servers", "--type", "boolean", "--value", "true"); err != nil {
 		return err
 	}
@@ -58,13 +58,13 @@ func AdoptURLs(ctx context.Context, domain string) error {
 		return err
 	}
 
-	// 4) Redirection SSO Keycloak du client nextcloud vers le https.
+	// 4) Keycloak SSO redirect of the nextcloud client to https.
 	if err := ssoRedirect(ctx, domain); err != nil {
 		return err
 	}
 
-	// 5) Connecteur ONLYOFFICE → URL publique. Clés EXACTES (casse CamelCase,
-	// sinon "L'application ONLYOFFICE n'est pas configuré").
+	// 5) ONLYOFFICE connector → public URL. EXACT keys (CamelCase, otherwise
+	// "L'application ONLYOFFICE n'est pas configuré").
 	if err := occSet(ctx, "config:app:set", "onlyoffice", "DocumentServerUrl", "--value", "https://"+office+"/"); err != nil {
 		return err
 	}
@@ -75,52 +75,52 @@ func AdoptURLs(ctx context.Context, domain string) error {
 		return err
 	}
 
-	// 6) Keycloak : hostname public + URL frontend https + proxy headers — sinon
-	// ses redirections navigateur pointent vers l'hostname interne codé en dur.
+	// 6) Keycloak: public hostname + https frontend URL + proxy headers —
+	// otherwise its browser redirects point to the hardcoded internal hostname.
 	if err := adoptKeycloakHost(ctx, domain); err != nil {
 		return err
 	}
 
-	// 6b) Traefik derrière un proxy amont. Sans cela, un pare-feu qui termine le
-	// TLS (OPNsense, Caddy, nginx) transmet en HTTP et Traefik annonce
-	// X-Forwarded-Proto: http → les applications redirigent en http:// depuis un
-	// client https. Constaté en production sur Keycloak.
+	// 6b) Traefik behind an upstream proxy. Without it, a firewall terminating
+	// TLS (OPNsense, Caddy, nginx) forwards in HTTP and Traefik announces
+	// X-Forwarded-Proto: http → applications redirect to http:// from an https
+	// client. Observed in production on Keycloak.
 	if err := ProxyAmont(ctx); err != nil {
 		return err
 	}
 
-	// 6c) Retirer les anciens domaines des configurations. Une installation migrée
-	// garde sinon l'ancien nom codé en dur (constaté : demo.local dans Keycloak,
-	// Element, Synapse) et redirige vers un domaine qui n'existe plus.
+	// 6c) Remove the old domains from the configurations. A migrated installation
+	// otherwise keeps the old hardcoded name (observed: demo.local in Keycloak,
+	// Element, Synapse) and redirects to a domain that no longer exists.
 	for _, ancien := range DomainesConnus(domain) {
 		if err := NettoyerAncienDomaine(ctx, ancien, domain); err != nil {
 			return err
 		}
 	}
 
-	// 7) Confiance TLS interne — TOUJOURS, pas seulement en demo.
+	// 7) Internal TLS trust — ALWAYS, not only in demo.
 	//
-	// Le durcissement était enfermé dans `if isDemo(domain)` : sur un domaine
-	// public il était donc sauté, et l'injection de CA de l'installation
-	// d'origine (faite sur demo.local) restait en place — avec son SSL_CERT_FILE
-	// amputé des autorités publiques. Conséquence : le callback OIDC de Synapse
-	// vers Keycloak échouait sur « certificate verify failed » alors que le
-	// certificat présenté était un Let's Encrypt valide.
+	// The hardening was locked inside `if isDemo(domain)`: on a public domain it
+	// was therefore skipped, and the CA injection from the original installation
+	// (done on demo.local) stayed in place — with its SSL_CERT_FILE stripped of
+	// the public authorities. Consequence: Synapse's OIDC callback to Keycloak
+	// failed on "certificate verify failed" even though the presented
+	// certificate was a valid Let's Encrypt one.
 	//
-	// Les services s'appellent entre eux par leur nom PUBLIC en https (derrière
-	// Traefik), donc l'autorité interne doit être reconnue dans les deux cas.
-	// Seuls les hostAliases sont propres à la demo : sur un domaine public le DNS
-	// résout réellement, et les écraser enverrait le trafic au mauvais endroit.
+	// The services call each other by their PUBLIC name over https (behind
+	// Traefik), so the internal authority must be recognized in both cases.
+	// Only the hostAliases are demo-specific: on a public domain the DNS really
+	// resolves, and overriding it would send traffic to the wrong place.
 	if err := InjecterConfianceTLS(ctx, domain, isDemo(domain)); err != nil {
 		return err
 	}
 
-	fmt.Println("✓ URLs publiques adoptées dans Nextcloud, ONLYOFFICE, Keycloak + redirect SSO")
+	fmt.Println("✓ Public URLs adopted in Nextcloud, ONLYOFFICE, Keycloak + SSO redirect")
 	return nil
 }
 
-// adoptKeycloakHost force l'hostname public de Keycloak (redirections navigateur)
-// avec une URL frontend https et les proxy headers de Traefik. Idempotent.
+// adoptKeycloakHost forces Keycloak's public hostname (browser redirects) with
+// an https frontend URL and Traefik's proxy headers. Idempotent.
 func adoptKeycloakHost(ctx context.Context, domain string) error {
 	host := "keycloak." + domain
 	url := "https://" + host
@@ -138,31 +138,31 @@ func adoptKeycloakHost(ctx context.Context, domain string) error {
 	return rcmd.Run()
 }
 
-// isDemo → domaine privé `.local` : pas de DNS réel ni CA publique → durcissement
-// hostAliases + injection CA. Un domaine public n'en a pas besoin.
+// isDemo → private `.local` domain: no real DNS or public CA → hostAliases +
+// CA injection hardening. A public domain does not need it.
 func isDemo(domain string) bool {
 	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(domain)), ".local")
 }
 
-// InjecterConfianceTLS rend l'autorité interne reconnaissable par les services,
-// pour que leurs appels serveur→serveur en https public aboutissent.
+// InjecterConfianceTLS makes the internal authority recognizable by the
+// services, so that their server→server calls over public https succeed.
 //
-// S'applique TOUJOURS (domaine public comme demo) : les applications s'appellent
-// par leur nom public, et ce certificat est signé par notre autorité.
+// Applies ALWAYS (public domain as well as demo): the applications call each
+// other by their public name, and this certificate is signed by our authority.
 //
-// avecHostAliases est réservé à la demo : là seulement, le DNS ne résout pas les
-// noms publics et il faut les router de force vers Traefik. Sur un domaine
-// public, poser des hostAliases serait nuisible — le trafic doit passer par le
-// vrai DNS, pas être détourné vers le cluster.
+// avecHostAliases is reserved for the demo: only there does the DNS not resolve
+// the public names and they must be force-routed to Traefik. On a public
+// domain, laying down hostAliases would be harmful — traffic must go through
+// the real DNS, not be diverted to the cluster.
 func InjecterConfianceTLS(ctx context.Context, domain string, avecHostAliases bool) error {
 	if avecHostAliases == false {
-		fmt.Println("Confiance TLS interne (CA ceffio injectée, sans hostAliases — domaine public)...")
+		fmt.Println("Internal TLS trust (ceffio CA injected, without hostAliases — public domain)...")
 	} else {
-		fmt.Println("Confiance TLS interne + hostAliases→Traefik (demo)...")
+		fmt.Println("Internal TLS trust + hostAliases→Traefik (demo)...")
 	}
 	tip, err := svcIP(ctx, "traefik", "kube-system")
 	if err != nil {
-		return fmt.Errorf("IP Traefik: %w", err)
+		return fmt.Errorf("Traefik IP: %w", err)
 	}
 	ca, err := caCert(ctx)
 	if err != nil {
@@ -172,32 +172,32 @@ func InjecterConfianceTLS(ctx context.Context, domain string, avecHostAliases bo
 	cloud := "cloud." + domain
 	office := "office." + domain
 
-	// En domaine public, hosts reste VIDE : cela purge les hostAliases posés du
-	// temps de demo.local (un « hostAliases: null » les retire) et laisse le vrai
-	// DNS faire son travail.
+	// On a public domain, hosts stays EMPTY: this purges the hostAliases laid
+	// down in the demo.local days (a "hostAliases: null" removes them) and lets
+	// the real DNS do its job.
 	hostsAutres := []string{kc, office}
 	hostsOffice := []string{cloud, office, kc}
 	if !avecHostAliases {
 		hostsAutres, hostsOffice = nil, nil
 	}
 
-	// Nextcloud (PHP) : CA via php.ini pointant sur la CA montée (persistant pour PHP).
+	// Nextcloud (PHP): CA via a php.ini pointing at the mounted CA (persistent for PHP).
 	if err := createCAConfigs(ctx, "ceffio-files", ca); err != nil {
 		return err
 	}
-	// SSL_CERT_FILE REMPLACE la liste par défaut (voir la note Synapse plus bas) :
-	// on pointe sur le paquet COMBINÉ, sinon Nextcloud perd toute confiance dans
-	// les certificats publics et ses appels sortants échouent.
+	// SSL_CERT_FILE REPLACES the default list (see the Synapse note below): we
+	// point at the COMBINED bundle, otherwise Nextcloud loses all trust in
+	// public certificates and its outbound calls fail.
 	if err := patchApp(ctx, "ceffio-files", "nextcloud", "nextcloud", tip,
 		hostsAutres, []envKV{{"SSL_CERT_FILE", cheminPaquetCombine}}, true); err != nil {
 		return err
 	}
 
-	// ONLYOFFICE (Node.js) : NODE_EXTRA_CA_CERTS.
-	// Celui-ci AJOUTE à la liste des autorités, il ne la remplace pas — on peut
-	// donc pointer sur notre seule autorité sans perdre les certificats publics.
-	// NE PAS « uniformiser » avec le paquet combiné : ce serait correct aussi,
-	// mais inutilement plus lourd.
+	// ONLYOFFICE (Node.js): NODE_EXTRA_CA_CERTS.
+	// This one ADDS to the authority list, it does not replace it — we can
+	// therefore point at our authority alone without losing the public
+	// certificates. Do NOT "uniformize" with the combined bundle: it would also
+	// be correct, but needlessly heavier.
 	if err := createCAConfigs(ctx, "ceffio-office", ca); err != nil {
 		return err
 	}
@@ -206,21 +206,21 @@ func InjecterConfianceTLS(ctx context.Context, domain string, avecHostAliases bo
 		return err
 	}
 	if avecHostAliases {
-		fmt.Println("✓ Confiance TLS interne appliquée (hostAliases→" + tip + ")")
+		fmt.Println("✓ Internal TLS trust applied (hostAliases→" + tip + ")")
 	} else {
-		fmt.Println("✓ Confiance TLS interne appliquée (domain public, pas de hostAliases)")
+		fmt.Println("✓ Internal TLS trust applied (public domain, no hostAliases)")
 	}
 	return nil
 }
 
 type envKV struct{ name, value string }
 
-// cheminPaquetCombine : fichier contenant les autorités du SYSTÈME plus notre
-// autorité interne. À utiliser partout où l'on pose SSL_CERT_FILE, qui REMPLACE
-// la liste par défaut au lieu de s'y ajouter.
+// cheminPaquetCombine: file containing the SYSTEM authorities plus our internal
+// authority. To be used wherever SSL_CERT_FILE is set, which REPLACES the
+// default list instead of adding to it.
 const cheminPaquetCombine = "/etc/ceffio-ca/paquet-combine.crt"
 
-// svcIP lit le ClusterIP d'un Service.
+// svcIP reads the ClusterIP of a Service.
 func svcIP(ctx context.Context, name, ns string) (string, error) {
 	out, err := k8s.Command(ctx, "kubectl", "get", "svc", name, "-n", ns, "-o", "jsonpath={.spec.clusterIP}").Output()
 	if err != nil {
@@ -229,16 +229,16 @@ func svcIP(ctx context.Context, name, ns string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// paquetCombine assemble les autorités du SYSTÈME et notre autorité interne en
-// un seul fichier PEM.
+// paquetCombine assembles the SYSTEM authorities and our internal authority
+// into a single PEM file.
 //
-// Pourquoi : SSL_CERT_FILE (Python, OpenSSL) désigne LA liste des autorités de
-// confiance, il ne s'y ajoute pas. Y mettre notre seule autorité interne rend
-// tout certificat public invalide — c'est exactement ce qui cassait le callback
-// OIDC (Keycloak présente un Let's Encrypt valide, Synapse le refusait).
+// Why: SSL_CERT_FILE (Python, OpenSSL) designates THE list of trusted
+// authorities, it does not add to it. Putting only our internal authority in it
+// makes every public certificate invalid — that is exactly what broke the OIDC
+// callback (Keycloak presents a valid Let's Encrypt, Synapse refused it).
 //
-// Le paquet combine donc les deux : rien n'est perdu, notre autorité est
-// reconnue.
+// The bundle therefore combines both: nothing is lost, our authority is
+// recognized.
 func paquetCombine() (string, error) {
 	systeme := ""
 	for _, f := range []string{
@@ -252,12 +252,12 @@ func paquetCombine() (string, error) {
 		}
 	}
 	if systeme == "" {
-		return "", fmt.Errorf("aucun paquet d'autorités système trouvé")
+		return "", fmt.Errorf("no system authority bundle found")
 	}
 	if !strings.HasSuffix(systeme, "\n") {
 		systeme += "\n"
 	}
-	// Notre autorité est ajoutée APRÈS le paquet système.
+	// Our authority is added AFTER the system bundle.
 	out, err := caCert(context.Background())
 	if err != nil {
 		return "", err
@@ -265,7 +265,7 @@ func paquetCombine() (string, error) {
 	return systeme + out, nil
 }
 
-// caCert lit le certificat CA de la chaîne signée par cert-manager (ceffio-ca-tls).
+// caCert reads the CA certificate of the chain signed by cert-manager (ceffio-ca-tls).
 func caCert(ctx context.Context) (string, error) {
 	out, err := k8s.Command(ctx, "kubectl", "get", "secret", "ceffio-ca-tls", "-n", "cert-manager", "-o", "jsonpath={.data.ca\\.crt}").Output()
 	if err != nil {
@@ -278,15 +278,15 @@ func caCert(ctx context.Context) (string, error) {
 	return string(b), nil
 }
 
-// createCAConfigs crée les ConfigMaps ceffio-ca-cm (CA) + ceffio-phpini (php.ini) dans le ns.
+// createCAConfigs creates the ConfigMaps ceffio-ca-cm (CA) + ceffio-phpini (php.ini) in the ns.
 func createCAConfigs(ctx context.Context, ns, ca string) error {
-	// Deux fichiers dans le ConfigMap :
-	//   ceffio-ca.crt — notre seule autorité. Pour les mécanismes qui AJOUTENT
-	//     (NODE_EXTRA_CA_CERTS de Node, openssl.cafile de PHP, curl.cainfo).
-	//   paquet-combine.crt — autorités système + la nôtre. Obligatoire pour
-	//     SSL_CERT_FILE, qui REMPLACE la liste par défaut : pointer sur notre
-	//     seule autorité ferait refuser tout certificat public (cause du
-	//     « certificate verify failed » sur le callback OIDC de Synapse).
+	// Two files in the ConfigMap:
+	//   ceffio-ca.crt — our authority alone. For mechanisms that ADD
+	//     (Node's NODE_EXTRA_CA_CERTS, PHP's openssl.cafile, curl.cainfo).
+	//   paquet-combine.crt — system authorities + ours. Mandatory for
+	//     SSL_CERT_FILE, which REPLACES the default list: pointing at our
+	//     authority alone would make every public certificate refused (the
+	//     cause of the "certificate verify failed" on Synapse's OIDC callback).
 	paquet, err := paquetCombine()
 	if err != nil {
 		return err
@@ -307,9 +307,9 @@ func createCAConfigs(ctx context.Context, ns, ca string) error {
 		return err
 	}
 	os.Remove("/tmp/paquet-combine.crt")
-	// openssl.cafile et curl.cainfo REMPLACENT la liste par défaut (même piège
-	// que SSL_CERT_FILE) : le paquet combiné, pour ne pas perdre les autorités
-	// publiques dont PHP a besoin pour ses appels sortants.
+	// openssl.cafile and curl.cainfo REPLACE the default list (same trap as
+	// SSL_CERT_FILE): the combined bundle, so as not to lose the public
+	// authorities PHP needs for its outbound calls.
 	ini := "openssl.cafile=" + cheminPaquetCombine + "\ncurl.cainfo=" + cheminPaquetCombine + "\n"
 	cmd2 := exec.CommandContext(ctx, "sh", "-c",
 		"kubectl create configmap ceffio-phpini -n "+ns+" --from-file=zz-ceffio.ini=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -")
@@ -320,11 +320,11 @@ func createCAConfigs(ctx context.Context, ns, ca string) error {
 	return cmd2.Run()
 }
 
-// patchApp applique hostAliases + volume CA + env (+ php.ini) via merge patch (idempotent).
+// patchApp applies hostAliases + CA volume + env (+ php.ini) via merge patch (idempotent).
 func patchApp(ctx context.Context, ns, deploy, container, traefikIP string, hosts []string, envs []envKV, withPHPIni bool) error {
-	// hosts vide = pas de hostAliases. On en pose SEULEMENT en demo : sur un
-	// domaine public, forcer la résolution vers le cluster court-circuiterait le
-	// vrai DNS et enverrait le trafic au mauvais endroit.
+	// Empty hosts = no hostAliases. We lay them down ONLY in demo: on a public
+	// domain, forcing resolution towards the cluster would short-circuit the real
+	// DNS and send traffic to the wrong place.
 	var ha []map[string]any
 	if len(hosts) > 0 {
 		ha = []map[string]any{{"ip": traefikIP, "hostnames": hosts}}
@@ -337,9 +337,10 @@ func patchApp(ctx context.Context, ns, deploy, container, traefikIP string, host
 	mounts := []map[string]string{{"name": "ceffio-ca", "mountPath": "/etc/ceffio-ca"}}
 	if withPHPIni {
 		vols = append(vols, map[string]any{"name": "ceffio-phpini", "configMap": map[string]string{"name": "ceffio-phpini"}})
-		// subPath sur le FICHIER : l'entrypoint Nextcloud écrit redis-session.ini dans
-		// conf.d au boot — monter un ConfigMap répertoire read-only sur ce dossier casse
-		// l'entrypoint (Read-only file system). subPath ne monte que le fichier zz-ceffio.ini.
+		// subPath on the FILE: the Nextcloud entrypoint writes redis-session.ini into
+		// conf.d at boot — mounting a read-only ConfigMap directory over that folder
+		// breaks the entrypoint (Read-only file system). subPath only mounts the
+		// zz-ceffio.ini file.
 		mounts = append(mounts, map[string]string{"name": "ceffio-phpini", "mountPath": "/usr/local/etc/php/conf.d/zz-ceffio.ini", "subPath": "zz-ceffio.ini"})
 	}
 	patch := map[string]any{
@@ -395,7 +396,7 @@ func appendNonDuplicate(ctx context.Context, ns, cm, key, line, needle, target s
 		return err
 	}
 	if strings.Contains(data, needle) {
-		return nil // déjà présent
+		return nil // already present
 	}
 	if err := applyCMData(ctx, ns, cm, key, data+"\n"+line); err != nil {
 		return err
@@ -403,7 +404,7 @@ func appendNonDuplicate(ctx context.Context, ns, cm, key, line, needle, target s
 	return rolloutRestart(ctx, target)
 }
 
-// ssoRedirect ajoute les redirect URIs https des clients OIDC via kcadm.
+// ssoRedirect adds the https redirect URIs of the OIDC clients via kcadm.
 func ssoRedirect(ctx context.Context, domain string) error {
 	for _, client := range []struct{ id, base string }{
 		{id: "nextcloud", base: "cloud." + domain},
@@ -452,12 +453,12 @@ func applyCMData(ctx context.Context, ns, name, key, data string) error {
 	return cmd.Run()
 }
 
-// rolloutRestart redemarre un deployment.
+// rolloutRestart restarts a deployment.
 //
-// Le namespace peut etre passe explicitement : « deploy/traefik » vit dans
-// kube-system, hors de la table ci-dessous, et la version anterieure ECHOUAIT
-// sur un target absent de la table — ce qui interrompait tout le deploiement
-// en cours (constate sur ProxyAmont, qui arretait la sequence avant la console).
+// The namespace can be passed explicitly: "deploy/traefik" lives in kube-system,
+// outside the table below, and the previous version FAILED on a target absent
+// from the table — which interrupted the whole deployment in progress (observed
+// on ProxyAmont, which stopped the sequence before the console).
 func rolloutRestart(ctx context.Context, target string) error {
 	explicite := ""
 	if strings.Contains(target, "@") {
@@ -474,7 +475,7 @@ func rolloutRestart(ctx context.Context, target string) error {
 		}[deploy]
 	}
 	if ns == "" {
-		return fmt.Errorf("namespace inconnu pour %q (utiliser « deploy/nom@namespace »)", target)
+		return fmt.Errorf("unknown namespace for %q (use \"deploy/name@namespace\")", target)
 	}
 	cmd := k8s.Command(ctx, "kubectl", "rollout", "restart", "deploy/"+deploy, "-n", ns)
 	cmd.Stdout = os.Stdout
@@ -483,7 +484,7 @@ func rolloutRestart(ctx context.Context, target string) error {
 }
 
 func runKcadm(ctx context.Context, args ...string) (string, error) {
-	// Injecte -r ceffio après le verbe (les clients SSO vivent dans le realm applicatif).
+	// Injects -r ceffio after the verb (the SSO clients live in the application realm).
 	quoted := make([]string, 0, len(args)+3)
 	for i, a := range args {
 		quoted = append(quoted, "'"+strings.ReplaceAll(a, "'", `'\''`)+"'")
@@ -497,7 +498,7 @@ func runKcadm(ctx context.Context, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
-// kcadmRedirect ajoute un redirect URI au client OIDC Keycloak sans écraser les existants.
+// kcadmRedirect adds a redirect URI to the Keycloak OIDC client without overwriting the existing ones.
 func kcadmRedirect(ctx context.Context, clientID, uri string) error {
 	out, err := runKcadm(ctx, "get", "clients", "-q", "clientId="+clientID, "--fields", "id,redirectUris")
 	if err != nil {
@@ -511,7 +512,7 @@ func kcadmRedirect(ctx context.Context, clientID, uri string) error {
 		return fmt.Errorf("parse client %s: %w (%s)", clientID, err, out)
 	}
 	if len(list) == 0 {
-		return fmt.Errorf("client %s introuvable dans le realm ceffio", clientID)
+		return fmt.Errorf("client %s not found in the ceffio realm", clientID)
 	}
 	c := list[0]
 	seen := map[string]bool{uri: true}
@@ -535,8 +536,8 @@ func apply(ctx context.Context, manifest string) error {
 	return cmd.Run()
 }
 
-// caManifest : CA auto-signée (issuer bootstrap → certificat CA → issuer CA)
-// pour signer les certificats des Ingresses. Se fait une fois, idempotent.
+// caManifest: self-signed CA (bootstrap issuer → CA certificate → CA issuer)
+// to sign the Ingress certificates. Done once, idempotent.
 func caManifest() string {
 	return `apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
@@ -572,7 +573,7 @@ spec:
 `
 }
 
-// appRoute décrit une route applicative : host "<sub>.<domain>", service cible.
+// appRoute describes an application route: host "<sub>.<domain>", target service.
 type appRoute struct {
 	sub, namespace, service string
 	port                    int
@@ -583,28 +584,28 @@ func ingressesManifest(domain string) string {
 		{sub: "cloud", namespace: "ceffio-files", service: "nextcloud", port: 80},
 		{sub: "keycloak", namespace: "ceffio-identity", service: "keycloak", port: 8080},
 		{sub: "office", namespace: "ceffio-office", service: "onlyoffice", port: 80},
-		// Talk : le signaling server est joint par le NAVIGATEUR (pas seulement
-		// en interne) — il doit donc être exposé, et en WebSocket.
+		// Talk: the signaling server is reached by the BROWSER (not only
+		// internally) — so it must be exposed, and over WebSocket.
 		{sub: "spreed", namespace: "ceffio-video", service: "talk-signaling", port: 8081},
-		// Le coffre a besoin d'une adresse PUBLIQUE, et pas pour l'affichage :
-		// l'authentification OIDC renvoie le navigateur vers une adresse de
-		// retour, qui doit être joignable et en TLS. Un coffre accessible
-		// seulement par un port en clair ne peut pas authentifier d'humain.
+		// The vault needs a PUBLIC address, and not for display: OIDC
+		// authentication sends the browser back to a return address, which must
+		// be reachable and over TLS. A vault only reachable on a clear-text port
+		// cannot authenticate a human.
 		{sub: "bao", namespace: "ceffio-vault", service: "openbao", port: 8200},
 	}
 	var sb strings.Builder
 	for _, r := range routes {
-		// Annotations supplémentaires, propres à certaines routes.
+		// Extra annotations, specific to certain routes.
 		//
-		// POURQUOI ICI ET PAS DANS UN CHAMP DE appRoute : une seule route a
-		// besoin d'annotations aujourd'hui (le signaling, dont les connexions
-		// WebSocket durent des heures). Un champ dans la structure suggérerait
-		// que toutes les routes en ont, alors que l'immense majorité n'en a pas.
+		// WHY HERE AND NOT IN A FIELD OF appRoute: only one route needs
+		// annotations today (the signaling, whose WebSocket connections last for
+		// hours). A field in the structure would suggest that all routes have
+		// them, while the vast majority do not.
 		//
-		// ATTENTION AU YAML : une ligne d'annotation mal formée ou un index
-		// Fprintf mal numéroté produit un manifeste invalide, et kubectl refuse
-		// TOUT le lot (pas seulement la route concernée). Les index ci-dessous
-		// sont explicites pour cette raison.
+		// WATCH THE YAML: a malformed annotation line or a mis-numbered Fprintf
+		// index produces an invalid manifest, and kubectl refuses the WHOLE batch
+		// (not just the affected route). The indexes below are explicit for that
+		// reason.
 		ann := ""
 		if r.sub == "spreed" {
 			ann = "    traefik.ingress.kubernetes.io/proxy-read-timeout: \"3600\"\n" +

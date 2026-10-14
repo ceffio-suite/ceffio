@@ -1,30 +1,29 @@
-// Package k8sapi est LA PORTE D'ENTRÉE UNIQUE vers le cluster.
+// Package k8sapi is THE SINGLE ENTRY POINT to the cluster.
 //
-// POURQUOI CE PAQUET EXISTE. Le module du coffre parlait au cluster en lançant
-// `kubectl` et en lisant sa sortie. Cela a produit cinq défauts, tous de la même
-// famille : confondre « je n'ai pas pu demander » avec « on m'a répondu ».
+// WHY THIS PACKAGE EXISTS. The vault module used to talk to the cluster by
+// launching `kubectl` and reading its output. That produced five defects, all
+// of the same family: confusing "I could not ask" with "I was answered".
 //
-//  1. `kubectl run` mêle ses messages d'accompagnement à la sortie utile : une
-//     clé de 32 octets est devenue un Secret de 309 caractères contenant le mot
-//     « pod deleted ».
-//  2. `CombinedOutput` fusionne la sortie standard et la sortie d'erreur, et
-//     `kubectl exec` s'en accommode mal : « failed to start exec ».
-//  3. Un code de sortie non nul peut vouloir dire « la commande a tourné et a
-//     rendu un verdict » (le cas de `bao status` scellé) ou « la commande n'a
-//     pas pu tourner ». Les confondre a fait croire qu'un coffre répondait
-//     « non initialisé » alors qu'il n'avait jamais été interrogé.
-//  4. Une commande absente de l'image (`curl`) produisait un message d'erreur
-//     qui, analysé comme du JSON, redevenait un objet vide — donc un état
-//     plausible, et faux.
-//  5. Un jsonpath qui revient vide pour une raison qu'on n'a jamais élucidée.
+//  1. `kubectl run` mixes its side messages into the useful output: a 32-byte
+//     key became a 309-character Secret containing the word "pod deleted".
+//  2. `CombinedOutput` merges standard output and standard error, and
+//     `kubectl exec` copes badly with it: "failed to start exec".
+//  3. A non-zero exit code can mean "the command ran and rendered a verdict"
+//     (the case of a sealed `bao status`) or "the command could not run".
+//     Confusing the two once made us believe a vault answered "not
+//     initialized" when it had never been queried.
+//  4. A command missing from the image (`curl`) produced an error message
+//     which, parsed as JSON, became an empty object again — hence a
+//     plausible state, and a false one.
+//  5. A jsonpath that comes back empty for a reason we never elucidated.
 //
-// L'API Kubernetes, elle, est TYPÉE. Un `Secret` est un `Secret`, pas du texte
-// qu'il faut découper ; une erreur est une erreur, pas une sortie qu'il faut
-// interpréter. Ce paquet supprime la classe entière de défauts en supprimant
-// l'intermédiaire : plus de binaire externe dont on devine le comportement.
+// The Kubernetes API, on the other hand, is TYPED. A `Secret` is a `Secret`,
+// not text to be cut up; an error is an error, not output to interpret. This
+// package removes the whole class of defects by removing the intermediary: no
+// more external binary whose behavior we guess.
 //
-// RÈGLE : tout ce qui parle au cluster passe par ici. Un appel direct à
-// `kubectl` ailleurs dans le code est une régression.
+// RULE: everything that talks to the cluster goes through here. A direct call
+// to `kubectl` elsewhere in the code is a regression.
 package k8sapi
 
 import (
@@ -50,44 +49,43 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// Client regroupe les accès au cluster. Il est construit UNE fois, et sa
-// construction ÉCHOUE FRANCHEMENT si le cluster est injoignable.
+// Client groups the accesses to the cluster. It is built ONCE, and its
+// construction FAILS FRANKLY if the cluster is unreachable.
 //
-// C'est le point le plus important du paquet : la version précédente laissait
-// une configuration introuvable se manifester plus tard, sous la forme d'une
-// sortie vide qu'on interprétait comme un état. Ici, pas de cluster : pas de
-// client, et l'appelant le sait immédiatement.
+// This is the most important point of the package: the previous version let a
+// missing configuration show up later, as empty output that we interpreted as
+// a state. Here, no cluster: no client, and the caller knows immediately.
 type Client struct {
 	cfg *rest.Config
 	cs  kubernetes.Interface
 	dyn dynamic.Interface
 }
 
-// Nouveau construit la porte d'entrée unique.
+// Nouveau builds the single entry point.
 func Nouveau() (*Client, error) {
 	cfg, err := chargerConfig()
 	if err != nil {
 		return nil, err
 	}
-	// Un délai court : on préfère un échec net à une attente indéfinie.
+	// A short timeout: we prefer a clean failure to an indefinite wait.
 	cfg.Timeout = 30 * time.Second
 
 	cs, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("client Kubernetes : %w", err)
+		return nil, fmt.Errorf("Kubernetes client: %w", err)
 	}
 	dyn, err := dynamic.NewForConfig(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("client dynamique : %w", err)
+		return nil, fmt.Errorf("dynamic client: %w", err)
 	}
 	return &Client{cfg: cfg, cs: cs, dyn: dyn}, nil
 }
 
-// chargerConfig résout la configuration, dans l'ordre des conventions :
-// KUBECONFIG s'il est posé, sinon ~/.kube/config.
+// chargerConfig resolves the configuration, in the order of the conventions:
+// KUBECONFIG if set, otherwise ~/.kube/config.
 //
-// L'ÉCHEC EST EXPLICITE et dit quoi faire. Une configuration absente ne doit pas
-// pouvoir ressembler à un cluster vide.
+// THE FAILURE IS EXPLICIT and says what to do. A missing configuration must
+// not be able to look like an empty cluster.
 func chargerConfig() (*rest.Config, error) {
 	if cfg, err := rest.InClusterConfig(); err == nil {
 		return cfg, nil
@@ -96,16 +94,16 @@ func chargerConfig() (*rest.Config, error) {
 	if chemin == "" {
 		home, err := os.UserHomeDir()
 		if err != nil || home == "" {
-			return nil, fmt.Errorf("dossier personnel introuvable : impossible de localiser le kubeconfig")
+			return nil, fmt.Errorf("home directory not found: cannot locate the kubeconfig")
 		}
 		chemin = filepath.Join(home, ".kube", "config")
 	}
 	if _, err := os.Stat(chemin); err != nil {
-		return nil, fmt.Errorf("kubeconfig introuvable (%s) : le cluster n'est pas joignable depuis cette machine", chemin)
+		return nil, fmt.Errorf("kubeconfig not found (%s): the cluster is not reachable from this machine", chemin)
 	}
 	cfg, err := clientcmd.BuildConfigFromFlags("", chemin)
 	if err != nil {
-		return nil, fmt.Errorf("kubeconfig illisible (%s) : %w", chemin, err)
+		return nil, fmt.Errorf("kubeconfig unreadable (%s): %w", chemin, err)
 	}
 	return cfg, nil
 }
@@ -114,21 +112,22 @@ func chargerConfig() (*rest.Config, error) {
 // Secrets
 // ---------------------------------------------------------------------------
 
-// LireSecret rend la valeur d'une clé, ou "" si le Secret ou la clé n'existe pas.
+// LireSecret returns the value of a key, or "" if the Secret or the key does
+// not exist.
 //
-// L'absence n'est PAS une erreur : c'est un état normal, et l'appelant décide.
+// Absence is NOT an error: it is a normal state, and the caller decides.
 func (c *Client) LireSecret(ctx context.Context, ns, nom, cle string) (string, error) {
 	s, err := c.cs.CoreV1().Secrets(ns).Get(ctx, nom, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return "", nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("lecture du secret %s/%s : %w", ns, nom, err)
+		return "", fmt.Errorf("reading secret %s/%s: %w", ns, nom, err)
 	}
 	return string(s.Data[cle]), nil
 }
 
-// PoserSecret crée ou remplace un Secret. Idempotent.
+// PoserSecret creates or replaces a Secret. Idempotent.
 func (c *Client) PoserSecret(ctx context.Context, ns, nom string, donnees map[string][]byte) error {
 	s := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: nom, Namespace: ns},
@@ -137,15 +136,15 @@ func (c *Client) PoserSecret(ctx context.Context, ns, nom string, donnees map[st
 	if _, err := c.cs.CoreV1().Secrets(ns).Create(ctx, s, metav1.CreateOptions{}); err == nil {
 		return nil
 	} else if !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("création du secret %s/%s : %w", ns, nom, err)
+		return fmt.Errorf("creating secret %s/%s: %w", ns, nom, err)
 	}
 	if _, err := c.cs.CoreV1().Secrets(ns).Update(ctx, s, metav1.UpdateOptions{}); err != nil {
-		return fmt.Errorf("mise à jour du secret %s/%s : %w", ns, nom, err)
+		return fmt.Errorf("updating secret %s/%s: %w", ns, nom, err)
 	}
 	return nil
 }
 
-// SupprimerSecret supprime un Secret, sans échouer s'il n'existe pas.
+// SupprimerSecret deletes a Secret, without failing if it does not exist.
 func (c *Client) SupprimerSecret(ctx context.Context, ns, nom string) error {
 	if err := c.cs.CoreV1().Secrets(ns).Delete(ctx, nom, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		return err
@@ -154,27 +153,27 @@ func (c *Client) SupprimerSecret(ctx context.Context, ns, nom string) error {
 }
 
 // ---------------------------------------------------------------------------
-// Application de manifestes
+// Manifest application
 // ---------------------------------------------------------------------------
 
-// Appliquer pose un manifeste YAML, éventuellement multi-documents.
+// Appliquer applies a YAML manifest, possibly multi-document.
 //
-// On décode en objets non structurés et on applique par le client dynamique :
-// c'est l'équivalent de `kubectl apply`, en typé, sans binaire externe.
+// We decode into unstructured objects and apply via the dynamic client: this
+// is the equivalent of `kubectl apply`, typed, without an external binary.
 func (c *Client) Appliquer(ctx context.Context, manifeste string) error {
 	for _, doc := range decouper(manifeste) {
-		// YAML VERS JSON, PUIS UNSTRUCTURED. C'est le chemin fiable : le
-		// décodeur universel ne connaît pas forcément les types qu'on lui donne,
-		// et `UnmarshalJSON` sur des octets YAML échoue silencieusement ou
-		// produit un objet vide — exactement le genre de faux état qu'on
-		// cherche à éliminer.
+		// YAML TO JSON, THEN UNSTRUCTURED. This is the reliable path: the
+		// universal decoder does not necessarily know the types we give it,
+		// and `UnmarshalJSON` on YAML bytes fails silently or produces an
+		// empty object — exactly the kind of false state we are trying to
+		// eliminate.
 		brut, err := yaml.YAMLToJSON([]byte(doc))
 		if err != nil {
-			return fmt.Errorf("manifeste illisible : %w", err)
+			return fmt.Errorf("unreadable manifest: %w", err)
 		}
 		obj := &unstructured.Unstructured{}
 		if err := obj.UnmarshalJSON(brut); err != nil {
-			return fmt.Errorf("manifeste illisible : %w", err)
+			return fmt.Errorf("unreadable manifest: %w", err)
 		}
 		if obj.GetName() == "" {
 			continue
@@ -207,41 +206,43 @@ func (c *Client) appliquerObjet(ctx context.Context, obj *unstructured.Unstructu
 		return nil
 	}
 	if !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("application de %s/%s : %w", gvk.Kind, obj.GetName(), err)
+		return fmt.Errorf("applying %s/%s: %w", gvk.Kind, obj.GetName(), err)
 	}
-	// Existe déjà : on remplace, en conservant la version de ressource pour
-	// éviter un conflit de mise à jour optimiste.
+	// Already exists: we replace it, keeping the resource version to avoid an
+	// optimistic update conflict.
 	actuel, err := ri.Get(ctx, obj.GetName(), metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
 
-	// LES nodePort DÉJÀ ATTRIBUÉS SONT REPORTÉS, et ce n'est pas un détail.
+	// THE ALREADY-ALLOCATED nodePort VALUES ARE CARRIED OVER, and this is not
+	// a detail.
 	//
-	// Un NodePort est une ressource DU CLUSTER : Kubernetes l'attribue une fois
-	// et le réserve. Appliquer un manifeste qui ne le mentionne plus demande donc
-	// implicitement d'en attribuer un autre — et l'opération échoue sur
-	// « provided port is already allocated », mesuré en service. Le service se
-	// détenait alors son propre port, et refusait de se mettre à jour.
+	// A NodePort is a resource OF THE CLUSTER: Kubernetes allocates it once
+	// and reserves it. Applying a manifest that no longer mentions it
+	// therefore implicitly asks for another one — and the operation fails on
+	// "provided port is already allocated", measured in service. The
+	// service then held its own port, and refused to update itself.
 	//
-	// On reporte les valeurs existantes pour que la mise à jour soit réellement
-	// idempotente : réappliquer le même manifeste ne doit rien changer.
+	// We carry over the existing values so the update is truly idempotent:
+	// re-applying the same manifest must change nothing.
 	if gvk.Kind == "Service" {
 		reporterNodePorts(actuel, obj)
 	}
 
 	obj.SetResourceVersion(actuel.GetResourceVersion())
 	if _, err := ri.Update(ctx, obj, metav1.UpdateOptions{}); err != nil {
-		return fmt.Errorf("mise à jour de %s/%s : %w", gvk.Kind, obj.GetName(), err)
+		return fmt.Errorf("updating %s/%s: %w", gvk.Kind, obj.GetName(), err)
 	}
 	return nil
 }
 
-// reporterNodePorts recopie les nodePort déjà attribués de l'objet existant vers
-// l'objet voulu, en appariant les ports par leur nom.
+// reporterNodePorts copies the already-allocated nodePort values from the
+// existing object to the wanted object, matching ports by their name.
 //
-// On apparie PAR NOM et non par position : l'ordre des ports n'est pas garanti,
-// et apparier par index attribuerait le port d'un service à un autre.
+// We match BY NAME and not by position: the order of the ports is not
+// guaranteed, and matching by index would assign one service's port to
+// another.
 func reporterNodePorts(actuel, voulu *unstructured.Unstructured) {
 	portsVoulus, ok, _ := unstructured.NestedSlice(voulu.Object, "spec", "ports")
 	if !ok {
@@ -274,19 +275,19 @@ func reporterNodePorts(actuel, voulu *unstructured.Unstructured) {
 	_ = unstructured.SetNestedSlice(voulu.Object, portsVoulus, "spec", "ports")
 }
 
-// ressourceDe traduit un type d'objet en ressource d'API.
+// ressourceDe translates an object type into an API resource.
 //
-// DEUX CHEMINS, ET LE SECOND EST LE PLUS IMPORTANT. Le premier est une table
-// locale : elle répond sans appel réseau, pour les types les plus courants. Le
-// second DEMANDE au cluster, et c'est lui qui supprime un défaut que la table
-// seule produisait : chaque nouveau type d'objet — un ServiceAccount, une
-// liaison de rôle — échouait sur « type d'objet non pris en charge ». Ce refus
-// ne parle pas du manifeste qu'on essaie d'appliquer, et il fallait le corriger
-// dans le code plutôt que dans le manifeste. Constaté en service.
+// TWO PATHS, AND THE SECOND IS THE MOST IMPORTANT. The first is a local
+// table: it answers without a network call, for the most common types. The
+// second ASKS the cluster, and it is the one that removes a defect the table
+// alone produced: each new object type — a ServiceAccount, a role binding —
+// failed on "type d'objet non pris en charge". This refusal says nothing
+// about the manifest one is trying to apply, and it had to be fixed in the
+// code rather than in the manifest. Observed in service.
 //
-// La table évite un aller-retour dans le cas courant ; le cluster reste la
-// référence pour tout le reste. Une table qui prétendrait couvrir tous les types
-// possibles est une table qu'on oublie de compléter.
+// The table avoids a round-trip in the common case; the cluster remains the
+// reference for everything else. A table that would claim to cover every
+// possible type is a table one forgets to complete.
 func (c *Client) ressourceDe(gvk schema.GroupVersionKind) (schema.GroupVersionResource, error) {
 	switch gvk.Kind {
 	case "Namespace":
@@ -308,16 +309,16 @@ func (c *Client) ressourceDe(gvk schema.GroupVersionKind) (schema.GroupVersionRe
 		return r, nil
 	}
 	return schema.GroupVersionResource{},
-		fmt.Errorf("type d'objet introuvable : %s (absent de la table locale, et le cluster ne l'annonce pas)", gvk.Kind)
+		fmt.Errorf("object type not found: %s (absent from the local table, and the cluster does not advertise it)", gvk.Kind)
 }
 
-// chercherDansCluster interroge la découverte du cluster et retient la première
-// ressource dont le Kind correspond.
+// chercherDansCluster queries the cluster's discovery and keeps the first
+// resource whose Kind matches.
 func (c *Client) chercherDansCluster(gvk schema.GroupVersionKind) (schema.GroupVersionResource, bool) {
 	listes, err := c.cs.Discovery().ServerPreferredResources()
-	// Une erreur partielle est NORMALE : le cluster annonce parfois des groupes
-	// dont une API est momentanément absente. On continue avec ce qu'on a reçu ;
-	// seul le cas « rien du tout » est un échec.
+	// A partial error is NORMAL: the cluster sometimes advertises groups
+	// where one API is momentarily absent. We continue with what we received;
+	// only the "nothing at all" case is a failure.
 	if err != nil && len(listes) == 0 {
 		return schema.GroupVersionResource{}, false
 	}
@@ -327,14 +328,14 @@ func (c *Client) chercherDansCluster(gvk schema.GroupVersionKind) (schema.GroupV
 		if err != nil {
 			continue
 		}
-		// Un Kind peut exister dans plusieurs groupes (« Deployment » autrefois).
-		// Quand le manifeste nomme un groupe, on s'y tient.
+		// A Kind may exist in several groups ("Deployment" in the old days).
+		// When the manifest names a group, we stick to it.
 		if groupe != "" && gv.Group != groupe {
 			continue
 		}
 		for _, r := range l.APIResources {
-			// Les sous-ressources (« pods/exec ») ne s'appliquent pas à un
-			// manifeste : les écarter évite de produire une ressource inutilisable.
+			// Sub-resources ("pods/exec") do not apply to a manifest:
+			// dropping them avoids producing an unusable resource.
 			if strings.Contains(r.Name, "/") || r.Kind != gvk.Kind {
 				continue
 			}
@@ -344,7 +345,7 @@ func (c *Client) chercherDansCluster(gvk schema.GroupVersionKind) (schema.GroupV
 	return schema.GroupVersionResource{}, false
 }
 
-// decouper sépare les documents d'un manifeste multi-documents.
+// decouper separates the documents of a multi-document manifest.
 func decouper(manifeste string) []string {
 	var docs []string
 	for _, bloc := range strings.Split(manifeste, "\n---") {
@@ -356,32 +357,31 @@ func decouper(manifeste string) []string {
 }
 
 // ---------------------------------------------------------------------------
-// Pods et exécution
+// Pods and execution
 // ---------------------------------------------------------------------------
 
-// NoeudDuPod rend le nœud sur lequel le pod est installé, ou "" s'il ne l'est
-// pas encore.
+// NoeudDuPod returns the node the pod is scheduled on, or "" if it is not yet.
 //
-// TYPÉ, DONC FIABLE : plus de jsonpath dont l'échec se confond avec un résultat
-// vide.
+// TYPED, HENCE RELIABLE: no more jsonpath whose failure is confused with an
+// empty result.
 func (c *Client) NoeudDuPod(ctx context.Context, ns, pod string) (string, error) {
 	p, err := c.cs.CoreV1().Pods(ns).Get(ctx, pod, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return "", nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("lecture du pod %s/%s : %w", ns, pod, err)
+		return "", fmt.Errorf("reading pod %s/%s: %w", ns, pod, err)
 	}
 	return p.Spec.NodeName, nil
 }
 
-// Executer lance une commande DANS un conteneur, et rend sa sortie.
+// Executer runs a command INSIDE a container, and returns its output.
 //
-// SORTIES SÉPARÉES, comme un terminal : c'est le comportement auquel `kubectl`
-// ne se tenait pas, et qui provoquait « failed to start exec ».
+// SEPARATE OUTPUTS, like a terminal: this is the behavior `kubectl` did not
+// hold to, and which caused "failed to start exec".
 //
-// L'erreur rendue distingue explicitement l'échec d'exécution du verdict de la
-// commande : l'appelant ne peut plus confondre les deux.
+// The returned error explicitly distinguishes the execution failure from the
+// command's verdict: the caller can no longer confuse the two.
 func (c *Client) Executer(ctx context.Context, ns, pod, conteneur string, args ...string) (string, error) {
 	req := c.cs.CoreV1().RESTClient().Post().
 		Resource("pods").Name(pod).Namespace(ns).
@@ -395,26 +395,26 @@ func (c *Client) Executer(ctx context.Context, ns, pod, conteneur string, args .
 
 	executeur, err := remotecommand.NewSPDYExecutor(c.cfg, "POST", req.URL())
 	if err != nil {
-		return "", fmt.Errorf("exécution impossible dans %s/%s : %w", ns, pod, err)
+		return "", fmt.Errorf("execution impossible in %s/%s: %w", ns, pod, err)
 	}
 	var sortie, errs bytes.Buffer
 	if err := executeur.StreamWithContext(ctx, remotecommand.StreamOptions{
 		Stdout: &sortie, Stderr: &errs,
 	}); err != nil {
 		return sortie.String() + errs.String(),
-			fmt.Errorf("%w (sortie : %.200s)", err, errs.String())
+			fmt.Errorf("%w (output: %.200s)", err, errs.String())
 	}
 	return sortie.String() + errs.String(), nil
 }
 
-// ExecuterAvecEntree lance une commande DANS un conteneur en alimentant son
-// entrée standard.
+// ExecuterAvecEntree runs a command INSIDE a container while feeding its
+// standard input.
 //
-// POURQUOI CE N'EST PAS UN DÉTAIL : un secret transmis par l'entrée standard ne
-// laisse aucune trace — ni dans la table des processus du conteneur, ni sur son
-// disque. Le passer en argument l'exposerait à quiconque peut lister les
-// processus ; l'écrire dans un fichier laisserait une fenêtre pendant laquelle
-// il est lisible. L'entrée standard n'a ni l'un ni l'autre de ces défauts.
+// WHY THIS IS NOT A DETAIL: a secret passed through standard input leaves no
+// trace — neither in the container's process table, nor on its disk. Passing
+// it as an argument would expose it to anyone who can list the processes;
+// writing it to a file would leave a window during which it is readable.
+// Standard input has neither of those defects.
 func (c *Client) ExecuterAvecEntree(ctx context.Context, ns, pod, conteneur, entree string, args ...string) (string, error) {
 	req := c.cs.CoreV1().RESTClient().Post().
 		Resource("pods").Name(pod).Namespace(ns).
@@ -429,7 +429,7 @@ func (c *Client) ExecuterAvecEntree(ctx context.Context, ns, pod, conteneur, ent
 
 	executeur, err := remotecommand.NewSPDYExecutor(c.cfg, "POST", req.URL())
 	if err != nil {
-		return "", fmt.Errorf("exécution impossible dans %s/%s : %w", ns, pod, err)
+		return "", fmt.Errorf("execution impossible in %s/%s: %w", ns, pod, err)
 	}
 	var sortie, errs bytes.Buffer
 	if err := executeur.StreamWithContext(ctx, remotecommand.StreamOptions{
@@ -438,23 +438,24 @@ func (c *Client) ExecuterAvecEntree(ctx context.Context, ns, pod, conteneur, ent
 		Stderr: &errs,
 	}); err != nil {
 		return sortie.String() + errs.String(),
-			fmt.Errorf("%w (sortie : %.200s)", err, errs.String())
+			fmt.Errorf("%w (output: %.200s)", err, errs.String())
 	}
 	return sortie.String() + errs.String(), nil
 }
 
-// NodePortDuService rend le port externe attribué à un service, pour un port
-// nommé, ou 0 s'il n'y en a pas.
+// NodePortDuService returns the external port allocated to a service, for a
+// named port, or 0 if there is none.
 //
-// POURQUOI ON LE LIT AU LIEU DE LE FIXER : un NodePort est une ressource DU
-// CLUSTER ENTIER, pas du namespace. Le figer dans un manifeste réserve ce numéro
-// pour toute la vie du cluster — et une recréation échoue alors sur « provided
-// port is already allocated », mesuré en service. Laisser Kubernetes attribuer,
-// puis LIRE, supprime la réservation et la valeur figée du même coup.
+// WHY WE READ IT INSTEAD OF FIXING IT: a NodePort is a resource of the WHOLE
+// CLUSTER, not of the namespace. Freezing it in a manifest reserves that
+// number for the whole life of the cluster — and a re-creation then fails on
+// "provided port is already allocated", measured in service. Letting
+// Kubernetes allocate, then READING, removes the reservation and the frozen
+// value in one go.
 func (c *Client) NodePortDuService(ctx context.Context, ns, nom, port string) (int32, error) {
 	svc, err := c.cs.CoreV1().Services(ns).Get(ctx, nom, metav1.GetOptions{})
 	if err != nil {
-		return 0, fmt.Errorf("lecture du service %s/%s : %w", ns, nom, err)
+		return 0, fmt.Errorf("reading service %s/%s: %w", ns, nom, err)
 	}
 	for _, p := range svc.Spec.Ports {
 		if p.Name == port {
@@ -464,11 +465,11 @@ func (c *Client) NodePortDuService(ctx context.Context, ns, nom, port string) (i
 	return 0, nil
 }
 
-// WebhookEstPret dit si un webhook mutateur a publié sa graine de confiance.
+// WebhookEstPret says whether a mutating webhook has published its trust seed.
 //
-// C'EST LE SEUL SIGNAL QUI PROUVE QUE L'INJECTION FONCTIONNERA : l'injecteur écrit
-// ce caBundle lui-même, une fois son certificat généré. Un pod « Ready » ne le
-// prouve pas — il peut être prêt avant d'avoir patché son webhook.
+// THIS IS THE ONLY SIGNAL THAT PROVES INJECTION WILL WORK: the injector writes
+// this caBundle itself, once its certificate is generated. A "Ready" pod does
+// not prove it — it can be ready before having patched its webhook.
 func (c *Client) WebhookEstPret(ctx context.Context, nom string) (bool, error) {
 	wh, err := c.cs.AdmissionregistrationV1().MutatingWebhookConfigurations().Get(ctx, nom, metav1.GetOptions{})
 	if err != nil {
@@ -480,10 +481,10 @@ func (c *Client) WebhookEstPret(ctx context.Context, nom string) (bool, error) {
 	return len(wh.Webhooks[0].ClientConfig.CABundle) > 0, nil
 }
 
-// AttendrePodInstalle attend que le pod soit affecté à un nœud.
+// AttendrePodInstalle waits until the pod is assigned to a node.
 //
-// Le message dit CE QU'ON A VU : un contrôle muet qui se trompe fait perdre des
-// minutes, constaté en service.
+// The message says WHAT WE SAW: a silent check that gets it wrong wastes
+// minutes, observed in service.
 func (c *Client) AttendrePodInstalle(ctx context.Context, ns, pod string, limite time.Duration) (string, error) {
 	fin := time.Now().Add(limite)
 	var dernier string
@@ -494,9 +495,9 @@ func (c *Client) AttendrePodInstalle(ctx context.Context, ns, pod string, limite
 		} else if noeud != "" {
 			return noeud, nil
 		} else {
-			dernier = "pod présent mais sans nœud"
+			dernier = "pod present but not scheduled on a node"
 		}
 		time.Sleep(3 * time.Second)
 	}
-	return "", fmt.Errorf("pod %s/%s non installé après %s (%s)", ns, pod, limite, dernier)
+	return "", fmt.Errorf("pod %s/%s not scheduled after %s (%s)", ns, pod, limite, dernier)
 }

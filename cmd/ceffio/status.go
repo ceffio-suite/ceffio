@@ -15,13 +15,13 @@ func newStatusCmd() *cobra.Command {
 
 	c := &cobra.Command{
 		Use:   "status",
-		Short: "Afficher l'état du déploiement Ceffio",
-		Long: `Affiche l'état réel de la pile Ceffio : nœuds, couches applicatives,
-ingress, certificats TLS et services exposés.
+		Short: "Show the state of the Ceffio deployment",
+		Long: `Shows the real state of the Ceffio stack: nodes, application layers,
+ingress, TLS certificates and exposed services.
 
-Lit l'état directement dans le cluster (aucun fichier d'inventaire à maintenir) :
-si une couche est absente ou cassée, la commande le dit, ce qui reste vrai même
-après une modification manuelle du cluster.`,
+Reads the state directly from the cluster (no inventory file to maintain):
+if a layer is missing or broken, the command says so, which stays true even
+after a manual modification of the cluster.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st := stack.Collect(cmd.Context())
 			if asJSON {
@@ -34,31 +34,31 @@ après une modification manuelle du cluster.`,
 		},
 	}
 
-	c.Flags().BoolVar(&asJSON, "json", false, "Sortie JSON (pour scripts et supervision)")
-	c.Flags().BoolVar(&showPods, "pods", false, "Détailler chaque pod (nom, état, redémarrages)")
+	c.Flags().BoolVar(&asJSON, "json", false, "JSON output (for scripts and monitoring)")
+	c.Flags().BoolVar(&showPods, "pods", false, "Detail every pod (name, state, restarts)")
 
 	return c
 }
 
 func printStatus(st *stack.State, showPods bool) {
 	if !st.ClusterReachable {
-		fmt.Println("Ceffio — état du déploiement")
+		fmt.Println("Ceffio — deployment state")
 		fmt.Println()
-		fmt.Println("✗ Cluster injoignable")
+		fmt.Println("✗ Cluster unreachable")
 		fmt.Printf("  %s\n", st.ClusterError)
 		fmt.Println()
-		fmt.Println("Causes fréquentes :")
-		fmt.Println("  · Ceffio n'est pas installé sur cette machine")
-		fmt.Println("  · le service k3s est arrêté          → systemctl status k3s")
-		fmt.Println("  · le kubeconfig est absent ou illisible")
+		fmt.Println("Common causes:")
+		fmt.Println("  · Ceffio is not installed on this machine")
+		fmt.Println("  · the k3s service is stopped        → systemctl status k3s")
+		fmt.Println("  · the kubeconfig is missing or unreadable")
 		os.Exit(1)
 	}
 
-	fmt.Println("Ceffio — état du déploiement")
+	fmt.Println("Ceffio — deployment state")
 	fmt.Println()
 
 	// Cluster
-	fmt.Printf("Cluster   %d/%d nœud(s) prêt(s)\n", st.NodesReady, len(st.Nodes))
+	fmt.Printf("Cluster   %d/%d node(s) ready\n", st.NodesReady, len(st.Nodes))
 	for _, n := range st.Nodes {
 		mark := "✓"
 		if !n.Ready {
@@ -68,12 +68,12 @@ func printStatus(st *stack.State, showPods bool) {
 	}
 
 	if st.Domain != "" {
-		fmt.Printf("Domaine   %s\n", st.Domain)
+		fmt.Printf("Domain    %s\n", st.Domain)
 	}
 
-	// Couches
+	// Layers
 	fmt.Println()
-	fmt.Println("Couches")
+	fmt.Println("Layers")
 	width := 0
 	for _, l := range st.Layers {
 		if len(l.Name) > width {
@@ -88,11 +88,11 @@ func printStatus(st *stack.State, showPods bool) {
 			note = "absent"
 		case l.Ready < l.Total:
 			mark = "✗"
-			note = fmt.Sprintf("%d pod(s) non prêt(s)", l.Total-l.Ready)
+			note = fmt.Sprintf("%d pod(s) not ready", l.Total-l.Ready)
 		}
 		line := fmt.Sprintf("  %s %-*s  %2d/%-2d", mark, width, l.Name, l.Ready, l.Total)
 		if l.Restarts > 0 {
-			line += fmt.Sprintf("   redémarrages : %d", l.Restarts)
+			line += fmt.Sprintf("   restarts: %d", l.Restarts)
 		}
 		if note != "" {
 			line += "   " + note
@@ -107,7 +107,7 @@ func printStatus(st *stack.State, showPods bool) {
 				}
 				extra := ""
 				if p.Restarts > 0 {
-					extra = fmt.Sprintf("  (%d redémarrage(s))", p.Restarts)
+					extra = fmt.Sprintf("  (%d restart(s))", p.Restarts)
 				}
 				if p.Phase != "Running" && p.Phase != "" {
 					extra += "  [" + p.Phase + "]"
@@ -120,13 +120,13 @@ func printStatus(st *stack.State, showPods bool) {
 	// Ingress
 	if len(st.Ingresses) > 0 {
 		fmt.Println()
-		fmt.Println("Accès (ingress)")
+		fmt.Println("Access (ingress)")
 		for _, i := range st.Ingresses {
 			fmt.Printf("  https://%s\n", i.Host)
 		}
 	}
 
-	// Certificats
+	// Certificates
 	if len(st.Certificates) > 0 {
 		ready := 0
 		for _, c := range st.Certificates {
@@ -135,7 +135,7 @@ func printStatus(st *stack.State, showPods bool) {
 			}
 		}
 		fmt.Println()
-		fmt.Printf("Certificats TLS   %d/%d prêt(s)\n", ready, len(st.Certificates))
+		fmt.Printf("TLS certificates   %d/%d ready\n", ready, len(st.Certificates))
 		for _, c := range st.Certificates {
 			mark := "✓"
 			if !c.Ready {
@@ -149,11 +149,11 @@ func printStatus(st *stack.State, showPods bool) {
 		}
 	}
 
-	// Services exposés
+	// Exposed services
 	lb := filterServices(st.Services)
 	if len(lb) > 0 {
 		fmt.Println()
-		fmt.Println("Services exposés")
+		fmt.Println("Exposed services")
 		for _, s := range lb {
 			addr := s.IP
 			if addr == "" {
@@ -165,20 +165,20 @@ func printStatus(st *stack.State, showPods bool) {
 
 	// Verdict
 	fmt.Println()
-	fmt.Printf("Pods : %d/%d prêts", st.ReadyPods, st.TotalPods)
+	fmt.Printf("Pods: %d/%d ready", st.ReadyPods, st.TotalPods)
 	if st.TotalRestarts > 0 {
-		fmt.Printf(" · %d redémarrage(s) cumulé(s)", st.TotalRestarts)
+		fmt.Printf(" · %d cumulative restart(s)", st.TotalRestarts)
 	}
 	fmt.Println()
 	if st.ReadyPods == st.TotalPods && st.TotalPods > 0 && st.NodesReady == len(st.Nodes) {
-		fmt.Println("✓ Plateforme opérationnelle")
+		fmt.Println("✓ Platform operational")
 	} else {
-		fmt.Println("✗ État dégradé — lancez `ceffio doctor` pour le diagnostic détaillé")
+		fmt.Println("✗ Degraded state — run `ceffio doctor` for the detailed diagnostic")
 		os.Exit(1)
 	}
 }
 
-// filterServices ne garde que ce par quoi on entre dans la plateforme.
+// filterServices keeps only the services through which we enter the platform.
 func filterServices(all []stack.Service) []stack.Service {
 	out := []stack.Service{}
 	for _, s := range all {

@@ -16,17 +16,17 @@ func newDoctorCmd() *cobra.Command {
 
 	c := &cobra.Command{
 		Use:   "doctor",
-		Short: "Diagnostiquer l'état de la plateforme",
-		Long: `Vérifie la plateforme couche par couche et signale les problèmes réellement
-détectables : nœuds non prêts, pods en échec ou en boucle de redémarrage, certificats
-non délivrés, services exposés sans adresse, ingress sans réponse.
+		Short: "Diagnose the state of the platform",
+		Long: `Checks the platform layer by layer and reports the problems that are actually
+detectable: nodes not ready, pods failing or in a restart loop, certificates
+not issued, exposed services without an address, unresponsive ingress.
 
-Chaque problème est rapporté avec une cause probable et une piste de correction —
-ce n'est pas un simple relevé d'état (pour cela, voir « ceffio status »).
+Each problem is reported with a probable cause and a lead for the fix —
+this is not a plain state snapshot (for that, see "ceffio status").
 
-Avec --bundle, produit une archive de support à transmettre au mainteneur :
-elle ne contient AUCUN secret (pas de valeur de Secret, pas de mot de passe,
-pas de clé privée), seulement des états et des journaux expurgés.`,
+With --bundle, produces a support archive to hand to the maintainer:
+it contains NO secret (no Secret value, no password, no private key),
+only states and redacted logs.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st := stack.Collect(cmd.Context())
 			findings := diagnose(st)
@@ -41,10 +41,10 @@ pas de clé privée), seulement des états et des journaux expurgés.`,
 			if bundle {
 				path, err := stack.WriteBundle(report)
 				if err != nil {
-					return fmt.Errorf("production du bundle : %w", err)
+					return fmt.Errorf("producing the bundle: %w", err)
 				}
-				fmt.Printf("\nArchive de support : %s\n", path)
-				fmt.Println("(sans aucun secret : valeurs de Secret, mots de passe et clés privées exclus)")
+				fmt.Printf("\nSupport archive: %s\n", path)
+				fmt.Println("(with no secrets: Secret values, passwords and private keys excluded)")
 			}
 
 			if len(findings) > 0 {
@@ -54,61 +54,61 @@ pas de clé privée), seulement des états et des journaux expurgés.`,
 		},
 	}
 
-	c.Flags().BoolVar(&bundle, "bundle", false, "Produire une archive de support (ceffio-support-*.tar.gz)")
-	c.Flags().BoolVar(&asJSON, "json", false, "Sortie JSON")
+	c.Flags().BoolVar(&bundle, "bundle", false, "Produce a support archive (ceffio-support-*.tar.gz)")
+	c.Flags().BoolVar(&asJSON, "json", false, "JSON output")
 
 	return c
 }
 
-// diagnose transforme un état en liste de problèmes exploitables.
+// diagnose turns a state into a list of actionable problems.
 //
-// Principe : ne signaler que ce sur quoi on peut agir. Un pod « Completed »
-// n'est pas une anomalie (job de migration terminé), alors qu'un pod en
-// CrashLoopBackOff ou un certificat non délivré en sont une.
+// Principle: only report what we can act on. A "Completed" pod is not an
+// anomaly (a finished migration job), whereas a pod in CrashLoopBackOff or an
+// unissued certificate is one.
 func diagnose(st *stack.State) []stack.Finding {
 	var f []stack.Finding
 
 	if !st.ClusterReachable {
 		return append(f, stack.Finding{
-			Severity: "critique", Scope: "cluster", Title: "Cluster Kubernetes injoignable",
+			Severity: "critical", Scope: "cluster", Title: "Kubernetes cluster unreachable",
 			Detail: st.ClusterError,
-			Action: "Vérifier que le service k3s tourne (systemctl status k3s) et que le kubeconfig est lisible.",
+			Action: "Check that the k3s service is running (systemctl status k3s) and that the kubeconfig is readable.",
 		})
 	}
 
-	// Nœuds
+	// Nodes
 	if st.NodesReady < len(st.Nodes) {
 		for _, n := range st.Nodes {
 			if !n.Ready {
 				f = append(f, stack.Finding{
-					Severity: "critique", Scope: "cluster", Title: "Nœud non prêt : " + n.Name,
-					Action: "Inspecter le nœud : kubectl describe node " + n.Name +
-						" (disque plein, mémoire, kubelet arrêté).",
+					Severity: "critical", Scope: "cluster", Title: "Node not ready: " + n.Name,
+					Action: "Inspect the node: kubectl describe node " + n.Name +
+						" (disk full, memory, stopped kubelet).",
 				})
 			}
 		}
 	}
 
-	// Couches applicatives
+	// Application layers
 	for _, l := range st.Layers {
 		switch {
 		case l.Total == 0:
-			// « visio » est réellement facultative (option --video) : son absence
-			// est un avertissement. Toute autre couche absente est critique :
-			// la plateforme ne rend pas le service qu'elle annonce.
-			sev := "critique"
-			if l.Name == "visio" {
-				sev = "avertissement"
+			// "video" is genuinely optional (--video option): its absence is
+			// a warning. Any other missing layer is critical: the platform
+			// does not deliver the service it announces.
+			sev := "critical"
+			if l.Name == "video" {
+				sev = "warning"
 			}
 			f = append(f, stack.Finding{
 				Severity: sev, Scope: l.Name,
-				Title:  fmt.Sprintf("Couche « %s » absente", l.Name),
-				Detail: "Aucun pod dans le namespace " + l.Namespace + ".",
-				Action: "Couche non installée ou mise à l'échelle à zéro : réinstaller, ou kubectl scale -n " +
+				Title:  fmt.Sprintf("Layer %q missing", l.Name),
+				Detail: "No pod in namespace " + l.Namespace + ".",
+				Action: "Layer not installed or scaled to zero: reinstall, or kubectl scale -n " +
 					l.Namespace + " --all --replicas=1.",
 			})
 		case l.Ready < l.Total:
-			detail := fmt.Sprintf("%d pod(s) sur %d ne sont pas prêts.", l.Total-l.Ready, l.Total)
+			detail := fmt.Sprintf("%d pod(s) out of %d are not ready.", l.Total-l.Ready, l.Total)
 			var notReady []string
 			for _, p := range l.Pods {
 				if !p.Ready {
@@ -121,63 +121,63 @@ func diagnose(st *stack.State) []stack.Finding {
 				action = "kubectl logs -n " + l.Namespace + " " + notReady[0] + " --tail=100"
 			}
 			f = append(f, stack.Finding{
-				Severity: "critique", Scope: l.Name,
-				Title: fmt.Sprintf("Couche « %s » dégradée", l.Name), Detail: detail, Action: action,
+				Severity: "critical", Scope: l.Name,
+				Title: fmt.Sprintf("Layer %q degraded", l.Name), Detail: detail, Action: action,
 			})
 		}
 
-		// Redémarrages : un pod qui a redémarré est un signal, même s'il est
-		// actuellement prêt. Au-delà de 3, ce n'est plus un incident transitoire.
+		// Restarts: a pod that has restarted is a signal, even if it is
+		// currently ready. Beyond 3, it is no longer a transient incident.
 		for _, p := range l.Pods {
 			if p.Restarts >= 3 {
 				f = append(f, stack.Finding{
-					Severity: "avertissement", Scope: l.Name,
-					Title:  fmt.Sprintf("%s : %d redémarrages", p.Name, p.Restarts),
-					Detail: "Le pod redémarre de façon répétée — instabilité plutôt qu'incident isolé.",
+					Severity: "warning", Scope: l.Name,
+					Title:  fmt.Sprintf("%s: %d restarts", p.Name, p.Restarts),
+					Detail: "The pod restarts repeatedly — instability rather than an isolated incident.",
 					Action: "kubectl logs -n " + l.Namespace + " " + p.Name + " --previous --tail=100",
 				})
 			}
 		}
 	}
 
-	// Certificats
+	// Certificates
 	for _, c := range st.Certificates {
 		if !c.Ready && strings.Contains(strings.ToLower(c.Condition), "issu") {
 			f = append(f, stack.Finding{
-				Severity: "critique", Scope: "tls",
-				Title:  "Certificat non délivré : " + c.Name,
+				Severity: "critical", Scope: "tls",
+				Title:  "Certificate not issued: " + c.Name,
 				Detail: c.NS + " — " + c.Condition,
 				Action: "kubectl describe certificate -n " + c.NS + " " + c.Name +
-					" ; vérifier que l'issuer (ceffio-ca-issuer) est prêt.",
+					" ; check that the issuer (ceffio-ca-issuer) is ready.",
 			})
 		}
 	}
 
-	// Ingress sans adresse d'entrée : la plateforme répond en interne mais
-	// n'est pas joignable de l'extérieur — piège classique et silencieux.
+	// Ingress without an entry address: the platform answers internally but
+	// is not reachable from outside — a classic, silent trap.
 	for _, s := range st.Services {
 		if s.Type == "LoadBalancer" && s.IP == "" {
 			f = append(f, stack.Finding{
-				Severity: "critique", Scope: "réseau",
-				Title:  "Service exposé sans adresse : " + s.Name,
-				Detail: "Le LoadBalancer n'a pas reçu d'adresse — aucune entrée externe possible.",
+				Severity: "critical", Scope: "network",
+				Title:  "Exposed service without an address: " + s.Name,
+				Detail: "The LoadBalancer received no address — no external entry possible.",
 				Action: "kubectl get svc -n " + s.NS + " " + s.Name +
-					" ; sur K3s, vérifier le ServiceLB (kube-system) et que le port est libre sur l'hôte.",
+					" ; on K3s, check the ServiceLB (kube-system) and that the port is free on the host.",
 			})
 		}
 	}
 
-	// Cohérence : des ingress existent mais aucun pod ne les sert.
+	// Consistency: ingresses exist but no pod serves them.
 	if len(st.Ingresses) > 0 && st.ReadyPods == 0 {
 		f = append(f, stack.Finding{
-			Severity: "critique", Scope: "plateforme",
-			Title:  "Ingress déclarés mais aucun pod prêt",
-			Action: "Toutes les routes répondront en 502 : corriger d'abord les couches applicatives.",
+			Severity: "critical", Scope: "platform",
+			Title:  "Ingresses declared but no pod ready",
+			Action: "Every route will answer 502: fix the application layers first.",
 		})
 	}
 
-	// Tri : critique avant avertissement, puis par portée.
-	ordre := map[string]int{"critique": 0, "avertissement": 1}
+	// Sort: critical before warning, then by scope.
+	ordre := map[string]int{"critical": 0, "warning": 1}
 	sort.SliceStable(f, func(i, j int) bool {
 		if ordre[f[i].Severity] != ordre[f[j].Severity] {
 			return ordre[f[i].Severity] < ordre[f[j].Severity]
@@ -197,37 +197,37 @@ func printDoctor(r stack.Report) {
 	if st.Domain != "" {
 		dash = st.Domain
 	}
-	fmt.Printf("Plateforme   %s\n", dash)
-	fmt.Printf("Cluster      %d/%d nœud(s) prêt(s)\n", st.NodesReady, len(st.Nodes))
-	fmt.Printf("Pods         %d/%d prêts\n", st.ReadyPods, st.TotalPods)
-	fmt.Printf("Couches      %d\n", len(st.Layers))
+	fmt.Printf("Platform     %s\n", dash)
+	fmt.Printf("Cluster      %d/%d node(s) ready\n", st.NodesReady, len(st.Nodes))
+	fmt.Printf("Pods         %d/%d ready\n", st.ReadyPods, st.TotalPods)
+	fmt.Printf("Layers       %d\n", len(st.Layers))
 	fmt.Printf("Ingress      %d\n", len(st.Ingresses))
-	fmt.Printf("Certificats  %d\n", len(st.Certificates))
+	fmt.Printf("Certificates %d\n", len(st.Certificates))
 	fmt.Println()
 
 	if len(r.Findings) == 0 {
-		fmt.Println("✓ Aucun problème détecté.")
+		fmt.Println("✓ No problem detected.")
 		fmt.Println()
-		fmt.Println("Contrôles effectués : nœuds, couches applicatives, redémarrages répétés,")
-		fmt.Println("délivrance des certificats, exposition des services, cohérence ingress/pods.")
+		fmt.Println("Checks performed: nodes, application layers, repeated restarts,")
+		fmt.Println("certificate issuance, service exposure, ingress/pod consistency.")
 		return
 	}
 
 	crit, warn := 0, 0
 	for _, x := range r.Findings {
-		if x.Severity == "critique" {
+		if x.Severity == "critical" {
 			crit++
 		} else {
 			warn++
 		}
 	}
 
-	fmt.Printf("%d problème(s) : %d critique(s), %d avertissement(s)\n", len(r.Findings), crit, warn)
+	fmt.Printf("%d problem(s): %d critical, %d warning(s)\n", len(r.Findings), crit, warn)
 	fmt.Println()
 
 	for _, x := range r.Findings {
 		mark := "!"
-		if x.Severity == "avertissement" {
+		if x.Severity == "warning" {
 			mark = "·"
 		}
 		fmt.Printf("%s [%s] %s\n", mark, x.Scope, x.Title)
@@ -240,5 +240,5 @@ func printDoctor(r stack.Report) {
 		fmt.Println()
 	}
 
-	fmt.Println("Pour l'état détaillé couche par couche : ceffio status --pods")
+	fmt.Println("For the detailed layer-by-layer state: ceffio status --pods")
 }

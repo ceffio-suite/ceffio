@@ -6,26 +6,26 @@ import (
 	"os"
 )
 
-// LireConfig charge la configuration de publication depuis un fichier JSON.
+// LireConfig loads the publication configuration from a JSON file.
 //
-// Pourquoi un fichier plutôt que des options : la configuration contient le
-// chemin d'un fichier d'identifiants, et rassembler les deux sur une ligne de
-// commande invite à écrire un secret dans l'historique du shell.
+// Why a file rather than options: the configuration contains the path to a
+// credentials file, and gathering both on a command line invites writing a
+// secret into the shell history.
 //
-// Le fichier est cherché dans ce programme-ci, jamais dans le dépôt : il décrit
-// l'infrastructure locale (adresse du pare-feu, IP interne), pas l'application.
+// The file is looked for in this program, never in the repo: it describes the
+// local infrastructure (firewall address, internal IP), not the application.
 func LireConfig(chemin string) (Config, error) {
 	b, err := os.ReadFile(chemin)
 	if err != nil {
-		return Config{}, fmt.Errorf("configuration %s illisible : %w\n\n"+
-			"Exemple de fichier :\n%s", chemin, err, exemple)
+		return Config{}, fmt.Errorf("configuration %s unreadable: %w\n\n"+
+			"Example file:\n%s", chemin, err, exemple)
 	}
 	var cfg Config
 	if err := json.Unmarshal(b, &cfg); err != nil {
-		return Config{}, fmt.Errorf("configuration %s invalide : %w", chemin, err)
+		return Config{}, fmt.Errorf("configuration %s invalid: %w", chemin, err)
 	}
 
-	// Valeurs par défaut : l'installation de référence porte *.ceffio.example.com.
+	// Default values: the reference installation carries *.ceffio.example.com.
 	if cfg.Domaine == "" {
 		cfg.Domaine = "ceffio.example.com"
 	}
@@ -33,25 +33,25 @@ func LireConfig(chemin string) (Config, error) {
 		cfg.PortInterne = "80"
 	}
 	if len(cfg.SousDomaines) == 0 {
-		// « bao » fait partie de la suite au même titre que les autres : le coffre
-		// a besoin d'une adresse PUBLIQUE parce que l'authentification OIDC
-		// renvoie le navigateur vers une adresse de retour. Sans cette entrée, le
-		// DNS répond et le certificat est valide, mais rien n'arrive au cluster :
-		// le pare-feu rend une réponse vide, ce qui ressemble à une panne du
-		// service alors que seule la route manque.
+		// "bao" is part of the suite just like the others: the vault needs a
+		// PUBLIC address because OIDC authentication sends the browser back to
+		// a return address. Without this entry, DNS answers and the certificate
+		// is valid, but nothing reaches the cluster: the firewall returns an
+		// empty response, which looks like a service outage when only the route
+		// is missing.
 		cfg.SousDomaines = []string{"cloud", "keycloak", "office", "admin", "bao"}
 	}
 	return cfg, nil
 }
 
-// L'exemple porte des ESPACES RESERVES, jamais une adresse réelle : un dépôt
-// public n'est pas un carnet d'infrastructure — une IP y est de la
-// reconnaissance, elle situe le réseau de celui qui l'a publiée.
+// The example carries PLACEHOLDERS, never a real address: a public repo is not
+// an infrastructure notebook — an IP in it is reconnaissance, it locates the
+// network of whoever published it.
 const exemple = `{
   "hoteAPI": "firewall-api.example.com",
   "fichierCle": "~/.config/opnsense/apikey.txt",
   "domaine": "ceffio.example.com",
-  "ipInterne": "IP-INTERNE-DU-CLUSTER",
+  "ipInterne": "CLUSTER-INTERNAL-IP",
   "portInterne": "80",
   "sousDomaines": ["cloud", "keycloak", "office", "admin"]
 }`

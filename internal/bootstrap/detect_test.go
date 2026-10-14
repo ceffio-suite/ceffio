@@ -13,12 +13,12 @@ func TestNormalizeArch(t *testing.T) {
 func TestSupportedArch(t *testing.T) {
 	for _, a := range []string{"amd64", "arm64"} {
 		if !SupportedArch(a) {
-			t.Errorf("SupportedArch(%q) doit être true", a)
+			t.Errorf("SupportedArch(%q) should be true", a)
 		}
 	}
 	for _, a := range []string{"386", "riscv64", "ppc64le", ""} {
 		if SupportedArch(a) {
-			t.Errorf("SupportedArch(%q) doit être false", a)
+			t.Errorf("SupportedArch(%q) should be false", a)
 		}
 	}
 }
@@ -26,12 +26,12 @@ func TestSupportedArch(t *testing.T) {
 func TestSupportedOS(t *testing.T) {
 	for _, o := range []string{"linux", "darwin"} {
 		if !SupportedOS(o) {
-			t.Errorf("SupportedOS(%q) doit être true", o)
+			t.Errorf("SupportedOS(%q) should be true", o)
 		}
 	}
 	for _, o := range []string{"windows", "freebsd", ""} {
 		if SupportedOS(o) {
-			t.Errorf("SupportedOS(%q) doit être false", o)
+			t.Errorf("SupportedOS(%q) should be false", o)
 		}
 	}
 }
@@ -39,12 +39,12 @@ func TestSupportedOS(t *testing.T) {
 func TestValidate(t *testing.T) {
 	for _, c := range [][2]string{{"linux", "amd64"}, {"linux", "arm64"}, {"darwin", "arm64"}} {
 		if err := Validate(c[0], c[1]); err != nil {
-			t.Errorf("Validate(%q,%q) devrait passer, erreur: %v", c[0], c[1], err)
+			t.Errorf("Validate(%q,%q) should pass, got error: %v", c[0], c[1], err)
 		}
 	}
 	for _, c := range [][2]string{{"windows", "amd64"}, {"linux", "386"}, {"darwin", "riscv64"}} {
 		if err := Validate(c[0], c[1]); err == nil {
-			t.Errorf("Validate(%q,%q) devrait échouer", c[0], c[1])
+			t.Errorf("Validate(%q,%q) should fail", c[0], c[1])
 		}
 	}
 }
@@ -52,9 +52,9 @@ func TestValidate(t *testing.T) {
 func TestMinHardware(t *testing.T) {
 	m := MinHardware()
 	if m.CPUs < 1 {
-		t.Errorf("MinHardware.CPUs = %d, attendu >= 1", m.CPUs)
+		t.Errorf("MinHardware.CPUs = %d, want >= 1", m.CPUs)
 	}
 	if m.MemoryTotalMB == 0 {
-		t.Error("MinHardware.MemoryTotalMB ne doit pas être nul")
+		t.Error("MinHardware.MemoryTotalMB must not be zero")
 	}
 }

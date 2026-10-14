@@ -5,13 +5,13 @@ import (
 	"strings"
 )
 
-// printManifesteData est utilisé par le CLI (défini ici pour rester proche des
-// données qu'il décrit).
+// ManifesteResume is used by the CLI (defined here to stay close to the data
+// it describes).
 func ManifesteResume(m *Manifest) string {
 	var sb strings.Builder
-	sb.WriteString("créée le   : " + m.CreatedAt + "\n")
+	sb.WriteString("created on : " + m.CreatedAt + "\n")
 	if m.Domain != "" {
-		sb.WriteString("domaine    : " + m.Domain + "\n")
+		sb.WriteString("domain     : " + m.Domain + "\n")
 	}
 	if m.K8sVersion != "" {
 		sb.WriteString("kubernetes : " + m.K8sVersion + "\n")
@@ -19,9 +19,9 @@ func ManifesteResume(m *Manifest) string {
 	return sb.String()
 }
 
-// CompterTables renvoie le nombre de tables publiques d'une base restaurée.
-// Sert de contrôle post-restauration : « la commande a réussi » ne dit pas que
-// les données sont là. Renvoie -1 si la base est injoignable.
+// CompterTables returns the number of public tables of a restored database.
+// Serves as a post-restore check: "the command succeeded" does not say the
+// data is there. Returns -1 if the database is unreachable.
 func CompterTables(ctx context.Context, base string) int {
 	pod := pgPodName(ctx)
 	if pod == "" {
