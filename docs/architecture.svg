@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 820" width="1200" height="820" role="img" aria-label="The browser reaches Traefik over HTTPS, which routes by host name to Keycloak, Nextcloud, ONLYOFFICE, the console, OpenBao, Stalwart and the Talk signaling server. Keycloak provides SSO OIDC to Nextcloud, the console, OpenBao and Stalwart. Nextcloud calls ONLYOFFICE with a JWT token. WebRTC media goes directly from the browser to Janus and coturn, in hostNetwork, without passing through Traefik. The CLI drives the K3s Kubernetes API.">
+        <style>
+.t-ns,.t-lbl,.t-host{font-family:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px}
+.t-ns{letter-spacing:.04em}
+.t-name{font-family:Sora,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;font-weight:600}
+.t-sub{font-family:Sora,'Segoe UI',Helvetica,Arial,sans-serif;font-size:11.5px}
+.paper{fill:#FFFFFF}
+.frame{fill:none;stroke:#5A5F6B;stroke-width:1;stroke-dasharray:5 4}
+.grp{fill:#F6F5F1;stroke:#DEDBD2;stroke-width:1.5}
+.grp.id{stroke:#6A3FC8}.grp.files{stroke:#0B8A6F}.grp.docs{stroke:#2B4FD8}.grp.talk{stroke:#C96A12}
+.node{fill:#FFFFFF;stroke:#12151C;stroke-width:1.2}
+.node.host{stroke-dasharray:4 3}
+.edge{fill:none;stroke:#12151C;stroke-width:1.4}
+.edge.sso{stroke:#6A3FC8;stroke-dasharray:6 4;stroke-width:1.6}
+.edge.media{stroke:#C96A12;stroke-width:2.2}
+.t-ns{fill:#5A5F6B}.t-name{fill:#12151C}.t-sub{fill:#5A5F6B}
+.t-lbl,.t-host{fill:#12151C}.t-lbl.sso{fill:#6A3FC8}.t-lbl.media{fill:#C96A12}
+.pill{fill:#F6F5F1;stroke:#DEDBD2}
+.ah{fill:#12151C}.ah-sso{fill:#6A3FC8}.ah-media{fill:#C96A12}
+@media (prefers-color-scheme: dark){
+.paper{fill:#1A1E26}
+.frame{fill:none;stroke:#9BA1AE;stroke-width:1;stroke-dasharray:5 4}
+.grp{fill:#11141A;stroke:#2C313B;stroke-width:1.5}
+.grp.id{stroke:#A98BF0}.grp.files{stroke:#3FC3A2}.grp.docs{stroke:#7D98FF}.grp.talk{stroke:#F5A55A}
+.node{fill:#1A1E26;stroke:#ECEAE4;stroke-width:1.2}
+.node.host{stroke-dasharray:4 3}
+.edge{fill:none;stroke:#ECEAE4;stroke-width:1.4}
+.edge.sso{stroke:#A98BF0;stroke-dasharray:6 4;stroke-width:1.6}
+.edge.media{stroke:#F5A55A;stroke-width:2.2}
+.t-ns{fill:#9BA1AE}.t-name{fill:#ECEAE4}.t-sub{fill:#9BA1AE}
+.t-lbl,.t-host{fill:#ECEAE4}.t-lbl.sso{fill:#A98BF0}.t-lbl.media{fill:#F5A55A}
+.pill{fill:#11141A;stroke:#2C313B}
+.ah{fill:#ECEAE4}.ah-sso{fill:#A98BF0}.ah-media{fill:#F5A55A}}
+</style>
+<rect class="paper" x="0" y="0" width="1200" height="820"/>
+<defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0 0 L10 5 L0 10 z"/></marker>
+          <marker id="ahs" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-sso" d="M0 0 L10 5 L0 10 z"/></marker>
+          <marker id="ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="ah-media" d="M0 0 L10 5 L0 10 z"/></marker>
+        </defs>
+
+        <!-- Cluster -->
+        <rect class="frame" x="180" y="20" width="1010" height="680" rx="12"/>
+        <text class="t-ns" x="196" y="42">K3S CLUSTER · ONE LINUX HOST</text>
+
+        <!-- Outside the cluster -->
+        <rect class="node" x="20" y="65" width="110" height="80" rx="8"/>
+        <text class="t-name" x="75" y="100" text-anchor="middle">ceffio CLI</text>
+        <text class="t-sub" x="75" y="118" text-anchor="middle">Go · client-go</text>
+        <line class="edge" x1="130" y1="105" x2="198" y2="105" marker-end="url(#ah)"/>
+
+        <rect class="node" x="20" y="330" width="110" height="80" rx="8"/>
+        <text class="t-name" x="75" y="365" text-anchor="middle">Browser</text>
+        <text class="t-sub" x="75" y="383" text-anchor="middle">users</text>
+        <line class="edge" x1="130" y1="370" x2="198" y2="370" marker-end="url(#ah)"/>
+        <text class="t-lbl" x="150" y="361" text-anchor="middle">443</text>
+
+        <!-- API + Traefik -->
+        <rect class="node" x="200" y="60" width="150" height="90" rx="8"/>
+        <text class="t-name" x="275" y="98" text-anchor="middle">Kubernetes API</text>
+        <text class="t-sub" x="275" y="116" text-anchor="middle">deploys every layer</text>
+
+        <rect class="node" x="200" y="180" width="150" height="420" rx="8"/>
+        <text class="t-name" x="275" y="214" text-anchor="middle">Traefik</text>
+        <text class="t-sub" x="275" y="232" text-anchor="middle">HTTPS ingress</text>
+        <text class="t-sub" x="275" y="250" text-anchor="middle">TLS · cert-manager</text>
+        <text class="t-ns" x="275" y="286" text-anchor="middle">HOSTS *.DOMAIN</text>
+        <text class="t-host" x="275" y="310" text-anchor="middle">keycloak.</text>
+        <text class="t-host" x="275" y="330" text-anchor="middle">cloud.</text>
+        <text class="t-host" x="275" y="350" text-anchor="middle">office.</text>
+        <text class="t-host" x="275" y="370" text-anchor="middle">admin.</text>
+        <text class="t-host" x="275" y="390" text-anchor="middle">bao.</text>
+        <text class="t-host" x="275" y="410" text-anchor="middle">mail.</text>
+        <text class="t-host" x="275" y="430" text-anchor="middle">talk.</text>
+
+        <!-- Routing bus -->
+        <line class="edge" x1="350" y1="390" x2="375" y2="390"/>
+        <line class="edge" x1="375" y1="130" x2="375" y2="590"/>
+        <line class="edge" x1="375" y1="130" x2="398" y2="130" marker-end="url(#ah)"/>
+        <line class="edge" x1="375" y1="370" x2="398" y2="370" marker-end="url(#ah)"/>
+        <line class="edge" x1="375" y1="590" x2="398" y2="590" marker-end="url(#ah)"/>
+
+        <!-- Row 1 -->
+        <rect class="grp id" x="400" y="40" width="240" height="180" rx="10"/>
+        <text class="t-ns" x="414" y="60">ceffio-identity</text>
+        <rect class="node" x="416" y="72" width="208" height="64" rx="7"/>
+        <text class="t-name" x="430" y="98">Keycloak</text>
+        <text class="t-sub" x="430" y="117">realm ceffio · OIDC clients</text>
+        <rect class="pill" x="416" y="180" width="110" height="24" rx="12"/>
+        <text class="t-host" x="471" y="196" text-anchor="middle">keycloak.</text>
+
+        <rect class="grp files" x="670" y="40" width="240" height="180" rx="10"/>
+        <text class="t-ns" x="684" y="60">ceffio-files</text>
+        <rect class="node" x="686" y="72" width="208" height="64" rx="7"/>
+        <text class="t-name" x="700" y="98">Nextcloud</text>
+        <text class="t-sub" x="700" y="117">files · Talk app · Mail app</text>
+        <rect class="pill" x="686" y="180" width="90" height="24" rx="12"/>
+        <text class="t-host" x="731" y="196" text-anchor="middle">cloud.</text>
+
+        <rect class="grp docs" x="940" y="40" width="240" height="180" rx="10"/>
+        <text class="t-ns" x="954" y="60">ceffio-office</text>
+        <rect class="node" x="956" y="72" width="208" height="64" rx="7"/>
+        <text class="t-name" x="970" y="98">ONLYOFFICE Docs</text>
+        <text class="t-sub" x="970" y="117">online editing</text>
+        <rect class="pill" x="956" y="180" width="90" height="24" rx="12"/>
+        <text class="t-host" x="1001" y="196" text-anchor="middle">office.</text>
+
+        <line class="edge" x1="624" y1="104" x2="684" y2="104" marker-end="url(#ah)"/>
+        <text class="t-lbl" x="655" y="96" text-anchor="middle">OIDC</text>
+        <line class="edge" x1="894" y1="104" x2="954" y2="104" marker-start="url(#ah)" marker-end="url(#ah)"/>
+        <text class="t-lbl" x="925" y="96" text-anchor="middle">JWT</text>
+
+        <!-- SSO -->
+        <polyline class="edge sso" points="520,220 520,250 1060,250"/>
+        <line class="edge sso" x1="520" y1="250" x2="520" y2="278" marker-end="url(#ahs)"/>
+        <line class="edge sso" x1="790" y1="250" x2="790" y2="278" marker-end="url(#ahs)"/>
+        <line class="edge sso" x1="1060" y1="250" x2="1060" y2="278" marker-end="url(#ahs)"/>
+        <text class="t-lbl sso" x="655" y="243" text-anchor="middle">SSO · OIDC</text>
+
+        <!-- Row 2 -->
+        <rect class="grp" x="400" y="280" width="240" height="180" rx="10"/>
+        <text class="t-ns" x="414" y="300">ceffio-system</text>
+        <rect class="node" x="416" y="312" width="208" height="64" rx="7"/>
+        <text class="t-name" x="430" y="338">Admin console</text>
+        <text class="t-sub" x="430" y="357">services · certificates · accounts</text>
+        <rect class="pill" x="416" y="420" width="90" height="24" rx="12"/>
+        <text class="t-host" x="461" y="436" text-anchor="middle">admin.</text>
+
+        <rect class="grp" x="670" y="280" width="240" height="180" rx="10"/>
+        <text class="t-ns" x="684" y="300">ceffio-vault</text>
+        <rect class="node" x="686" y="312" width="208" height="64" rx="7"/>
+        <text class="t-name" x="700" y="338">OpenBao</text>
+        <text class="t-sub" x="700" y="357">secret store · KV</text>
+        <text class="t-sub" x="686" y="398">agent-injector: secrets written</text>
+        <text class="t-sub" x="686" y="413">into the annotated pods</text>
+        <rect class="pill" x="806" y="420" width="88" height="24" rx="12"/>
+        <text class="t-host" x="850" y="436" text-anchor="middle">bao.</text>
+
+        <rect class="grp" x="940" y="280" width="240" height="180" rx="10"/>
+        <text class="t-ns" x="954" y="300">ceffio-mail</text>
+        <rect class="node" x="956" y="312" width="208" height="64" rx="7"/>
+        <text class="t-name" x="970" y="338">Stalwart</text>
+        <text class="t-sub" x="970" y="357">IMAP · SMTP</text>
+        <text class="t-sub" x="956" y="398">outbound through an SMTP relay</text>
+        <text class="t-sub" x="956" y="413">(port 25 blocked by the ISP)</text>
+        <rect class="pill" x="956" y="420" width="88" height="24" rx="12"/>
+        <text class="t-host" x="1000" y="436" text-anchor="middle">mail.</text>
+
+        <!-- Row 3 -->
+        <rect class="grp talk" x="400" y="500" width="510" height="180" rx="10"/>
+        <text class="t-ns" x="414" y="520">ceffio-video · Talk High Performance Backend</text>
+        <rect class="node" x="416" y="540" width="150" height="60" rx="7"/>
+        <text class="t-name" x="430" y="565">signaling</text>
+        <text class="t-sub" x="430" y="584">presence · rooms</text>
+        <rect class="node" x="582" y="540" width="100" height="60" rx="7"/>
+        <text class="t-name" x="596" y="565">NATS</text>
+        <text class="t-sub" x="596" y="584">coordination</text>
+        <rect class="node host" x="698" y="540" width="96" height="60" rx="7"/>
+        <text class="t-name" x="712" y="565">Janus</text>
+        <text class="t-sub" x="712" y="584">media SFU</text>
+        <rect class="node host" x="810" y="540" width="84" height="60" rx="7"/>
+        <text class="t-name" x="822" y="565">coturn</text>
+        <text class="t-sub" x="822" y="584">TURN</text>
+        <text class="t-sub" x="416" y="628">signaling drives Janus; NATS links its instances</text>
+        <rect class="pill" x="416" y="642" width="80" height="24" rx="12"/>
+        <text class="t-host" x="456" y="658" text-anchor="middle">talk.</text>
+        <text class="t-sub" x="698" y="658">dashed = hostNetwork</text>
+
+        <rect class="grp" x="940" y="500" width="240" height="180" rx="10"/>
+        <text class="t-ns" x="954" y="520">ceffio-data</text>
+        <rect class="node" x="956" y="534" width="208" height="58" rx="7"/>
+        <text class="t-name" x="970" y="558">PostgreSQL</text>
+        <text class="t-sub" x="970" y="577">CNPG · Keycloak, Nextcloud</text>
+        <rect class="node" x="956" y="604" width="208" height="58" rx="7"/>
+        <text class="t-name" x="970" y="628">Valkey</text>
+        <text class="t-sub" x="970" y="647">Nextcloud cache and locks</text>
+
+        <!-- Media -->
+        <polyline class="edge media" points="75,410 75,730 852,730"/>
+        <line class="edge media" x1="746" y1="730" x2="746" y2="603" marker-end="url(#ahm)"/>
+        <line class="edge media" x1="852" y1="730" x2="852" y2="603" marker-end="url(#ahm)"/>
+        <text class="t-lbl media" x="96" y="752">WebRTC outside Traefik · UDP 20000–20100 → Janus · 3479 UDP/TCP and 5349 TCP → coturn</text>
+      
+<g transform="translate(20,790)">
+<line class="edge" x1="0" y1="0" x2="28" y2="0"/><text class="t-sub" x="36" y="4">request or call</text>
+<line class="edge sso" x1="170" y1="0" x2="198" y2="0"/><text class="t-sub" x="206" y="4">authentication delegated to Keycloak</text>
+<line class="edge media" x1="440" y1="0" x2="468" y2="0"/><text class="t-sub" x="476" y="4">audio and video stream</text>
+<rect class="node host" x="610" y="-7" width="20" height="14" rx="3"/><text class="t-sub" x="638" y="4">pod in hostNetwork</text>
+<text class="t-ns" x="1160" y="4" text-anchor="end">CEFFIO · ARCHITECTURE</text>
+</g>
+</svg>

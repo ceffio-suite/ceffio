@@ -414,10 +414,11 @@ func ensurePullSecret(ctx context.Context) error {
 	if secretExiste(ctx, "ghcr-pull") {
 		return nil
 	}
-	// TODO(maintainer): make the janus-gateway GHCR package PUBLIC so the
-	// one-command install works without a personal token. Decision belongs to
-	// the maintainer (the license plan says so explicitly); until then the
-	// token path stays.
+	// ghcr.io/ceffio-suite/janus-gateway is PUBLIC since 2026-10-14: anonymous
+	// pulls succeed (verified from the cluster: crictl pull with no
+	// credentials returns a manifest). The token path below is kept as a
+	// fallback for private forks and air-gapped mirrors, where the image is
+	// republished under a different name.
 	token := os.Getenv("GHCR_TOKEN")
 	if token == "" {
 		return fmt.Errorf("GHCR_TOKEN missing: the Janus image is on GHCR (private) and " +
