@@ -39,6 +39,7 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"github.com/ceffio-suite/ceffio/internal/vault"
+	"github.com/ceffio-suite/ceffio/internal/version"
 )
 
 // Pinned versions. Nothing follows `latest`: a component that follows a moving
@@ -48,7 +49,6 @@ const (
 
 	// HPB images.
 	signalingImage = "docker.io/strukturag/nextcloud-spreed-signaling:2.1.1"
-	janusImage     = "ghcr.io/ceffio-suite/janus-gateway:1.4.0-1"
 	natsImage      = "docker.io/library/nats:2.15"
 	coturnImage    = "docker.io/coturn/coturn:4.18"
 
@@ -77,6 +77,14 @@ const (
 	portJanusAPI    = 8088 // Janus HTTP API (used by the signaling)
 	portJanusWS     = 8188 // Janus WebSocket transport
 )
+
+// The Janus image is READ FROM THE VERSION REGISTRY, not duplicated here.
+// It was duplicated, and the two copies had drifted (1.3.0-1 in the registry,
+// 1.4.0-1 here): `upgrade --plan` compared against a version that was not the
+// one deployed. The registry is the single source of truth. It is a var, not a
+// const: its value comes from a function call (registry lookup) evaluated at
+// package init.
+var janusImage = janusImageDuRegistre()
 
 // Deploy installs Talk + HPB, idempotently.
 //
@@ -406,6 +414,10 @@ func ensurePullSecret(ctx context.Context) error {
 	if secretExiste(ctx, "ghcr-pull") {
 		return nil
 	}
+	// TODO(maintainer): make the janus-gateway GHCR package PUBLIC so the
+	// one-command install works without a personal token. Decision belongs to
+	// the maintainer (the license plan says so explicitly); until then the
+	// token path stays.
 	token := os.Getenv("GHCR_TOKEN")
 	if token == "" {
 		return fmt.Errorf("GHCR_TOKEN missing: the Janus image is on GHCR (private) and " +
@@ -845,4 +857,19 @@ func indentYaml(s string, n int) string {
 		}
 	}
 	return strings.Join(lignes, "\n")
+}
+
+// janusImageDuRegistre returns the Janus image as declared in the version
+// registry — the single source of truth shared with `ceffio status` and
+// `ceffio upgrade --plan`.
+//
+// It PANICS on a missing or unqualified entry, deliberately: the registry is
+// checked by TestOpenBaoDeclare-style tests, and a deployment silently using
+// an empty image string would fail much later, much more obscurely.
+func janusImageDuRegistre() string {
+	c, ok := version.ParNom("janus")
+	if !ok || c.Image == "" {
+		panic("janus is missing from the version registry (internal/version)")
+	}
+	return c.Image
 }

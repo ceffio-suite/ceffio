@@ -49,7 +49,7 @@ var Registry = []Composant{
 		Module: "internal/talk", Role: "Talk: session coordination",
 	},
 	{
-		Nom: "janus", Image: "ghcr.io/ceffio-suite/janus-gateway:1.3.0-1",
+		Nom: "janus", Image: "ghcr.io/ceffio-suite/janus-gateway:1.4.0-1",
 		Module: "internal/talk", Role: "Talk: SFU, media transport",
 	},
 	{
