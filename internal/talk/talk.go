@@ -632,6 +632,31 @@ urls = https://cloud.%[3]s
 # We use the platform's public name rather than the IP address: it stays
 # valid if the public address changes. It is the SAME name as the one
 # declared on the Nextcloud side for its own TURN servers.
+# RECORDING SERVER — the recorder authenticates here before joining a room.
+#
+# WITHOUT THIS BLOCK THE RECORDING IS REFUSED: the signaling only accepts a
+# recorder it knows. The failure is quiet on the Talk side ("the recording
+# could not be started") and the cause lives in this file.
+#
+# The internal secret is the SAME value as [clients] internalsecret above:
+# it is what proves to the signaling that the caller is an internal component
+# and not a participant. A different value here produces a recorder that
+# starts, looks healthy, and is rejected on every attempt.
+[recording]
+# [recording] declares the container; each backend is then a named entry whose
+# name must match an identifier in "backends" above.
+#
+# NOTE (to be confirmed against a running server): the exact syntax of this
+# block is NOT documented in the signaling repository's reference
+# configuration — [recording] does not appear in server.conf.in. The shape used
+# here follows the [backend]/[backend.<name>] pattern of the rest of the file.
+# If the recorder is deployed and the signaling logs report an unknown
+# section, this block is the first thing to check.
+backends = recording
+
+[recording.recording]
+url = http://talk-recording.ceffio-video.svc:1234
+
 [turn]
 apikey = $(SHARED_SECRET)
 secret = $(TURN_SECRET)

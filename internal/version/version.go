@@ -53,6 +53,15 @@ var Registry = []Composant{
 		Module: "internal/talk", Role: "Talk: SFU, media transport",
 	},
 	{
+		// The recording server is published ONLY with date tags upstream
+		// (20261014_095932), never a version number: the project ships it as
+		// part of Nextcloud AIO. We pin an exact date rather than "latest" —
+		// a floating tag would make an installation non-reproducible, which is
+		// the rule this file enforces.
+		Nom: "talk-recording", Image: "docker.io/nextcloud/aio-talk-recording:20261014_095932",
+		Module: "internal/recording", Role: "server-side call recording for Talk",
+	},
+	{
 		Nom: "coturn", Image: "docker.io/coturn/coturn:4.18",
 		Module: "internal/talk", Role: "Talk: TURN/STUN relay",
 	},
