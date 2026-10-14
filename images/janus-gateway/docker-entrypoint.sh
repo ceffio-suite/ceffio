@@ -1,57 +1,58 @@
 #!/bin/sh
-# Entrypoint Janus pour Ceffio.
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright © MANDEM
+# Janus entrypoint for Ceffio.
 #
-# Rôle : rendre Janus utilisable derrière le NAT du pare-feu, SANS figer
-# l'adresse publique dans l'image.
+# Role: make Janus usable behind the firewall NAT, WITHOUT freezing the public
+# address into the image.
 #
-# POURQUOI : Janus doit annoncer aux navigateurs une adresse qu'ils peuvent
-# réellement joindre. Derrière un NAT, ses interfaces sont privées : s'il les
-# annonce telles quelles dans les candidats ICE, le média ne passe jamais. La
-# parade est `nat_1_1_mapping` (mapping 1:1 IP privée ↔ IP publique) — mais
-# l'IP publique change selon le déploiement, donc elle ne peut pas être dans
-# l'image.
+# WHY: Janus must announce to browsers an address they can actually reach.
+# Behind a NAT, its interfaces are private: if it announces them as-is in the
+# ICE candidates, the media never gets through. The fix is `nat_1_1_mapping`
+# (1:1 mapping private IP ↔ public IP) — but the public IP changes with each
+# deployment, so it cannot live in the image.
 #
-# Variables reconnues :
-#   JANUS_PUBLIC_IP     IP publique annoncée par Janus (nat_1_1_mapping).
-#                       Si vide, aucun mapping n'est posé (déploiement local).
-#   JANUS_DEBUG_LEVEL   Niveau de log (0-7). Défaut : 4 (warn).
-#   JANUS_RTP_PORT_RANGE  Plage UDP média. Défaut : 20000-20100.
-#   JANUS_STUN_SERVER   Serveur STUN : active la DÉTECTION AUTOMATIQUE de l'IP
-#                       publique. C'est la voie recommandée — voir plus bas.
-#                       DOIT être joignable depuis Internet : un STUN local
-#                       (sur le même réseau) renvoie l'adresse PRIVÉE et la
-#                       détection ne sert à rien. Un nom d'hôte est accepté
-#                       et résolu en IPv4 (voir section 4).
-#   JANUS_STUN_PORT     Port du serveur STUN (défaut : 3478 ; 19302 pour
+# Recognized variables:
+#   JANUS_PUBLIC_IP     Public IP announced by Janus (nat_1_1_mapping).
+#                       If empty, no mapping is set (local deployment).
+#   JANUS_DEBUG_LEVEL   Log level (0-7). Default: 4 (warn).
+#   JANUS_RTP_PORT_RANGE  UDP media range. Default: 20000-20100.
+#   JANUS_STUN_SERVER   STUN server: enables AUTOMATIC DETECTION of the public
+#                       IP. This is the recommended way — see below.
+#                       MUST be reachable from the Internet: a local STUN
+#                       (on the same network) returns the PRIVATE address and
+#                       the detection is useless. A hostname is accepted and
+#                       resolved to IPv4 (see section 4).
+#   JANUS_STUN_PORT     STUN server port (default: 3478; 19302 for
 #                       stun.l.google.com).
 set -e
 
 CFG=/opt/janus/etc/janus/janus.jcfg
 
 # ---------------------------------------------------------------------------
-# 1. IP publique (nat_1_1_mapping)
+# 1. Public IP (nat_1_1_mapping)
 # ---------------------------------------------------------------------------
 if [ -n "${JANUS_PUBLIC_IP:-}" ]; then
     if grep -q "^[[:space:]]*nat_1_1_mapping" "$CFG"; then
         sed -i "s|^[[:space:]]*nat_1_1_mapping.*|nat_1_1_mapping = \"${JANUS_PUBLIC_IP}\"|" "$CFG"
     else
-        # insérer juste après l'ouverture du bloc nat {
+        # insert right after the opening of the nat { block
         sed -i "/^nat: {/a\\\tnat_1_1_mapping = \"${JANUS_PUBLIC_IP}\"" "$CFG"
     fi
     echo "janus: nat_1_1_mapping = ${JANUS_PUBLIC_IP}"
 else
-    echo "janus: pas de JANUS_PUBLIC_IP — aucun mapping NAT (déploiement local)"
+    echo "janus: no JANUS_PUBLIC_IP — no NAT mapping (local deployment)"
 fi
 
 # ---------------------------------------------------------------------------
-# 2. Niveau de log
+# 2. Log level
 # ---------------------------------------------------------------------------
 if [ -n "${JANUS_DEBUG_LEVEL:-}" ]; then
     sed -i "s|^[[:space:]]*debug_level.*|debug_level = ${JANUS_DEBUG_LEVEL}|" "$CFG"
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Plage média
+# 3. Media range
 # ---------------------------------------------------------------------------
 if [ -n "${JANUS_RTP_PORT_RANGE:-}" ]; then
     sed -i "s|^[[:space:]]*rtp_port_range.*|rtp_port_range = \"${JANUS_RTP_PORT_RANGE}\"|" "$CFG"
@@ -59,44 +60,44 @@ if [ -n "${JANUS_RTP_PORT_RANGE:-}" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 4. Serveur STUN — DÉTECTION AUTOMATIQUE DE L'IP PUBLIQUE
+# 4. STUN server — AUTOMATIC DETECTION OF THE PUBLIC IP
 #
-# POURQUOI C'EST PRÉFÉRABLE À JANUS_PUBLIC_IP : une variable qu'il faut
-# connaître AVANT de déployer est un obstacle pour un produit auto-portant.
-# Janus sait faire mieux : au démarrage, si un serveur STUN est configuré, il
-# envoie un vrai paquet STUN en UDP, lit le XOR-MAPPED-ADDRESS de la réponse, et
-# appelle janus_add_public_ip() avec le résultat (src/ice.c) — la MÊME fonction
-# que celle utilisée par nat_1_1_mapping. L'IP publique est donc découverte
-# seule, sans aucun port supplémentaire à ouvrir : le paquet sort par le NAT,
-# sur un port source éphémère (ou sur la plage média, déjà ouverte).
+# WHY THIS IS PREFERABLE TO JANUS_PUBLIC_IP: a variable that must be known
+# BEFORE deploying is an obstacle for a self-contained product. Janus does
+# better: at startup, if a STUN server is configured, it sends a real STUN
+# packet over UDP, reads the XOR-MAPPED-ADDRESS from the reply, and calls
+# janus_add_public_ip() with the result (src/ice.c) — the SAME function as the
+# one used by nat_1_1_mapping. The public IP is thus discovered on its own,
+# with no extra port to open: the packet goes out through the NAT, on an
+# ephemeral source port (or on the media range, already open).
 #
-# Vérifié dans le code source de Janus 1.3.0, puis en exécution réelle.
+# Verified in the Janus 1.3.0 source code, then in real execution.
 # ---------------------------------------------------------------------------
 if [ -n "${JANUS_STUN_SERVER:-}" ]; then
     STUN_PORT="${JANUS_STUN_PORT:-3478}"
 
-    # RÉSOLUTION EN IPv4 — INDISPENSABLE.
+    # RESOLUTION TO IPv4 — ESSENTIAL.
     #
-    # Janus accepte un nom d'hôte ici, mais il le résout via getaddrinfo, qui
-    # rend l'IPv6 EN PREMIER sur une machine double-pile. Janus n'interroge
-    # alors le STUN qu'en IPv6 et annonce une adresse IPv6 publique — mesuré :
+    # Janus accepts a hostname here, but it resolves it via getaddrinfo, which
+    # returns IPv6 FIRST on a dual-stack machine. Janus then only queries the
+    # STUN over IPv6 and announces a public IPv6 address — measured:
     #   >> Our public address is 2a01:e0a:ff3:7830:be24:11ff:fe52:3cea
-    # Résultat : les navigateurs qui n'ont que l'IPv4 ne reçoivent aucun
-    # candidat joignable et le média ne passe pas.
+    # Result: browsers that only have IPv4 receive no reachable candidate and
+    # the media does not get through.
     #
-    # On fige donc l'IPv4 ici. Le nom d'hôte reste accepté en entrée ; seule
-    # l'adresse écrite dans la configuration est une IPv4 littérale.
+    # We therefore pin IPv4 here. The hostname remains accepted as input; only
+    # the address written to the configuration is a literal IPv4.
     case "${JANUS_STUN_SERVER}" in
         *[!0-9.]*)
-            # Ce n'est pas une IPv4 littérale : on résout.
+            # Not a literal IPv4: resolve it.
             STUN_IP4="$(getent ahostsv4 "${JANUS_STUN_SERVER}" 2>/dev/null | awk 'NR==1{print $1}')"
             if [ -n "$STUN_IP4" ]; then
-                echo "janus: ${JANUS_STUN_SERVER} résolu en IPv4 = ${STUN_IP4}"
+                echo "janus: ${JANUS_STUN_SERVER} resolved to IPv4 = ${STUN_IP4}"
                 JANUS_STUN_SERVER="$STUN_IP4"
             else
-                echo "janus: AVERTISSEMENT — ${JANUS_STUN_SERVER} ne résout pas en IPv4." >&2
-                echo "janus: la détection STUN risque d'annoncer une adresse IPv6" >&2
-                echo "janus: et de rendre le média injoignable. Préférer une IPv4." >&2
+                echo "janus: WARNING — ${JANUS_STUN_SERVER} does not resolve to IPv4." >&2
+                echo "janus: STUN detection may announce an IPv6 address" >&2
+                echo "janus: and make the media unreachable. Prefer IPv4." >&2
             fi
             ;;
     esac
@@ -111,24 +112,23 @@ if [ -n "${JANUS_STUN_SERVER:-}" ]; then
     else
         sed -i "/^[[:space:]]*stun_server/a\\\tstun_port = ${STUN_PORT}" "$CFG"
     fi
-    echo "janus: stun_server = ${JANUS_STUN_SERVER}:${STUN_PORT} (détection auto de l'IP publique)"
+    echo "janus: stun_server = ${JANUS_STUN_SERVER}:${STUN_PORT} (auto-detection of the public IP)"
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Certificats auto-signés pour DTLS
+# 5. Self-signed certificates for DTLS
 #
-# Janus a besoin d'un certificat pour DTLS (le handshake de WebRTC). Le
-# certificat fourni par l'image est auto-signé, ce qui est normal et accepté
-# par les navigateurs pour DTLS — contrairement au TLS des sites web.
-# On ne le régénère que s'il est absent.
+# Janus needs a certificate for DTLS (the WebRTC handshake). The certificate
+# shipped in the image is self-signed, which is normal and accepted by
+# browsers for DTLS — unlike website TLS. It is only regenerated if absent.
 # ---------------------------------------------------------------------------
 CERTDIR=/opt/janus/share/janus/certs
 if [ ! -f "$CERTDIR/mycert.pem" ]; then
-    # Le certificat est normalement créé au build. On n'arrive ici que si le
-    # répertoire a été remplacé (volume monté par-dessus, par exemple).
-    # NE PAS laisser échouer : sans certificat Janus démarre mais le DTLS
-    # échoue, et une erreur de démarrage serait plus trompeuse qu'utile.
-    echo "janus: certificat absent, génération"
+    # The certificate is normally created at build time. We only get here if
+    # the directory was replaced (a volume mounted on top of it, for example).
+    # Do NOT let it fail: without a certificate Janus starts but DTLS fails,
+    # and a startup error would be more misleading than useful.
+    echo "janus: certificate missing, generating"
     mkdir -p "$CERTDIR" 2>/dev/null || true
     if openssl req -x509 -newkey rsa:2048 -days 3650 -nodes \
         -keyout "$CERTDIR/mykey.pem" -out "$CERTDIR/mycert.pem" \
@@ -136,9 +136,9 @@ if [ ! -f "$CERTDIR/mycert.pem" ]; then
         cat "$CERTDIR/mycert.pem" > "$CERTDIR/mycert-fullchain.pem"
         : > "$CERTDIR/mycacert.pem"
     else
-        echo "janus: AVERTISSEMENT — certificat DTLS non généré (répertoire non inscriptible ?)" >&2
+        echo "janus: WARNING — DTLS certificate not generated (directory not writable?)" >&2
     fi
 fi
 
-echo "janus: démarrage — $*"
+echo "janus: starting — $*"
 exec "$@"
