@@ -4,7 +4,7 @@ Interface web d'exploitation de la pile Ceffio. Elle répond à une question que
 la ligne de commande ne rend pas confortable : **« qu'est-ce qui tourne, et
 est-ce que tout va bien ? »** — sans avoir à taper `kubectl` sur la VM.
 
-    https://admin.ceffio.mandem-it.com
+    https://admin.ceffio.example.com
 
 ## Ce qu'elle montre
 

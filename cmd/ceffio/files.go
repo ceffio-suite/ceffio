@@ -46,7 +46,7 @@ ses identifiants : un fournisseur vide laisse une page de connexion en 404.`,
 		},
 	}
 	cmd.Flags().StringVar(&domain, "domain", "",
-		"Raccorder aussi le SSO (ex. ceffio.mandem-it.com) ; sans ce drapeau, déploiement seul")
+		"Raccorder aussi le SSO (ex. ceffio.example.com) ; sans ce drapeau, déploiement seul")
 	return cmd
 }
 

@@ -89,7 +89,7 @@ Secret Kubernetes. Aucune valeur secrète ne se saisit en option.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&domain, "domain", "ceffio.mandem-it.com", "Domaine de base")
+	cmd.Flags().StringVar(&domain, "domain", "ceffio.example.com", "Domaine de base")
 	cmd.Flags().StringVar(&hote, "relais", relaisParDefaut, "Hôte du relais d'expédition")
 	cmd.Flags().IntVar(&port, "relais-port", portRelaisParDefaut, "Port du relais d'expédition")
 	return cmd

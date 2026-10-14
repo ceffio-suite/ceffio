@@ -20,7 +20,7 @@
 //	Transport média  JVB (SFU)       → Janus
 //	coturn           intégré         → service séparé
 //
-// ISOLATION : Ceffio et AgenTorch ne partagent AUCUNE ressource réseau — ni
+// ISOLATION : Ces deux suites ne partagent AUCUNE ressource réseau — ni
 // plage média, ni port TURN, ni secret. Voir docs/plan-talk-hpb.md §4bis.
 package talk
 
@@ -54,7 +54,7 @@ const (
 	//
 	// PUBLIC, impérativement : un serveur du réseau local (coturn, par exemple)
 	// voit la requête arriver depuis l'intérieur et répond l'adresse PRIVÉE —
-	// mesuré : « Our public address is 192.168.1.48 ». La détection « réussit »
+	// mesuré : « Our public address is <cluster-ip> ». La détection « réussit »
 	// alors en annonçant une adresse injoignable depuis Internet.
 	//
 	// L'entrypoint de l'image résout ce nom en IPv4 avant de l'écrire dans la
@@ -63,11 +63,11 @@ const (
 	stunPublic = "stun.l.google.com"
 	stunPort   = 19302
 
-	// Réseau — ports DÉDIÉS à Ceffio, sans chevauchement avec AgenTorch
+	// Réseau — ports DÉDIÉS à Ceffio, sans chevauchement avec les autres suites RTC du reseau
 	// (qui occupe 50000-60000, 30000-40000 et 3478).
 	plageMediaDebut = 20000
 	plageMediaFin   = 20100 // 100 ports : largement suffisant pour une PME
-	portTurn        = 3479  // 3478 = AgenTorch, ne pas y toucher
+	portTurn        = 3479  // 3478 = autre suite RTC, ne pas y toucher
 	portTurnTLS     = 5349
 	portSignaling   = 8081 // HTTP interne du signaling server
 	portJanusAPI    = 8088 // API HTTP de Janus (utilisée par le signaling)
@@ -254,7 +254,7 @@ func deployCoturn(ctx context.Context) error {
 	//
 	// coturn doit annoncer une adresse joignable depuis Internet dans ses
 	// candidats de relais (option --external-ip). Sans elle, il annonce la
-	// sienne, privée — mesuré : « UDP reflexive addr: 192.168.1.48 » — et un
+	// sienne, privée — mesuré : « UDP reflexive addr: <cluster-ip> » — et un
 	// participant derrière un NAT restrictif reçoit une adresse qu'il ne peut
 	// pas joindre, exactement dans le cas où le relais sert à quelque chose.
 	//
@@ -446,7 +446,7 @@ func deployJanus(ctx context.Context) error {
 	//
 	// Le serveur STUN DOIT être joignable depuis Internet. Pointé sur coturn,
 	// qui tourne sur le même réseau, il renvoie l'adresse PRIVÉE — mesuré :
-	// « Our public address is 192.168.1.48 ». La détection « réussit » alors en
+	// « Our public address is <cluster-ip> ». La détection « réussit » alors en
 	// annonçant une adresse injoignable, ce qui est pire qu'un échec franc.
 	manifeste := fmt.Sprintf(`apiVersion: apps/v1
 kind: Deployment

@@ -90,20 +90,20 @@ chemin média.
 ```
 
 Le média WebRTC **ne passe pas par un proxy L7** : il emprunte les redirections
-NAT vers Janus. Même principe que JVB et AgenTorch.
+NAT vers Janus. Même principe que le JVB d'une autre suite.
 
 ---
 
 ## 4. Réseau — ports à ouvrir (OPNsense)
 
-**Ceffio a ses ports DÉDIÉS** — décision : isolation complète d'AgenTorch
+**Ceffio a ses ports DÉDIÉS** — décision : isolation complète avec les autres suites RTC
 (même raisonnement que « deux LiveKit séparés »). Aucun service partagé, aucun
 secret commun, aucune règle NAT commune.
 
 ```
 spreed.<domaine>      443/tcp       via Caddy — déjà routé par *.ceffio
 20000-20100/udp       média Janus                 ← À OUVRIR
-3479/udp              TURN coturn (Ceffio)        ← À OUVRIR (3478 = AgenTorch)
+3479/udp              TURN coturn (Ceffio)        ← À OUVRIR (3478 = autre suite RTC)
 5349/tcp              TURN-over-TLS               ← À OUVRIR
 49152-49200/udp       relais coturn               ← À OUVRIR
 ```
@@ -111,7 +111,7 @@ spreed.<domaine>      443/tcp       via Caddy — déjà routé par *.ceffio
 Répartition des ports TURN dans l'infrastructure :
 
 ```
-3478/udp       AgenTorch — NE PAS TOUCHER
+3478/udp       autre suite RTC — NE PAS TOUCHER
 3479/udp       Ceffio                 (choix lisible : voisin du standard)
 ```
 
@@ -120,7 +120,7 @@ Le numéro de port TURN est **libre** (ce n'est pas un standard figé comme le
 règle NAT), sinon le relais est injoignable.
 
 Vérifié sur la VM 310 : `3479`, `5349`, `49152-49200`, `20000-20100` sont
-**tous libres** (aucun conflit local). Le conflit avec AgenTorch n'existe que
+**tous libres** (aucun conflit local). Le conflit avec l'autre suite n'existe que
 sur l'IP publique, via les règles NAT — et il est résolu par le port dédié.
 
 La plage Janus par défaut est `20000-40000` (lue dans
@@ -136,11 +136,11 @@ rtp_port_range = "20000-20100"
 
 1. **Pour une plage, le champ « port local » de la règle OPNsense doit rester
    VIDE** — renseigné, pf rabat toute la plage sur un seul port. Erreur déjà
-   commise pour AgenTorch, documentée dans le wiki.
-2. **Vérifier les chevauchements** : AgenTorch occupe `50000-60000/udp`,
+   commise pour autre suite RTC, documentée dans le wiki.
+2. **Vérifier les chevauchements** : autre suite RTC occupe `50000-60000/udp`,
    `30000-40000/udp`, `3478/udp`. Réglé : Ceffio utilise des plages et un port
    TURN **entièrement distincts** (voir ci-dessus), et une VM différente
-   (192.168.1.48 contre 10.9.1.113). Aucune règle NAT n'est partagée.
+   (<cluster-ip> contre <autre-hote>). Aucune règle NAT n'est partagée.
 3. Les pods k3s ne lisent pas `/etc/hosts` du nœud : `hostAliases` ou CoreDNS
    pour résoudre par nom public.
 
@@ -148,20 +148,20 @@ rtp_port_range = "20000-20100"
 
 ## 4bis. Isolation réseau — décision de traçabilité
 
-**Décision : Ceffio et AgenTorch ne partagent AUCUNE ressource réseau.**
+**Décision : Ceffio et autre suite RTC ne partagent AUCUNE ressource réseau.**
 
 Motif : une entreprise n'héberge pas plusieurs services critiques sur les mêmes
 ports, avec le même secret et la même règle NAT. Partager le TURN voudrait dire
 qu'une panne d'un relais coupe les visios des deux produits, qu'un changement de
-config pour l'un casse l'autre, et que les identifiants TURN d'AgenTorch
+config pour l'un casse l'autre, et que les identifiants TURN d'autre suite RTC
 ouvriraient le relais Ceffio. C'est exactement le raisonnement appliqué aux deux
 instances LiveKit séparées.
 
 ```
                     VM                  ports média       TURN
-AgenTorch   10.9.1.113  (at-livekit)   50000-60000/udp   3478/udp
+autre suite RTC   <autre-hote>  (at-livekit)   50000-60000/udp   3478/udp
                                       30000-40000/udp
-Ceffio      192.168.1.48 (VM 310)     20000-20100/udp   3479/udp
+Ceffio      <cluster-ip> (VM 310)     20000-20100/udp   3479/udp
                                       49152-49200/udp
 ```
 
@@ -301,7 +301,7 @@ pendant toute la migration.
    place d'installer sans dégrader Nextcloud/Keycloak/ONLYOFFICE, mais pas la
    tenue en charge réelle (qui dépend de la **bande passante**, ~1.5 Mbps par
    participant dans les deux sens — non mesurable sans appel en cours).
-2. ~~Conflit TURN 3478/udp avec AgenTorch~~ — **RÉSOLU** : port dédié 3479
+2. ~~Conflit TURN 3478/udp avec autre suite RTC~~ — **RÉSOLU** : port dédié 3479
    pour Ceffio, isolation complète.
 3. **Image Janus** — bâtir et versionner (recommandé) ou image publique ?
 4. **Le flag `--video`** — devient la visio Talk. Renommer, ou Talk par défaut ?

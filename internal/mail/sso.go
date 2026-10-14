@@ -53,7 +53,7 @@ var rôlesParDéfaut = []struct {
 
 // SSO décrit l'authentification unique à mettre en place.
 type SSO struct {
-	Hote         string // hôte public, ex. « mail.ceffio.mandem-it.com »
+	Hote         string // hôte public, ex. « mail.ceffio.example.com »
 	Issuer       string // URL du realm, ex. « https://keycloak.…/realms/ceffio »
 	ClientID     string // client OIDC du WebUI, ex. « stalwart-webui »
 	DomaineAdmin string // domaine des comptes d'admin, HORS messagerie, ex. « ceffio.local »

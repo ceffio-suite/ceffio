@@ -85,7 +85,7 @@ func AdoptURLs(ctx context.Context, domain string) error {
 	// TLS (OPNsense, Caddy, nginx) transmet en HTTP et Traefik annonce
 	// X-Forwarded-Proto: http → les applications redirigent en http:// depuis un
 	// client https. Constaté en production sur Keycloak.
-	if err := ProxyAmont(ctx, "192.168.1.0/24"); err != nil {
+	if err := ProxyAmont(ctx); err != nil {
 		return err
 	}
 

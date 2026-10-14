@@ -21,7 +21,7 @@ import (
 // ServicePublic décrit un endpoint exposé via ingress.
 type ServicePublic struct {
 	Nom       string `json:"nom"`       // nom lisible ("Nextcloud")
-	Hote      string `json:"hote"`      // cloud.ceffio.mandem-it.com
+	Hote      string `json:"hote"`      // cloud.ceffio.example.com
 	Role      string `json:"role"`      // rôle en une phrase
 	URL       string `json:"url"`       // https://…
 	Technique bool   `json:"technique"` // true = pas un service utilisateur direct (office)

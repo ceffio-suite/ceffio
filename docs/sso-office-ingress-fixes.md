@@ -5,7 +5,7 @@ soit **utilisable depuis un navigateur** derrière l'ingress Traefik (TLS auto-s
 CA `ceffio-ca`) avec un **login unique Keycloak** (Nextcloud + Element) et l'**édition
 ONLYOFFICE** dans Nextcloud.
 
-Validé sur VM 310 `ceffio-val` (192.168.1.48, k3s v1.36.4). Ces correctifs étaient posés
+Validé sur VM 310 `ceffio-val` (<cluster-ip>, k3s v1.36.4). Ces correctifs étaient posés
 "à la main" au runtime — ce fichier les documente pour qu'ils soient reproduits dans le CLI.
 
 ## Principe réseau k3s
@@ -14,7 +14,7 @@ Validé sur VM 310 `ceffio-val` (192.168.1.48, k3s v1.36.4). Ces correctifs éta
   n'atteint pas les pods.
 - Conséquence : pour que les pods joignent les apps par leur **nom public** (`*.demo.local`),
   on ajoute un **`hostAliases` par pod** vers le Service ClusterIP de **Traefik**.
-  Traefik SvcLB = `10.43.207.47` (à lire dynamiquement : `kubectl get svc traefik -n kube-system`).
+  Traefik SvcLB = `10.43.x.x` (à lire dynamiquement : `kubectl get svc traefik -n kube-system`).
 - Alternative propre à faire plus tard : ConfigMap CoreDNS `coredns-custom` (hosts `*.demo.local`
   → IP Traefik) pour résoudre en cluster-wide sans hostAlias par pod.
 

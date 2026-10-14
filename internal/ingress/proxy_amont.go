@@ -22,7 +22,7 @@ import (
 // avant sa migration. On les retire des configurations au moment d'adopter un
 // nouveau domaine : sinon les redirections continuent de pointer vers eux
 // (cas vecu : demo.local restait code en dur dans Keycloak, Nextcloud, Element
-// et Synapse apres la bascule vers *.ceffio.mandem-it.com).
+// et Synapse apres la bascule vers *.ceffio.example.com).
 var candidatsAnciensDomaines = []string{
 	"demo.local",
 	"ceffio.local",
@@ -44,9 +44,9 @@ var candidatsAnciensDomaines = []string{
 //
 // SECURITE : forwardedHeaders.insecure fait confiance a l'en-tete entrant. Ce
 // n'est acceptable que si Traefik n'est joignable QUE depuis un reseau de
-// confiance (ici : le pare-feu, sur le reseau interne). Sur une machine
-// exposee directement, il faudrait une liste d'IP de confiance explicite.
-func ProxyAmont(ctx context.Context, reseauDeConfiance string) error {
+// confiance (le pare-feu amont). Sur une machine exposee directement, il
+// faudrait une liste d'IP de confiance explicite.
+func ProxyAmont(ctx context.Context) error {
 	manifest := fmt.Sprintf(`apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
 metadata:
@@ -58,7 +58,6 @@ spec:
       - "--entryPoints.web.forwardedHeaders.insecure=true"
       - "--entryPoints.websecure.forwardedHeaders.insecure=true"
 `)
-	_ = reseauDeConfiance
 	if err := apply(ctx, manifest); err != nil {
 		return err
 	}

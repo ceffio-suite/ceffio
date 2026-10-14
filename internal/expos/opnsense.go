@@ -8,7 +8,7 @@
 // n'est pas reproductible.
 //
 // Sequence complete d'une publication :
-//  1. le DNS publique existe (cree par l'utilisateur : *.ceffio.mandem-it.com) ;
+//  1. le DNS publique existe (cree par l'utilisateur : *.ceffio.example.com) ;
 //  2. le certificat wildcard existe cote OPNsense (cree par l'utilisateur) ;
 //  3. les domaines + handlers sont declares dans os-caddy  <- ce package ;
 //  4. les hotes publics sont ajoutes aux Ingress Traefik <- internal/ingress.
@@ -34,9 +34,9 @@ import (
 
 // Config décrit comment joindre le pare-feu et quoi publier.
 type Config struct {
-	HoteAPI     string // ex. opn.datalock.mandem-it.com
+	HoteAPI     string // ex. firewall-api.example.com
 	FichierCle  string // fichier contenant key= / secret=
-	Domaine     string // domaine de base public, ex. ceffio.mandem-it.com
+	Domaine     string // domaine de base public, ex. ceffio.example.com
 	IPInterne   string // cible : IP de la VM qui porte Traefik
 	PortInterne string // ex. "80" (le TLS est termine cote pare-feu)
 	// CertificatRef : refId du certificat wildcard cote OPNsense. Si vide, il

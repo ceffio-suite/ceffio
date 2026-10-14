@@ -14,7 +14,7 @@
 //     et il porte le reverse DNS. C'est la configuration standard des
 //     auto-hébergeurs derrière une connexion grand public.
 //
-//  2. Le reverse DNS de l'IP publique est « mandem.hd.free.fr », pas le domaine.
+//  2. Le reverse DNS de l'IP publique est « <fai>.example.net », pas le domaine.
 //     Sans relais, Gmail rejetterait les messages. Avec relais, la question
 //     disparaît — c'est one.com qui est responsable de la délivrabilité.
 //
@@ -42,7 +42,7 @@ const (
 	stalwartImage = "docker.io/stalwartlabs/stalwart:v0.16.26"
 	ns            = "ceffio-mail"
 	// Domaine par défaut des boîtes. Surchargé par l'appelant.
-	domaineDefaut = "mandem-it.com"
+	domaineDefaut = "example.com"
 )
 
 // Deploy installe la couche messagerie (Phase 13), de façon idempotente :

@@ -25,9 +25,9 @@ func LireConfig(chemin string) (Config, error) {
 		return Config{}, fmt.Errorf("configuration %s invalide : %w", chemin, err)
 	}
 
-	// Valeurs par défaut : l'installation de référence porte *.ceffio.mandem-it.com.
+	// Valeurs par défaut : l'installation de référence porte *.ceffio.example.com.
 	if cfg.Domaine == "" {
-		cfg.Domaine = "ceffio.mandem-it.com"
+		cfg.Domaine = "ceffio.example.com"
 	}
 	if cfg.PortInterne == "" {
 		cfg.PortInterne = "80"
@@ -44,11 +44,14 @@ func LireConfig(chemin string) (Config, error) {
 	return cfg, nil
 }
 
+// L'exemple porte des ESPACES RESERVES, jamais une adresse réelle : un dépôt
+// public n'est pas un carnet d'infrastructure — une IP y est de la
+// reconnaissance, elle situe le réseau de celui qui l'a publiée.
 const exemple = `{
-  "hoteAPI": "opn.datalock.mandem-it.com",
+  "hoteAPI": "firewall-api.example.com",
   "fichierCle": "~/.config/opnsense/apikey.txt",
-  "domaine": "ceffio.mandem-it.com",
-  "ipInterne": "192.168.1.48",
+  "domaine": "ceffio.example.com",
+  "ipInterne": "IP-INTERNE-DU-CLUSTER",
   "portInterne": "80",
   "sousDomaines": ["cloud", "keycloak", "office", "admin"]
 }`
