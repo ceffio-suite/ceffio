@@ -98,6 +98,12 @@ func New(domain, apiKey string) (*Server, error) {
 // Handler builds the console HTTP router.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	// Icons BEFORE the catch-all: "/" matches everything in net/http's mux,
+	// so the more specific routes are registered first and win.
+	mux.HandleFunc("/favicon.ico", s.handleIcone)
+	mux.HandleFunc("/favicon.svg", s.handleIcone)
+	mux.HandleFunc("/favicon-32.png", s.handleIcone)
+	mux.HandleFunc("/apple-touch-icon.png", s.handleIcone)
 	mux.HandleFunc("/", s.handleIndex) // public page (the JS asks for the key for /api/*)
 	mux.HandleFunc("/api/status", s.requireAuth(s.handleStatus))
 	mux.HandleFunc("/api/users", s.requireAuth(s.handleUsers))
