@@ -17,6 +17,8 @@ LICENSE file (not a badge or a tag), on 2026-10-14.
 | Nextcloud | `docker.io/library/nextcloud:34.0.3` | AGPL-3.0 | [nextcloud/server](https://github.com/nextcloud/server) |
 | Nextcloud Talk (app) | (inside Nextcloud) | AGPL-3.0 | [nextcloud/spreed](https://github.com/nextcloud/spreed) |
 | Talk signaling | `docker.io/strukturag/nextcloud-spreed-signaling:2.1.1` | AGPL-3.0 | [strukturag/nextcloud-spreed-signaling](https://github.com/strukturag/nextcloud-spreed-signaling) |
+| Talk recording | `docker.io/nextcloud/aio-talk-recording:20261014_095932` | AGPL-3.0 | [nextcloud/nextcloud-talk-recording](https://github.com/nextcloud/nextcloud-talk-recording) |
+| — Firefox, geckodriver (in the recording image) | — | MPL-2.0 / MIT | the recording server drives a real browser to capture the room |
 | Janus | `ghcr.io/ceffio-suite/janus-gateway:1.4.3-1` | GPL-3.0 (upstream Janus) | [meetecho/janus-gateway](https://github.com/meetecho/janus-gateway) + [`images/janus-gateway/`](images/janus-gateway/) |
 | — usrsctp (in the Janus image) | — | BSD-3-Clause | [sctplab/usrsctp](https://github.com/sctplab/usrsctp) |
 | — libsrtp (in the Janus image) | — | BSD-3-Clause | [cisco/libsrtp](https://github.com/cisco/libsrtp) |

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 820" width="1200" height="820" role="img" aria-label="The browser reaches Traefik over HTTPS, which routes by host name to Keycloak, Nextcloud, ONLYOFFICE, the console, OpenBao, Stalwart and the Talk signaling server. Keycloak provides SSO OIDC to Nextcloud, the console, OpenBao and Stalwart. Nextcloud calls ONLYOFFICE with a JWT token. WebRTC media goes directly from the browser to Janus and coturn, in hostNetwork, without passing through Traefik. The CLI drives the K3s Kubernetes API.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 860" width="1200" height="860" role="img" aria-label="The browser reaches Traefik over HTTPS, which routes by host name to Keycloak, Nextcloud, ONLYOFFICE, the console, OpenBao, Stalwart and the Talk signaling server. Keycloak provides SSO OIDC to Nextcloud, the console, OpenBao and Stalwart. Nextcloud calls ONLYOFFICE with a JWT token. WebRTC media goes directly from the browser to Janus and coturn, in hostNetwork, without passing through Traefik. The CLI drives the K3s Kubernetes API.">
         <style>
 .t-ns,.t-lbl,.t-host{font-family:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px}
 .t-ns{letter-spacing:.04em}
@@ -41,7 +41,7 @@
         </defs>
 
         <!-- Cluster -->
-        <rect class="frame" x="180" y="20" width="1010" height="680" rx="12"/>
+        <rect class="frame" x="180" y="20" width="1010" height="720" rx="12"/>
         <text class="t-ns" x="196" y="42">K3S CLUSTER · ONE LINUX HOST</text>
 
         <!-- Outside the cluster -->
@@ -148,8 +148,8 @@
         <text class="t-host" x="1000" y="436" text-anchor="middle">mail.</text>
 
         <!-- Row 3 -->
-        <rect class="grp talk" x="400" y="500" width="510" height="180" rx="10"/>
-        <text class="t-ns" x="414" y="520">ceffio-video · Talk High Performance Backend</text>
+        <rect class="grp talk" x="400" y="500" width="510" height="212" rx="10"/>
+        <text class="t-ns" x="414" y="520">ceffio-video · Talk backend</text>
         <rect class="node" x="416" y="540" width="150" height="60" rx="7"/>
         <text class="t-name" x="430" y="565">signaling</text>
         <text class="t-sub" x="430" y="584">presence · rooms</text>
@@ -165,7 +165,12 @@
         <text class="t-sub" x="416" y="628">signaling drives Janus; NATS links its instances</text>
         <rect class="pill" x="416" y="642" width="80" height="24" rx="12"/>
         <text class="t-host" x="456" y="658" text-anchor="middle">talk.</text>
-        <text class="t-sub" x="698" y="658">dashed = hostNetwork</text>
+        <text class="t-sub" x="582" y="658">dashed = hostNetwork</text>
+
+        <rect class="node" x="416" y="676" width="150" height="26" rx="7"/>
+        <text class="t-name" x="428" y="694" font-size="12">talk-recording</text>
+        <text class="t-sub" x="580" y="682">Talk calls it directly; it joins the room as a</text>
+        <text class="t-sub" x="580" y="694">hidden participant and uploads the file.</text>
 
         <rect class="grp" x="940" y="500" width="240" height="180" rx="10"/>
         <text class="t-ns" x="954" y="520">ceffio-data</text>
@@ -176,11 +181,18 @@
         <text class="t-name" x="970" y="628">Valkey</text>
         <text class="t-sub" x="970" y="647">Nextcloud cache and locks</text>
 
+        <!-- Recording: the recorder UPLOADS to Nextcloud and receives NO inbound
+             traffic, so the arrow LEAVES it and joins Nextcloud (ceffio-files).
+             Its path runs in the gap between the left column and the groups,
+             never through a group box. -->
+        <polyline class="edge" points="416,690 360,690 360,140 666,140"/>
+        <line class="edge" x1="666" y1="140" x2="662" y2="140" marker-end="url(#ah)"/>
+
         <!-- Media -->
-        <polyline class="edge media" points="75,410 75,730 852,730"/>
-        <line class="edge media" x1="746" y1="730" x2="746" y2="603" marker-end="url(#ahm)"/>
-        <line class="edge media" x1="852" y1="730" x2="852" y2="603" marker-end="url(#ahm)"/>
-        <text class="t-lbl media" x="96" y="752">WebRTC outside Traefik · UDP 20000–20100 → Janus · 3479 UDP/TCP and 5349 TCP → coturn</text>
+        <polyline class="edge media" points="75,410 75,745 852,745"/>
+        <line class="edge media" x1="746" y1="745" x2="746" y2="603" marker-end="url(#ahm)"/>
+        <line class="edge media" x1="852" y1="745" x2="852" y2="603" marker-end="url(#ahm)"/>
+        <text class="t-lbl media" x="96" y="766">WebRTC outside Traefik · UDP 20000–20100 → Janus · 3479 UDP/TCP and 5349 TCP → coturn</text>
       
 <g transform="translate(20,790)">
 <line class="edge" x1="0" y1="0" x2="28" y2="0"/><text class="t-sub" x="36" y="4">request or call</text>
