@@ -37,9 +37,32 @@ func TestSignalingServersUtiliseLaCleServer(t *testing.T) {
 	}
 }
 
-// Le reglage doit etre un JSON valide : Talk le passe a json_decode, et un
-// document malforme serait ignore en silence — la configuration semblerait
-// posee alors qu'elle ne serait pas lue.
+// LA PRESENCE D'UN PREFIXE DE CHEMIN EST UN PIEGE, pas un detail de style.
+//
+// Le signaling ecoute sur 0.0.0.0:8081 et sert son point d'entree WebSocket
+// directement sur /spreed ([http] de server.conf, aucun prefixe). Une URL
+// annoncee avec un prefixe fait donc composer a Talk un chemin que le serveur
+// ne sert pas :
+//
+//	https://spreed.<domaine>                        -> /spreed                     OK
+//	https://spreed.<domaine>/standalone-signaling   -> /standalone-signaling/spreed 404
+//
+// "/standalone-signaling" est le chemin de Nextcloud AIO, ou un reverse proxy
+// RETIRE le prefixe avant de transmettre. Le recopier sans cette regle donne un
+// client qui frappe un chemin inexistant : Talk affiche « connexion au serveur
+// de signalement perdue », et ni l'un ni l'autre journal ne nomme le chemin.
+//
+// Ce test echouerait si quelqu'un rajoutait un prefixe en s'inspirant d'AIO.
+func TestSignalingSansPrefixeDeChemin(t *testing.T) {
+	url := urlSignaling("ceffio.mandem-it.com")
+
+	if url != "https://spreed.ceffio.mandem-it.com" {
+		t.Errorf("URL = %q, attendu https://spreed.ceffio.mandem-it.com (sans prefixe de chemin)", url)
+	}
+	if strings.Contains(url, "standalone-signaling") {
+		t.Error("l'URL contient /standalone-signaling : le signaling de Ceffio n'expose pas ce chemin (il sert /spreed a la racine)")
+	}
+}
 func TestSignalingServersEstUnJsonValide(t *testing.T) {
 	reglage := reglageSignaling("https://spreed.example.test/standalone-signaling", "secret-de-test")
 

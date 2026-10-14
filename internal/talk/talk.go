@@ -781,7 +781,27 @@ func brancherNextcloud(ctx context.Context) error {
 	//    reachable, and a Talk instance that behaves as if no HPB existed. No
 	//    error anywhere — the setting is simply absent from the app's point of
 	//    view. That silence is why this went unnoticed.
-	url := fmt.Sprintf("https://spreed.%s/standalone-signaling", domaineDe(ctx))
+	//    THE URL CARRIES NO PATH PREFIX. The signaling server listens on
+	//    0.0.0.0:8081 and serves its WebSocket endpoint at /spreed directly
+	//    ([http] section of server.conf, no prefix configured). So the URL
+	//    announced here must stop at the host:
+	//
+	//      https://spreed.<domain>          -> client calls /spreed          OK
+	//      https://spreed.<domain>/standalone-signaling
+	//                                       -> client calls
+	//                                          /standalone-signaling/spreed, a path that
+	//                                          returns 404
+	//
+	//    "/standalone-signaling" is the path used by Nextcloud AIO, where a
+	//    reverse proxy STRIPS the prefix before forwarding. Writing it here
+	//    without that stripping rule produces a client that dials a path the
+	//    server does not serve: Talk reports "signaling server connection lost"
+	//    and nothing in either log names the path, which is what made this
+	//    expensive to find.
+	//
+	//    If a deployment ever does serve the signaling under a prefix, the
+	//    reverse proxy must strip it — and this URL must carry it.
+	url := urlSignaling(domaineDe(ctx))
 
 	// 3. The signaling secret, READ FROM THE VAULT — single source since the
 	//    Kubernetes Secrets disappeared. The signaling reads the same entry
@@ -839,6 +859,17 @@ func brancherNextcloud(ctx context.Context) error {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// urlSignaling builds the URL Talk announces to clients for the signaling
+// server.
+//
+// NO PATH PREFIX: the signaling serves its WebSocket endpoint at /spreed on
+// the root (see the long note in brancherNextcloud). A function rather than an
+// inline format so the absence of a prefix is testable — copying AIO's
+// "/standalone-signaling" here costs hours of debugging.
+func urlSignaling(domaine string) string {
+	return fmt.Sprintf("https://spreed.%s", domaine)
+}
 
 // reglageSignaling builds the value Talk expects for "signaling_servers".
 //
