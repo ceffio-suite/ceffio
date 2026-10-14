@@ -155,13 +155,33 @@ metadata:
 func deployRecorder(ctx context.Context, domain string) error {
 	// Secrets arrive through the OpenBao injector, like every other workload —
 	// this function never reads them, it only wires the annotations.
-	annotations := vault.AnnotationsAgent(8, "recording", "kv/data/ceffio/recording/server",
+	annotations := annotationsRecorder()
+	manifeste := manifesteRecorder(domain, annotations)
+
+	return appliquer(ctx, manifeste)
+}
+
+// annotationsRecorder declares the two values the recorder gets from the vault.
+//
+// ONLY recording/server IS READ — never talk/signaling. The shared internal
+// secret is copied into the recorder's own entry by ensureSecrets, precisely so
+// that this component never holds a right on the signaling's secrets. The
+// matching policy (ceffio-recording) grants read on recording/* and nothing else.
+func annotationsRecorder() string {
+	return vault.AnnotationsAgent(8, "recording", "kv/data/ceffio/recording/server",
 		vault.GabaritExports("kv/data/ceffio/recording/server",
 			[2]string{"RECORDING_SECRET", vault.ChampCoffre("recording-secret")},
 			[2]string{"INTERNAL_SECRET", vault.ChampCoffre("internal-secret")},
 		))
+}
 
-	manifeste := fmt.Sprintf(`apiVersion: apps/v1
+// manifesteRecorder builds the Deployment + Service document.
+//
+// Separated from the apply so the YAML can be rendered and validated without
+// touching a cluster — a malformed manifest would otherwise only be discovered
+// mid-deployment, after the earlier phases have already run.
+func manifesteRecorder(domain, annotations string) string {
+	return fmt.Sprintf(`apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: %[1]s
@@ -186,6 +206,28 @@ spec:
       - name: recording
         image: %[4]s
         imagePullPolicy: IfNotPresent
+        # THE SECRETS MUST BE SOURCED INTO THE ENVIRONMENT, and this is not
+        # cosmetic: the AIO image reads RECORDING_SECRET / INTERNAL_SECRET from
+        # ITS OWN ENVIRONMENT and exits immediately when they are missing:
+        #
+        #   You need to provide the RECORDING_SECRET.
+        #
+        # The injector writes /secrets/env; a container that does not source it
+        # starts with those variables undefined. The three other components
+        # that use the injector (stalwart, keycloak, onlyoffice) do exactly the
+        # same thing.
+        #
+        # exec, and PASS THE IMAGE'S OWN COMMAND as arguments: start.sh ends
+        # with an exec on its own arguments, so calling it bare would exec
+        # nothing and the container would exit immediately. These are the
+        # image's declared Cmd (verified with docker inspect).
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -a
+          . /secrets/env
+          set +a
+          exec /start.sh python -m nextcloud.talk.recording --config /conf/recording.conf
         env:
         # The recorder needs to tell the two suites apart: which Nextcloud it
         # serves, and which signaling it must authenticate against.
@@ -230,8 +272,6 @@ spec:
   ports:
   - {name: http, port: %[6]d, targetPort: %[6]d}
 `, nom, deployNS, indentYaml(annotations, 8), image, domain, portHTTP)
-
-	return appliquer(ctx, manifeste)
 }
 
 // attendrePret blocks until the recorder answers, so a deployment never claims
