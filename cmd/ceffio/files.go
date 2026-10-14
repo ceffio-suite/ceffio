@@ -12,8 +12,14 @@ import (
 )
 
 // newFilesCmd déploie la couche fichiers (Nextcloud) SEULE.
+//
+// AVEC --domain, la commande VA JUSQU'AU RACCORDEMENT SSO. Sans ce drapeau, elle
+// s'arrête au déploiement — ce qui laissait sans recours quand seul le SSO était
+// cassé : la fonction de raccordement n'était appelée que par l'installation
+// complète, jamais par la commande du composant concerné.
 func newFilesCmd() *cobra.Command {
-	return &cobra.Command{
+	var domain string
+	cmd := &cobra.Command{
 		Use:   "files",
 		Short: "Déployer la couche fichiers (Nextcloud) seule",
 		Long: `Déploie Nextcloud et son stockage.
@@ -21,14 +27,27 @@ func newFilesCmd() *cobra.Command {
 SES IDENTIFIANTS VIENNENT DU COFFRE, ET DE NULLE PART AILLEURS : ceux de la base, et
 ceux du compte d'administration. Le pod ne fait que lire un fichier que l'injecteur
 compose à partir de plusieurs entrées — la base et l'administration sont deux comptes
-distincts, et le conteneur n'a pas à connaître cette répartition.`,
+distincts, et le conteneur n'a pas à connaître cette répartition.
+
+AVEC --domain, raccorde aussi Nextcloud au SSO Keycloak (app user_oidc + fournisseur).
+La commande RELIT ensuite ce qui a été enregistré et échoue si le fournisseur n'a pas
+ses identifiants : un fournisseur vide laisse une page de connexion en 404.`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(c *cobra.Command, args []string) error {
 			resoudreCoffre(c)
-			return files.Deploy(c.Context())
+			if err := files.Deploy(c.Context()); err != nil {
+				return err
+			}
+			if domain == "" {
+				return nil
+			}
+			return files.ConfigureOIDC(c.Context(), domain)
 		},
 	}
+	cmd.Flags().StringVar(&domain, "domain", "",
+		"Raccorder aussi le SSO (ex. ceffio.mandem-it.com) ; sans ce drapeau, déploiement seul")
+	return cmd
 }
 
 // newIdentityCmd déploie la couche identité (Keycloak) SEULE.
