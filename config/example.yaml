@@ -1,3 +1,8 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright © MANDEM
+#
+# Example configuration. The installer does not read this file yet; it mirrors
+# the layers the code actually deploys (see the README's component table).
 domain: company.fr
 profile: business-50
 
@@ -19,11 +24,8 @@ files:
 office:
   provider: onlyoffice
 
-chat:
-  provider: matrix
-
-video:
-  provider: jitsi
+talk: # chat + video: Nextcloud Talk with the Janus high-performance backend
+  provider: talk
 
 mail:
   provider: stalwart

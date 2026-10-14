@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright © MANDEM
 {{- range $ns, $_ := .Values.namespaces }}
 {{- $name := printf "ceffio-%s" $ns }}
 apiVersion: v1

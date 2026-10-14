@@ -1,3 +1,8 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright © MANDEM
+#
+# Reference profile for small teams (~20 users) — sizing guidance only,
+# not parsed by the installer yet.
 name: small
 
 capacity:

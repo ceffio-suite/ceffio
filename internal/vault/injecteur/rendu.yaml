@@ -1,3 +1,7 @@
+# This file is rendered from the Helm chart openbao-helm 0.30.3
+# (https://github.com/openbao/openbao-helm), distributed under the Mozilla
+# Public License 2.0. SPDX-License-Identifier: MPL-2.0
+# Any modification of this file remains under MPL-2.0.
 ---
 # Source: openbao/templates/injector-serviceaccount.yaml
 apiVersion: v1

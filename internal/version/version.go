@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Package version records the image and chart versions deployed by Ceffio.
 // It is the single source of truth for:
 //
@@ -46,7 +49,7 @@ var Registry = []Composant{
 		Module: "internal/talk", Role: "Talk: session coordination",
 	},
 	{
-		Nom: "janus", Image: "ghcr.io/ceffio-suite/janus-gateway:1.3.0-1",
+		Nom: "janus", Image: "ghcr.io/ceffio-suite/janus-gateway:1.4.0-1",
 		Module: "internal/talk", Role: "Talk: SFU, media transport",
 	},
 	{
@@ -66,8 +69,8 @@ var Registry = []Composant{
 		Module: "internal/office", Role: "document editing",
 	},
 	{
-		Nom: "redis", Image: "redis:7.4.11",
-		Module: "internal/data", Role: "cache and shared state",
+		Nom: "redis", Image: "docker.io/valkey/valkey:8.1.10",
+		Module: "internal/data", Role: "cache and shared state (Valkey, Redis-compatible)",
 	},
 	{
 		Nom: "stalwart", Image: "docker.io/stalwartlabs/stalwart:v0.16.26",

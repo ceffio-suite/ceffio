@@ -1,3 +1,9 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright © MANDEM
+#
+# Reference profile for high-availability deployments — sizing guidance
+# only, not parsed by the installer yet. The media stack is Janus (SFU):
+# "multipleJVB" was Jitsi terminology from the removed stack.
 name: enterprise-ha
 
 requirements:
@@ -5,6 +11,6 @@ requirements:
   haPostgreSQL: true
   distributedStorage: true
   multipleIngressReplicas: true
-  multipleJVB: true
+  multipleSFU: true # Janus replicas behind the signaling server
   antiAffinity: true
   podDisruptionBudgets: true

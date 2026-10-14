@@ -1,6 +1,9 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Package files orchestrates the deployment of the files layer (Phase 5):
 // the dedicated PostgreSQL user/secret, the Nextcloud admin, then Nextcloud
-// wired to the `nextcloud` database and Redis. Data on a PVC.
+// wired to the `nextcloud` database and Valkey (Redis-compatible). Data on a PVC.
 //
 // Secrets are generated at runtime (crypto/rand), never in clear text in Git (§111).
 package files
@@ -31,7 +34,9 @@ const (
 	dbName    = "nextcloud"
 	dbUser    = "nextcloud"
 	dbService = "ceffio-pg-rw.ceffio-data.svc"
-	// Redis (deployed in Phase 3).
+	// Valkey (Redis-compatible, deployed in Phase 3). The Service name stays
+	// `ceffio-redis`: it is the interface the Nextcloud image expects, and
+	// renaming it would break existing installations.
 	redisService = "ceffio-redis.ceffio-data.svc"
 	redisPort    = "6379"
 )
@@ -39,7 +44,7 @@ const (
 // Deploy installs the files layer (Phase 5), idempotently:
 //  1. dedicated PostgreSQL role + password for Nextcloud
 //  2. Nextcloud admin secret (generated)
-//  3. Nextcloud (postgres + redis + data PVC) + Service
+//  3. Nextcloud (postgres + valkey + data PVC) + Service
 //  4. instance verification (admin present in the database)
 func Deploy(ctx context.Context) error {
 	fmt.Println("\nDeploying the files layer (Phase 5)...")

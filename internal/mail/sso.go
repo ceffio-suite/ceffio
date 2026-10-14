@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Configuration of Stalwart's single sign-on (Keycloak SSO).
 //
 // WHY THIS FILE EXISTS: everything that follows was established by hand, on a

@@ -1,3 +1,8 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright © MANDEM
+#
+# Reference profile for ~100 concurrent users — sizing guidance only,
+# not parsed by the installer yet.
 name: business-100
 
 capacity:

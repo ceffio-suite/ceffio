@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Package stacks handles the removal of replaced application stacks.
 //
 // Decision of 2026-10-09: Ceffio becomes a Nextcloud product. Talk (a

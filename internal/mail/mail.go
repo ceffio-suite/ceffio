@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Package mail orchestrates the deployment of the mail layer (Phase 13):
 // the Stalwart server, which receives, stores and serves mail over IMAP.
 //
