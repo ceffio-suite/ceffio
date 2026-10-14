@@ -48,7 +48,7 @@ source projects:
 | Video        | Nextcloud Talk + Janus (HPB)       |
 | Office       | ONLYOFFICE                         |
 | Mail         | Stalwart                           |
-| Data         | PostgreSQL (CloudNativePG) + Redis |
+| Data         | PostgreSQL (CloudNativePG) + Valkey |
 | Secrets      | OpenBao                            |
 | Ingress/TLS  | Traefik + cert-manager             |
 | Console      | Ceffio administration console      |
@@ -98,7 +98,7 @@ runs, so before and after can be compared.
 | Layer | Package | Contents |
 |---|---|---|
 | Platform | `internal/platform` | K3s, Ingress, cert-manager |
-| Data | `internal/data` | CloudNativePG, PostgreSQL, Redis |
+| Data | `internal/data` | CloudNativePG, PostgreSQL, Valkey |
 | Identity | `internal/identity` | Keycloak, realm, OIDC clients |
 | Files | `internal/files` | Nextcloud |
 | Office | `internal/office` | ONLYOFFICE + Nextcloud connector |

@@ -172,10 +172,13 @@ func imagesEnService(ctx context.Context) (map[string]versionImage, map[string]v
 	// Several fragments per component: the container name varies with how
 	// the application is packaged.
 	regles := map[string][]string{
-		"keycloak":       {"keycloak"},
-		"nextcloud":      {"nextcloud"},
-		"onlyoffice":     {"documentserver"},
-		"redis":          {"redis:"},
+		"keycloak":   {"keycloak"},
+		"nextcloud":  {"nextcloud"},
+		"onlyoffice": {"documentserver"},
+		// Valkey replaced Redis (license migration): the running pod carries the
+		// valkey image. Keep "redis:" too, so an installation still running the
+		// old image is FOUND and reported as drift, not as missing.
+		"redis":          {"valkey/valkey:", "redis:"},
 		"cloudnative-pg": {"cloudnative-pg"},
 		"cert-manager":   {"cert-manager"},
 	}

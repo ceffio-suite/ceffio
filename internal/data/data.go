@@ -3,7 +3,14 @@
 
 // Package data orchestrates the deployment of the data layer (Phase 3):
 // the CloudNativePG operator, the PostgreSQL cluster (separate databases)
-// and Redis.
+// and Valkey (Redis-compatible cache).
+//
+// WHY VALKEY AND NOT REDIS: since 7.4, Redis is distributed under
+// RSALv2/SSPLv1 — licenses that are NOT open source. Valkey is the Linux
+// Foundation fork, BSD-3-Clause, created by Redis's own maintainers when the
+// license turned. Same protocol, same port, drop-in replacement. Shipping a
+// suite whose own code is AGPL while bundling a non-open-source cache would
+// contradict the product's promise.
 //
 // DB passwords are never put in the manifests: CloudNativePG generates them
 // and stores them in Kubernetes Secrets (principle §111 of the doc).
@@ -24,13 +31,16 @@ const (
 	cnpgNamespace    = "cnpg-system"
 	pgClusterName    = "ceffio-pg"
 	pgNamespace      = "ceffio-data"
-	redisImage       = "redis:7.4.11"
+	// Valkey 8.1.10: latest stable of the 8.x branch at the time of the license
+	// migration (verified on Docker Hub, published 2026-09-21). Pinned exactly:
+	// no "8", no "latest".
+	redisImage = "docker.io/valkey/valkey:8.1.10"
 )
 
 // Deploy installs the data layer (Phase 3), idempotently:
 //  1. CloudNativePG operator
 //  2. PostgreSQL cluster (1 instance) with the separate databases
-//  3. Redis (1 instance)
+//  3. Valkey (1 instance, Redis-compatible)
 func Deploy(ctx context.Context) error {
 	fmt.Println("\nDeploying the data layer (Phase 3)...")
 
@@ -117,7 +127,7 @@ func waitPostgresReady(ctx context.Context) error {
 }
 
 func installRedis(ctx context.Context) error {
-	fmt.Println("∙ Redis " + redisImage)
+	fmt.Println("∙ Valkey (Redis-compatible) " + redisImage)
 	manifest := `apiVersion: apps/v1
 kind: Deployment
 metadata:
