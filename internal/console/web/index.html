@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ceffio — Administration console</title>
+<meta name="description" content="Ceffio administration console: platform status, applications, pods, certificates.">
 <link rel="icon" href="/favicon.ico" sizes="any">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">
@@ -32,7 +33,12 @@
   .app{display:flex;min-height:100vh}
   .side{width:234px;flex:0 0 234px;background:var(--bg2);border-right:1px solid var(--line);padding:20px 14px;display:flex;flex-direction:column;gap:4px;position:sticky;top:0;height:100vh}
   .brand{display:flex;align-items:center;gap:10px;padding:6px 10px 18px;border-bottom:1px solid var(--line);margin-bottom:12px}
-  .brand .logo{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,var(--acc),var(--acc2));display:grid;place-items:center;font-weight:800;color:#06121d;font-size:16px}
+  /* THE REAL MARK, not the letter placeholder it used to show. The symbol is
+     inline SVG so it inherits nothing from the network: this console runs on
+     isolated networks, and a logo fetched from elsewhere would be a failure
+     and a leak. */
+  .brand .logo{width:34px;height:34px;flex:0 0 34px;display:grid;place-items:center;background:linear-gradient(135deg,rgba(91,140,255,.16),rgba(56,189,248,.08));border:1px solid var(--line2);border-radius:10px}
+  .brand .logo svg{width:24px;height:24px;display:block}
   .brand b{font-size:15px;letter-spacing:.3px}
   .brand small{display:block;color:var(--muted);font-size:11px;font-weight:500}
   .nav-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:9px;color:var(--muted);cursor:pointer;border:1px solid transparent;user-select:none;font-weight:500}
@@ -141,7 +147,15 @@
 <div class="app">
   <aside class="side">
     <div class="brand">
-      <div class="logo">C</div>
+      <div class="logo" role="img" aria-label="Ceffio">
+        <svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+          <path d="M85.71 29.36 A40 40 0 0 0 46.98 22.18" fill="none" stroke="#6A3FC8" stroke-width="16"/>
+          <path d="M41.84 24.36 A40 40 0 0 0 20.10 57.21" fill="none" stroke="#0B8A6F" stroke-width="16"/>
+          <path d="M20.10 62.79 A40 40 0 0 0 41.84 95.64" fill="none" stroke="#2B4FD8" stroke-width="16"/>
+          <path d="M46.98 97.82 A40 40 0 0 0 85.71 90.64" fill="none" stroke="#F28C28" stroke-width="16"/>
+          <rect x="93" y="46" width="8" height="28" rx="2" fill="#F6F5F1"/>
+        </svg>
+      </div>
       <div><b>Ceffio</b><small>Administration console</small></div>
     </div>
     <div class="nav-item active" data-tab="dashboard">
@@ -369,14 +383,19 @@
     <span class="mono">kv/ceffio/console/api</span> — and nowhere else.
     It is only stored in your browser.</p>
     <p class="mono" style="font-size:11px;background:var(--bg2);padding:8px 10px;border-radius:6px;margin:10px 0">
-      kubectl exec -n ceffio-vault openbao-0 -- sh -c 'BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$(cat /tmp/bao-token)" bao kv get -field=key kv/ceffio/console/api'
+      TOKEN=$(kubectl get secret openbao-installation -n ceffio-vault -o jsonpath='{.data.token}' | base64 -d)<br>
+      kubectl exec -n ceffio-vault openbao-0 -- \<br>
+      &nbsp;&nbsp;sh -c "BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN='$TOKEN' bao kv get -field=key kv/ceffio/console/api"
     </p>
-    <p class="section-sub" style="font-size:11.5px">The administration token is first read
-    from the <span class="mono">openbao-installation</span> Secret (namespace
-    <span class="mono">ceffio-vault</span>) and dropped into the pod. It is the
-    <b>installation</b> token that administers the vault; the one named
-    <span class="mono">openbao-token</span> is reserved for services and does not grant
-    access to this entry.</p>
+    <p class="section-sub" style="font-size:11.5px">The administration token is read from the
+    <span class="mono">openbao-installation</span> Secret (namespace
+    <span class="mono">ceffio-vault</span>). It is the <b>installation</b> token that
+    administers the vault; the one named <span class="mono">openbao-token</span> is reserved
+    for services and does not grant access to this entry.</p>
+    <p class="section-sub" style="font-size:11.5px">The token is a Kubernetes Secret, not a file
+    inside the pod: it must be read with <span class="mono">kubectl</span> and passed in, as
+    above. Copying it into the pod by hand is what the previous version of this page told you
+    to do, and it fails — nothing creates that file.</p>
     <input id="keyInput" type="password" placeholder="Admin key" autocomplete="off">
     <div class="form-row">
       <button class="btn" onclick="saveKey()" style="flex:1">Connect</button>
