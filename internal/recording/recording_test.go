@@ -4,6 +4,7 @@
 package recording
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -60,5 +61,52 @@ func TestLeRecorderNeLitQueSaPropreEntree(t *testing.T) {
 	}
 	if !strings.Contains(ann, "ceffio/recording/server") {
 		t.Error("le recorder ne reference pas sa propre entree dans le coffre")
+	}
+}
+
+// LA FORME DE CE REGLAGE EST CE QUI FAIT FONCTIONNER LA FONCTIONNALITE, et ce
+// n'est pas la forme evidente.
+//
+// Talk lit un OBJET a deux cles :
+//
+//	{"servers":[{"server":"URL"}],"secret":"SECRET"}
+//
+// lu par Config::getRecordingServers() -> $recording['servers']
+//
+//	et Config::getRecordingSecret()  -> $recording['secret']
+//
+// Les deux passent par getAppValueArray(), qui json_decode la chaine stockee.
+//
+// Ce test attrape l'erreur reellement commise : un TABLEAU
+// [{"url":...,"secret":...}], qui semble naturel et ne marche pas — la racine
+// etant une liste, aucune des deux cles n'existe au premier niveau, les deux
+// getters renvoient leur defaut ([] et ""), et isRecordingEnabled() renvoie
+// false. Talk grise alors « enregistrer cet appel » avec « le serveur
+// d'enregistrement n'est pas installe », alors que le recorder tourne.
+func TestReglageRecordingServersEstUnObjetAvecServerEtSecret(t *testing.T) {
+	reglage := reglageRecording("http://talk-recording.ceffio-video.svc:1234", "secret-de-test")
+
+	var d map[string]any
+	if err := json.Unmarshal([]byte(reglage), &d); err != nil {
+		t.Fatalf("le reglage doit etre un OBJET JSON (Talk le passe a getAppValueArray) ; recu %s", reglage)
+	}
+
+	// getRecordingServers() renvoie $recording['servers'] ?? []
+	servers, ok := d["servers"].([]any)
+	if !ok || len(servers) == 0 {
+		t.Fatalf("cle \"servers\" absente ou vide : getRecordingServers() renverrait [] ; recu %s", reglage)
+	}
+	// getRecordingSecret() renvoie $recording['secret'] ?? ''
+	if d["secret"] != "secret-de-test" {
+		t.Errorf("secret = %v, attendu \"secret-de-test\"", d["secret"])
+	}
+
+	// Le champ de l'entree est "server", pas "url".
+	premier, _ := servers[0].(map[string]any)
+	if _, ok := premier["server"]; !ok {
+		t.Errorf("l'entree doit porter la cle \"server\" ; recu %v", premier)
+	}
+	if _, ok := premier["url"]; ok {
+		t.Errorf("l'entree porte \"url\" : Talk lit $server['server'] ; recu %v", premier)
 	}
 }
