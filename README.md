@@ -78,16 +78,40 @@ command": fewer moving parts, therefore fewer things to break.
 
 ## Architecture
 
-```
-ceffio CLI  +  administration console
-      │
-  Ceffio Operator
-      │
-  Kubernetes API  →  Helm  →  upstream applications
-```
+A Go CLI installs K3s on a Linux host, then deploys and configures each
+building block in its own namespace, directly through the Kubernetes API
+(client-go). There is no Operator: the CLI is the only control point, and
+every deployment is idempotent.
 
-The brain of the product is: **Go CLI + Operator + Helm + CRDs**. Shell is
-used only for bootstrapping.
+<p align="center">
+  <img src="docs/architecture.svg" alt="Ceffio architecture: Traefik serves the web applications by subdomain, Keycloak provides SSO, WebRTC media goes straight to Janus and coturn." width="100%">
+</p>
+
+Three things to read on this diagram:
+
+- **All web traffic enters through Traefik**, which serves each application
+  under its own subdomain (`cloud.`, `office.`, `keycloak.`, `talk.`,
+  `admin.`, `bao.`, `mail.`) with certificates managed by cert-manager.
+- **Keycloak is the only source of identity.** Nextcloud, the console,
+  OpenBao and Stalwart delegate authentication to it (OIDC).
+- **Media bypasses Traefik.** Janus and coturn run in `hostNetwork` and
+  receive audio and video directly on the host ports (see
+  "Media and firewall").
+
+Each application's secrets (database passwords, the ONLYOFFICE JWT token,
+the signaling secrets) are stored in OpenBao and written into the pods by
+its agent-injector: nothing is in clear text in Git.
+
+| Namespace | Contents |
+|---|---|
+| `ceffio-identity` | Keycloak |
+| `ceffio-files` | Nextcloud (files, Talk, Mail) |
+| `ceffio-office` | ONLYOFFICE Docs |
+| `ceffio-video` | Talk HPB: signaling, NATS, Janus, coturn |
+| `ceffio-vault` | OpenBao, agent-injector |
+| `ceffio-mail` | Stalwart |
+| `ceffio-data` | PostgreSQL (CloudNativePG), Valkey |
+| `ceffio-system` | Administration console (deployment `ceffio-admin`) |
 
 ## The layers
 
