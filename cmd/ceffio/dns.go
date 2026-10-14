@@ -7,11 +7,11 @@ import (
 func newDNSCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "dns",
-		Short: "Vérifier la configuration DNS (A, AAAA, MX, SPF, DKIM, DMARC, PTR)",
+		Short: "Check the DNS configuration (A, AAAA, MX, SPF, DKIM, DMARC, PTR)",
 	}
 	c.AddCommand(&cobra.Command{
 		Use:   "status",
-		Short: "Afficher l'état de la configuration DNS",
+		Short: "Show the state of the DNS configuration",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return notImplemented("dns status")
 		},

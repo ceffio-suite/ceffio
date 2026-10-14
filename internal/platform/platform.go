@@ -1,5 +1,5 @@
-// Package platform orchestre le déploiement de la plateforme de base sur le
-// cluster : namespaces (chart umbrella), cert-manager et les issuers TLS.
+// Package platform orchestrates the deployment of the base platform on the
+// cluster: namespaces (umbrella chart), cert-manager and the TLS issuers.
 package platform
 
 import (
@@ -15,17 +15,17 @@ import (
 )
 
 const (
-	// certManagerChartVersion est pinnée, pas "latest" (principes du doc §111).
+	// certManagerChartVersion is pinned, not "latest" (doc principles §111).
 	certManagerChartVersion = "v1.21.1"
 )
 
-// Deploy installe la plateforme de base (Phase 2) sur le cluster courant,
-// de façon idempotente :
-//  1. namespaces via le chart umbrella ceffio
-//  2. cert-manager (chart officiel jetstack)
-//  3. issuers TLS (self-signed, pour le développement)
+// Deploy installs the base platform (Phase 2) on the current cluster,
+// idempotently:
+//  1. namespaces via the ceffio umbrella chart
+//  2. cert-manager (official jetstack chart)
+//  3. TLS issuers (self-signed, for development)
 func Deploy(ctx context.Context) error {
-	fmt.Println("\nDéploiement de la plateforme (Phase 2)...")
+	fmt.Println("\nDeploying the platform (Phase 2)...")
 
 	if err := installUmbrella(ctx); err != nil {
 		return err
@@ -40,12 +40,12 @@ func Deploy(ctx context.Context) error {
 		return err
 	}
 
-	fmt.Println("✓ Plateforme déployée")
+	fmt.Println("✓ Platform deployed")
 	return nil
 }
 
 func installUmbrella(ctx context.Context) error {
-	fmt.Println("∙ namespaces (chart ceffio embarqué)")
+	fmt.Println("∙ namespaces (embedded ceffio chart)")
 	chart, err := embeddedChart(ctx)
 	if err != nil {
 		return err
@@ -58,8 +58,8 @@ func installUmbrella(ctx context.Context) error {
 	return cmd.Run()
 }
 
-// embeddedChart extrait le chart "ceffio" du FS embarqué vers un dossier
-// temporaire et retourne son chemin. Garde le déploiement autoportant.
+// embeddedChart extracts the "ceffio" chart from the embedded FS to a
+// temporary folder and returns its path. Keeps the deployment self-contained.
 func embeddedChart(ctx context.Context) (string, error) {
 	dir, err := os.MkdirTemp("", "ceffio-charts-*")
 	if err != nil {
@@ -102,14 +102,14 @@ func installCertManager(ctx context.Context) error {
 }
 
 func waitCertManagerReady(ctx context.Context) error {
-	fmt.Println("∙ attente cert-manager Ready...")
+	fmt.Println("∙ waiting for cert-manager Ready...")
 	for _, d := range []string{"cert-manager", "cert-manager-cainjector", "cert-manager-webhook"} {
 		cmd := k8s.Command(ctx, "kubectl", "rollout", "status",
 			"deployment/"+d, "-n", "cert-manager", "--timeout=180s")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("%s pas prêt: %w", d, err)
+			return fmt.Errorf("%s not ready: %w", d, err)
 		}
 	}
 	return nil

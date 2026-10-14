@@ -12,47 +12,48 @@ import (
 //go:embed injecteur/rendu.yaml
 var manifesteInjecteur string
 
-// VersionChartInjecteur est la version du chart OpenBao dont ce rendu provient.
+// VersionChartInjecteur is the version of the OpenBao chart this render comes
+// from.
 //
-// LE RENDU EST VERSIONNÉ AVEC LE CODE, pas tiré à l'installation : un installeur
-// ne doit dépendre ni de Helm ni du réseau vers un dépôt de charts. Pour mettre à
-// jour, on re-rend le chart à cette version, on remplace le fichier, et le diff dit
-// exactement ce qui change.
+// THE RENDER IS VERSIONED WITH THE CODE, not pulled at install time: an
+// installer must depend neither on Helm nor on network access to a chart
+// repository. To update it, re-render the chart at that version, replace the
+// file, and the diff says exactly what changed.
 const VersionChartInjecteur = "0.30.3"
 
-// nomWebhookInjecteur est le nom de la configuration de webhook créée par le chart.
-// Il sert de témoin de disponibilité — voir poserInjecteur.
+// nomWebhookInjecteur is the name of the webhook configuration created by the
+// chart. It serves as the readiness witness — see poserInjecteur.
 const nomWebhookInjecteur = "ceffio-injector-openbao-agent-injector-cfg"
 
-// poserInjecteur installe l'agent-injecteur d'OpenBao, et VÉRIFIE qu'il est prêt à
-// injecter avant de rendre la main.
+// poserInjecteur installs OpenBao's agent-injector, and VERIFIES it is ready to
+// inject before handing back control.
 //
-// POURQUOI AVANT LES CHARGES ANNOTÉES : les pods migrés portent des annotations que
-// seul l'injecteur sait lire. Sa politique d'échec est « Ignore » — un choix sain
-// pour le cluster, puisqu'un injecteur tombé ne bloque pas la création des pods —
-// mais elle a une conséquence : sans injecteur, les pods démarrent SANS secrets et
-// sans aucune erreur d'admission. Un silence complet, exactement le mode de panne
-// qu'on cherche à éliminer. Comme ce contrôle est typé et bloque le déploiement, il
-// ne peut pas passer pour un succès.
+// WHY BEFORE THE ANNOTATED WORKLOADS: migrated pods carry annotations that only
+// the injector knows how to read. Its failure policy is "Ignore" — a sound
+// choice for the cluster, since a downed injector does not block pod creation —
+// but it has one consequence: without the injector, pods start WITHOUT secrets
+// and with no admission error at all. Complete silence, exactly the failure mode
+// we are trying to eliminate. Because this check is typed and blocks the
+// deployment, it cannot pass itself off as success.
 //
-// LE TÉMOIN EST LA GRAINE DE CONFIANCE DU WEBHOOK, et pas l'état du pod : c'est
-// l'injecteur qui l'écrit, une fois son certificat généré. Un pod « Ready » peut
-// très bien l'être avant d'avoir patché son webhook ; un caBundle renseigné, non.
+// THE WITNESS IS THE WEBHOOK'S TRUST SEED, not the pod's state: the injector is
+// what writes it, once its certificate is generated. A "Ready" pod may well be
+// ready before it has patched its webhook; a populated caBundle cannot.
 func poserInjecteur(ctx context.Context, cli *k8sapi.Client) error {
-	fmt.Println("∙ agent-injecteur OpenBao (chart " + VersionChartInjecteur + ")")
+	fmt.Println("∙ OpenBao agent-injector (chart " + VersionChartInjecteur + ")")
 	if err := cli.Appliquer(ctx, manifesteInjecteur); err != nil {
-		return fmt.Errorf("pose de l'agent-injecteur : %w", err)
+		return fmt.Errorf("installing the agent-injector: %w", err)
 	}
 
 	fin := time.Now().Add(150 * time.Second)
 	for time.Now().Before(fin) {
 		pret, err := cli.WebhookEstPret(ctx, nomWebhookInjecteur)
 		if err == nil && pret {
-			fmt.Println("  ✓ injecteur prêt : graine de confiance du webhook publiée")
+			fmt.Println("  ✓ injector ready: webhook trust seed published")
 			return nil
 		}
 		time.Sleep(3 * time.Second)
 	}
-	return fmt.Errorf("l'agent-injecteur n'a pas publié sa graine de confiance en 150 s — " +
-		"les pods annotés démarreraient SANS secrets, sans erreur d'admission")
+	return fmt.Errorf("the agent-injector did not publish its trust seed within 150 s — " +
+		"annotated pods would start WITHOUT secrets, with no admission error")
 }

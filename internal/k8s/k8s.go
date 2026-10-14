@@ -1,25 +1,25 @@
-// Package k8s centralise l'exécution des outils Kubernetes (kubectl, helm) avec
-// un environnement explicite.
+// Package k8s centralizes the execution of the Kubernetes tools (kubectl, helm)
+// with an explicit environment.
 //
-// Pourquoi ce package existe — bug de reproductibilité découvert par le
-// test from-scratch du 2026-09-25 :
+// Why this package exists — reproducibility bug discovered by the from-scratch
+// test of 2026-09-25:
 //
-// Le script d'installation K3s expose `kubectl` comme un SYMLINK vers le binaire
-// `k3s` (/usr/local/bin/kubectl -> k3s). Invoqué sous le nom « kubectl », ce
-// binaire applique la logique « bundled kubectl » de K3s : il lit
-// /etc/rancher/k3s/k3s.yaml EN DUR, AVANT toute résolution standard. Or ce
-// fichier appartient à root en 0600 → un CLI lancé par un utilisateur non-root
-// (ou tout appel hérité d'un tel env) échoue en :
+// The K3s install script exposes `kubectl` as a SYMLINK to the `k3s` binary
+// (/usr/local/bin/kubectl -> k3s). Invoked under the name "kubectl", this
+// binary applies K3s's "bundled kubectl" logic: it reads
+// /etc/rancher/k3s/k3s.yaml IN HARD, BEFORE any standard resolution. And this
+// file is owned by root, mode 0600 → a CLI launched by a non-root user (or
+// any call inherited from such an env) fails with:
 //
 //	error loading config file "/etc/rancher/k3s/k3s.yaml": permission denied
 //
-// …même quand ~/.kube/config existe, est correct et lisible. Conséquence : tout
-// le déploiement échoue (WaitReady ne voit jamais le nœud, chaque Deploy casse),
-// et l'erreur affichée ne mentionne jamais le kubeconfig, ce qui rend le
-// diagnostic très coûteux.
+// …even when ~/.kube/config exists, is correct and readable. Consequence: the
+// whole deployment fails (WaitReady never sees the node, every Deploy breaks),
+// and the error displayed never mentions the kubeconfig, which makes the
+// diagnosis very expensive.
 //
-// La parade : ne jamais dépendre de la résolution implicite du kubeconfig —
-// toujours passer KUBECONFIG explicitement dans l'environnement du processus.
+// The countermeasure: never depend on the implicit kubeconfig resolution —
+// always pass KUBECONFIG explicitly in the process environment.
 package k8s
 
 import (
@@ -29,12 +29,12 @@ import (
 	"path/filepath"
 )
 
-// Env retourne l'environnement du processus courant enrichi de KUBECONFIG
-// (et, pour K3s, K3S_* utiles), afin que kubectl et helm visent le même
-// kubeconfig de façon déterministe.
+// Env returns the current process environment enriched with KUBECONFIG
+// (and, for K3s, the useful K3S_* ones), so that kubectl and helm aim at the
+// same kubeconfig deterministically.
 //
-// Si KUBECONFIG est déjà défini par l'appelant, il est respecté : on ne
-// l'écrase pas.
+// If KUBECONFIG is already set by the caller, it is respected: we do not
+// overwrite it.
 func Env() []string {
 	env := os.Environ()
 	if os.Getenv("KUBECONFIG") != "" {
@@ -46,8 +46,8 @@ func Env() []string {
 	return env
 }
 
-// defaultKubeconfig résout le kubeconfig par défaut de l'utilisateur
-// (~/.kube/config). Retourne "" si HOME est introuvable.
+// defaultKubeconfig resolves the user's default kubeconfig
+// (~/.kube/config). Returns "" if HOME cannot be found.
 func defaultKubeconfig() string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
@@ -56,8 +56,8 @@ func defaultKubeconfig() string {
 	return filepath.Join(home, ".kube", "config")
 }
 
-// Command est un exec.CommandContext qui applique Env() automatiquement.
-// À utiliser pour TOUT appel à kubectl ou helm.
+// Command is an exec.CommandContext that applies Env() automatically.
+// Use it for EVERY kubectl or helm call.
 func Command(ctx context.Context, name string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env = Env()

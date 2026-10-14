@@ -15,26 +15,25 @@ func newBackupCmd() *cobra.Command {
 
 	c := &cobra.Command{
 		Use:   "backup",
-		Short: "Sauvegarder les données (PostgreSQL, fichiers, media, config)",
-		Long: `Sauvegarde une installation Ceffio dans une archive autoportante.
+		Short: "Back up the data (PostgreSQL, files, media, config)",
+		Long: `Backs up a Ceffio installation into a self-contained archive.
 
-Contenu :
-  · les bases PostgreSQL   mysuite, keycloak, nextcloud
-  · les volumes            nextcloud-data, onlyoffice-data
-  · les Secrets applicatifs — sans eux, les données restaurées seraient
-                           orphelines (mots de passe de base, clés de
-                           signature et ONLYOFFICE)
-  · un manifeste           empreintes SHA-256 de chaque élément
+Contents:
+  · the PostgreSQL databases   mysuite, keycloak, nextcloud
+  · the volumes                nextcloud-data, onlyoffice-data
+  · the application Secrets — without them, the restored data would be
+                               orphaned (database passwords, signing
+                               keys and ONLYOFFICE)
+  · a manifest                 SHA-256 fingerprints of every item
 
-L'archive est écrite dans le répertoire courant, ou dans --dir. Elle contient
-des secrets : elle est créée en 0600 et ne doit pas être déposée en clair sur
-un partage.
+The archive is written to the current directory, or into --dir. It contains
+secrets: it is created 0600 and must not be left in clear text on a share.
 
-Avec --verify (par défaut), l'archive est relue et chaque empreinte
-recontrôlée juste après sa création — c'est ce qui distingue une sauvegarde
-d'un fichier de taille inconnue.`,
+With --verify (default), the archive is re-read and every fingerprint
+rechecked right after its creation — that is what distinguishes a backup
+from a file of unknown size.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Println("Ceffio — sauvegarde")
+			fmt.Println("Ceffio — backup")
 			fmt.Println()
 
 			path, err := backup.Sauvegarder(cmd.Context(), dir, func(etape string) {
@@ -48,22 +47,22 @@ d'un fichier de taille inconnue.`,
 			if err == nil {
 				fmt.Println()
 				fmt.Printf("Archive  : %s\n", path)
-				fmt.Printf("Taille   : %.1f Mo\n", float64(man.TotalBytes)/1024/1024)
-				fmt.Printf("Éléments : %d\n", len(man.Entries))
+				fmt.Printf("Size     : %.1f MB\n", float64(man.TotalBytes)/1024/1024)
+				fmt.Printf("Items    : %d\n", len(man.Entries))
 				for _, e := range man.Entries {
-					fmt.Printf("  %-8s %-20s %8.3f Mo  %s\n", e.Kind, e.Name,
+					fmt.Printf("  %-8s %-20s %8.3f MB  %s\n", e.Kind, e.Name,
 						float64(e.Bytes)/1024/1024, e.SHA256[:12])
 				}
 			}
 
 			if len(man.Errors) > 0 {
 				fmt.Println()
-				fmt.Println("Avertissements :")
+				fmt.Println("Warnings:")
 				for _, e := range man.Errors {
 					fmt.Printf("  ! %s\n", e)
 				}
 				fmt.Println()
-				fmt.Println("✗ Sauvegarde incomplète — voir les avertissements ci-dessus")
+				fmt.Println("✗ Incomplete backup — see the warnings above")
 				os.Exit(1)
 			}
 
@@ -75,38 +74,38 @@ d'un fichier de taille inconnue.`,
 			}
 
 			fmt.Println()
-			fmt.Println("✓ Sauvegarde complète")
+			fmt.Println("✓ Backup complete")
 			fmt.Println()
-			fmt.Println("Pour restaurer : ceffio restore " + filepath.Base(path))
+			fmt.Println("To restore: ceffio restore " + filepath.Base(path))
 			return nil
 		},
 	}
 
-	c.Flags().StringVar(&dir, "dir", ".", "Répertoire de destination de l'archive")
-	c.Flags().BoolVar(&verifier, "verify", true, "Relire l'archive et contrôler les empreintes")
+	c.Flags().StringVar(&dir, "dir", ".", "Destination directory for the archive")
+	c.Flags().BoolVar(&verifier, "verify", true, "Re-read the archive and check the fingerprints")
 
 	return c
 }
 
-// printManifeste affiche le résumé d'une sauvegarde.
+// printManifeste prints the summary of a backup.
 func printManifeste(man *backup.Manifest) {
 	if man.CreatedAt != "" {
-		fmt.Printf("  créée le   : %s\n", man.CreatedAt)
+		fmt.Printf("  created on : %s\n", man.CreatedAt)
 	}
 	if man.Domain != "" {
-		fmt.Printf("  domaine    : %s\n", man.Domain)
+		fmt.Printf("  domain     : %s\n", man.Domain)
 	}
 	if man.K8sVersion != "" {
 		fmt.Printf("  kubernetes : %s\n", man.K8sVersion)
 	}
-	fmt.Printf("  éléments   : %d (%.1f Mo)\n", len(man.Entries), float64(man.TotalBytes)/1024/1024)
+	fmt.Printf("  items      : %d (%.1f MB)\n", len(man.Entries), float64(man.TotalBytes)/1024/1024)
 	for _, e := range man.Entries {
 		fmt.Printf("    %-8s %s\n", e.Kind, e.Name)
 	}
 }
 
-// verifierArchive relit une archive et contrôle chaque empreinte.
-// Extrait ici pour être partagé avec `ceffio restore`.
+// verifierArchive re-reads an archive and checks every fingerprint.
+// Extracted here to be shared with `ceffio restore`.
 func verifierArchive(path string) error {
 	man, err := backup.Verifier(path)
 	if err != nil {
@@ -116,8 +115,8 @@ func verifierArchive(path string) error {
 		for _, e := range man.Errors {
 			fmt.Printf("  ! %s\n", e)
 		}
-		return fmt.Errorf("archive incomplète ou altérée")
+		return fmt.Errorf("incomplete or corrupted archive")
 	}
-	fmt.Printf("✓ Archive vérifiée : %d élément(s), empreintes conformes\n", len(man.Entries))
+	fmt.Printf("✓ Archive verified: %d item(s), fingerprints match\n", len(man.Entries))
 	return nil
 }

@@ -15,16 +15,16 @@ import (
 	"time"
 )
 
-// Finding est un problème détecté, avec de quoi agir.
+// Finding is a detected problem, with something to act on.
 type Finding struct {
-	Severity string `json:"severity"` // critique | avertissement
-	Scope    string `json:"scope"`    // cluster, tls, reseau, ou nom de couche
+	Severity string `json:"severity"` // severity levels emitted by `ceffio doctor`: "critical" | "warning"
+	Scope    string `json:"scope"`    // cluster, tls, network, or a layer name
 	Title    string `json:"title"`
 	Detail   string `json:"detail,omitempty"`
 	Action   string `json:"action,omitempty"`
 }
 
-// Report est le résultat complet d'un diagnostic.
+// Report is the complete result of a diagnostic.
 type Report struct {
 	GeneratedAt string    `json:"generated_at"`
 	Version     string    `json:"version,omitempty"`
@@ -32,7 +32,7 @@ type Report struct {
 	Findings    []Finding `json:"findings"`
 }
 
-// WriteJSON sérialise un rapport.
+// WriteJSON serializes a report.
 func WriteJSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
@@ -40,14 +40,14 @@ func WriteJSON(w io.Writer, v any) error {
 }
 
 // ---------------------------------------------------------------------------
-// Archive de support
+// Support archive
 // ---------------------------------------------------------------------------
 
-// Expressions de ce qui ne doit JAMAIS sortir de la machine dans un bundle.
-// On filtre à l'écriture : même si l'appelant se trompe et joint un document
-// trop large, les valeurs sensibles sont neutralisées avant d'entrer dans
-// l'archive. Un bundle de support circule par courriel — il ne doit contenir
-// aucun secret, sans exception.
+// Patterns for what must NEVER leave the machine in a bundle. We filter at
+// write time: even if the caller makes a mistake and attaches an overly broad
+// document, the sensitive values are neutralized before entering the
+// archive. A support bundle travels by email — it must contain no secrets,
+// without exception.
 var (
 	reSecretJSON = regexp.MustCompile(`(?i)"(password|passwd|secret|token|api[_-]?key|private[_-]?key|client[_-]?secret)"\s*:\s*"[^"]*"`)
 	reSecretYAML = regexp.MustCompile(`(?im)^(\s*(?:password|passwd|secret|token|api[_-]?key|private[_-]?key|client[_-]?secret|smtp_password)\s*:\s*).*$`)
@@ -57,26 +57,26 @@ var (
 	reConnString = regexp.MustCompile(`(?i)([a-z]+://[^:@/\s]+:)[^@/\s]+(@)`)
 )
 
-// Redact neutralise les valeurs sensibles d'un texte.
+// Redact neutralizes the sensitive values of a text.
 func Redact(s string) string {
-	s = rePrivateKey.ReplaceAllString(s, "[CLE PRIVEE RETIREE]")
-	s = reSecretJSON.ReplaceAllString(s, `"$1":"[RETIRE]"`)
-	s = reSecretYAML.ReplaceAllString(s, `${1}[RETIRE]`)
-	s = reDataType.ReplaceAllString(s, `"data":{"[RETIRE]":"les valeurs de Secret ne sont pas collectées"}`)
-	s = reBearer.ReplaceAllString(s, `${1}[RETIRE]`)
-	s = reConnString.ReplaceAllString(s, `${1}[RETIRE]${2}`)
+	s = rePrivateKey.ReplaceAllString(s, "[PRIVATE KEY REMOVED]")
+	s = reSecretJSON.ReplaceAllString(s, `"$1":"[REMOVED]"`)
+	s = reSecretYAML.ReplaceAllString(s, `${1}[REMOVED]`)
+	s = reDataType.ReplaceAllString(s, `"data":{"[REMOVED]":"Secret values are not collected"}`)
+	s = reBearer.ReplaceAllString(s, `${1}[REMOVED]`)
+	s = reConnString.ReplaceAllString(s, `${1}[REMOVED]${2}`)
 	return s
 }
 
-// bundleDir collecte les éléments non sensibles : état, diagnostic, et les
-// journaux des seuls pods en difficulté (jamais ceux des pods sains).
+// bundleDir collects the non-sensitive items: state, diagnostic, and the
+// logs of only the pods in trouble (never those of healthy pods).
 func bundleDir(r Report) (string, error) {
 	dir, err := os.MkdirTemp("", "ceffio-support-")
 	if err != nil {
 		return "", err
 	}
 
-	// Le rapport (l'état ne contient que des noms et des états, aucun secret).
+	// The report (the state only contains names and statuses, no secrets).
 	f, err := os.Create(filepath.Join(dir, "diagnostic.json"))
 	if err != nil {
 		return dir, err
@@ -87,12 +87,12 @@ func bundleDir(r Report) (string, error) {
 	}
 	f.Close()
 
-	// Journal des pods en difficulté uniquement.
+	// Logs of the pods in trouble only.
 	if r.State != nil && r.State.ClusterReachable {
 		for _, l := range r.State.Layers {
 			for _, p := range l.Pods {
 				if p.Ready && p.Restarts < 3 {
-					continue // pod sain : rien à diagnostiquer
+					continue // healthy pod: nothing to diagnose
 				}
 				raw, err := kubectlJSONString("logs", "-n", l.Namespace, p.Name, "--tail=200")
 				if err != nil {
@@ -105,27 +105,27 @@ func bundleDir(r Report) (string, error) {
 		}
 	}
 
-	// Manifeste lisible par un humain.
+	// Human-readable manifest.
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Archive de support Ceffio\n")
-	fmt.Fprintf(&sb, "Genere le : %s\n\n", time.Now().Format(time.RFC3339))
+	fmt.Fprintf(&sb, "Ceffio support archive\n")
+	fmt.Fprintf(&sb, "Generated on: %s\n\n", time.Now().Format(time.RFC3339))
 	if r.State != nil {
-		fmt.Fprintf(&sb, "Domaine   : %s\n", r.State.Domain)
-		fmt.Fprintf(&sb, "Noeuds    : %d/%d prets\n", r.State.NodesReady, len(r.State.Nodes))
-		fmt.Fprintf(&sb, "Pods      : %d/%d prets\n", r.State.ReadyPods, r.State.TotalPods)
+		fmt.Fprintf(&sb, "Domain     : %s\n", r.State.Domain)
+		fmt.Fprintf(&sb, "Nodes      : %d/%d ready\n", r.State.NodesReady, len(r.State.Nodes))
+		fmt.Fprintf(&sb, "Pods       : %d/%d ready\n", r.State.ReadyPods, r.State.TotalPods)
 	}
-	fmt.Fprintf(&sb, "Problemes : %d\n\n", len(r.Findings))
+	fmt.Fprintf(&sb, "Problems   : %d\n\n", len(r.Findings))
 	for _, x := range r.Findings {
 		fmt.Fprintf(&sb, "[%s] %s — %s\n", x.Severity, x.Scope, x.Title)
 	}
-	sb.WriteString("\nAucun secret n'est inclus : ni valeur de Secret, ni mot de passe,\n")
-	sb.WriteString("ni cle privee. Les journaux sont filtres avant ecriture.\n")
-	os.WriteFile(filepath.Join(dir, "LISEZ-MOI.txt"), []byte(sb.String()), 0o644)
+	sb.WriteString("\nNo secrets are included: no Secret values, no passwords,\n")
+	sb.WriteString("no private keys. Logs are filtered before writing.\n")
+	os.WriteFile(filepath.Join(dir, "README.txt"), []byte(sb.String()), 0o644)
 
 	return dir, nil
 }
 
-// WriteBundle produit l'archive .tar.gz de support et renvoie son chemin.
+// WriteBundle produces the .tar.gz support archive and returns its path.
 func WriteBundle(r Report) (string, error) {
 	dir, err := bundleDir(r)
 	if err != nil {

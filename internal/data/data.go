@@ -1,8 +1,9 @@
-// Package data orchestre le déploiement de la couche données (Phase 3) :
-// opérateur CloudNativePG, cluster PostgreSQL (bases séparées) et Redis.
+// Package data orchestrates the deployment of the data layer (Phase 3):
+// the CloudNativePG operator, the PostgreSQL cluster (separate databases)
+// and Redis.
 //
-// Les mots de passe DB ne sont jamais mis dans les manifests : CloudNativePG
-// les génère et les stocke dans des Secrets Kubernetes (principe §111 du doc).
+// DB passwords are never put in the manifests: CloudNativePG generates them
+// and stores them in Kubernetes Secrets (principle §111 of the doc).
 package data
 
 import (
@@ -14,7 +15,7 @@ import (
 	"time"
 )
 
-// Versions pinnées (découvertes via les dépôts, pas inventées).
+// Pinned versions (found via the repositories, not invented).
 const (
 	cnpgChartVersion = "0.29.0"
 	cnpgNamespace    = "cnpg-system"
@@ -23,12 +24,12 @@ const (
 	redisImage       = "redis:7.4.11"
 )
 
-// Deploy installe la couche données (Phase 3), de façon idempotente :
-//  1. opérateur CloudNativePG
-//  2. cluster PostgreSQL (1 instance) avec les bases séparées
+// Deploy installs the data layer (Phase 3), idempotently:
+//  1. CloudNativePG operator
+//  2. PostgreSQL cluster (1 instance) with the separate databases
 //  3. Redis (1 instance)
 func Deploy(ctx context.Context) error {
-	fmt.Println("\nDéploiement de la couche données (Phase 3)...")
+	fmt.Println("\nDeploying the data layer (Phase 3)...")
 
 	if err := installCloudNativePG(ctx); err != nil {
 		return err
@@ -40,12 +41,12 @@ func Deploy(ctx context.Context) error {
 		return err
 	}
 
-	fmt.Println("✓ Couche données déployée")
+	fmt.Println("✓ Data layer deployed")
 	return nil
 }
 
 func installCloudNativePG(ctx context.Context) error {
-	fmt.Println("∙ opérateur CloudNativePG " + cnpgChartVersion)
+	fmt.Println("∙ CloudNativePG operator " + cnpgChartVersion)
 	if err := ensureRepo(ctx, "cnpg", "https://cloudnative-pg.github.io/charts"); err != nil {
 		return err
 	}
@@ -58,18 +59,18 @@ func installCloudNativePG(ctx context.Context) error {
 }
 
 func deployPostgres(ctx context.Context) error {
-	// Attente de l'opérateur (deployment "cnpg-cloudnative-pg").
+	// Wait for the operator (deployment "cnpg-cloudnative-pg").
 	for _, d := range []string{"cnpg-cloudnative-pg"} {
 		cmd := k8s.Command(ctx, "kubectl", "rollout", "status",
 			"deployment/"+d, "-n", cnpgNamespace, "--timeout=300s")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("%s pas prêt: %w", d, err)
+			return fmt.Errorf("%s not ready: %w", d, err)
 		}
 	}
 
-	fmt.Println("∙ cluster PostgreSQL " + pgClusterName)
+	fmt.Println("∙ PostgreSQL cluster " + pgClusterName)
 	manifest := fmt.Sprintf(`apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
@@ -95,7 +96,7 @@ spec:
 }
 
 func waitPostgresReady(ctx context.Context) error {
-	fmt.Println("∙ attente PostgreSQL Ready...")
+	fmt.Println("∙ waiting for PostgreSQL Ready...")
 	deadline := time.Now().Add(300 * time.Second)
 	for time.Now().Before(deadline) {
 		out, err := k8s.Command(ctx, "kubectl", "get", "cluster", pgClusterName,
@@ -109,7 +110,7 @@ func waitPostgresReady(ctx context.Context) error {
 		case <-time.After(5 * time.Second):
 		}
 	}
-	return fmt.Errorf("PostgreSQL %s non prêt après 300s", pgClusterName)
+	return fmt.Errorf("PostgreSQL %s not ready after 300s", pgClusterName)
 }
 
 func installRedis(ctx context.Context) error {

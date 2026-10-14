@@ -10,25 +10,26 @@ import (
 	"time"
 )
 
-// KCUser est un utilisateur Keycloak (champs utiles à la console).
+// KCUser is a Keycloak user (fields useful to the console).
 type KCUser struct {
 	ID       string `json:"id"`
 	Username string `json:"username"`
 	Email    string `json:"email"`
 	Enabled  bool   `json:"enabled"`
-	// Protege marque le compte d'administration de la plateforme. L'interface
-	// s'en sert pour le SORTIR de la liste des comptes ordinaires : il ne se
-	// gère pas comme un utilisateur, il administre.
+	// Protege marks the platform administration account. The interface uses it
+	// to TAKE it OUT of the list of ordinary accounts: it is not managed like
+	// a user, it administers.
 	Protege bool `json:"protege,omitempty"`
 }
 
-// estCompteProtege dit si un identifiant désigne le compte d'administration de
-// la plateforme — celui qu'on ne désactive pas et qu'on ne supprime pas.
+// estCompteProtege says whether an identifier designates the platform
+// administration account — the one that is never deactivated and never
+// deleted.
 //
-// LA COMPARAISON IGNORE LA CASSE : Keycloak traite « AdminCeffio » et
-// « adminceffio » comme le même compte. Comparer à l'identique laisserait
-// passer une variante de casse, et la protection serait contournable en
-// changeant une majuscule.
+// THE COMPARISON IGNORES CASE: Keycloak treats "AdminCeffio" and
+// "adminceffio" as the same account. Comparing identically would let a case
+// variant through, and the protection would be bypassable by changing one
+// uppercase letter.
 func estCompteProtege(identifiant string) bool {
 	return strings.EqualFold(strings.TrimSpace(identifiant), compteAdmin)
 }
@@ -42,7 +43,7 @@ var (
 	kcExpires time.Time
 )
 
-// kcToken renvoie un token d'admin valide (realm master, grant password).
+// kcToken returns a valid admin token (master realm, password grant).
 func (s *Server) kcToken(r *http.Request) (string, error) {
 	kcTokMu.Lock()
 	defer kcTokMu.Unlock()
@@ -50,7 +51,7 @@ func (s *Server) kcToken(r *http.Request) (string, error) {
 		return kcToken, nil
 	}
 	if s.kcAdmin == "" || s.kcPass == "" {
-		return "", fmt.Errorf("credentials admin Keycloak absents (KC_ADMIN/KC_ADMIN_PASSWORD)")
+		return "", fmt.Errorf("Keycloak admin credentials missing (KC_ADMIN/KC_ADMIN_PASSWORD)")
 	}
 	form := url.Values{
 		"grant_type": {"password"},
@@ -81,7 +82,7 @@ func (s *Server) kcToken(r *http.Request) (string, error) {
 	return kcToken, nil
 }
 
-// kcReq exécute une requête authentifiée vers l'API Keycloak Admin.
+// kcReq executes an authenticated request to the Keycloak Admin API.
 func (s *Server) kcReq(r *http.Request, method, path, body string) (*http.Response, error) {
 	tok, err := s.kcToken(r)
 	if err != nil {
@@ -102,7 +103,7 @@ func (s *Server) kcReq(r *http.Request, method, path, body string) (*http.Respon
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode == http.StatusUnauthorized { // token expiré → on réessaie une fois
+	if resp.StatusCode == http.StatusUnauthorized { // expired token → retry once
 		resp.Body.Close()
 		kcTokMu.Lock()
 		kcToken = ""
@@ -112,13 +113,13 @@ func (s *Server) kcReq(r *http.Request, method, path, body string) (*http.Respon
 	return resp, nil
 }
 
-// ListUsers renvoie les comptes du realm, le compte d'administration marqué.
+// listUsers returns the realm accounts, the administration account marked.
 //
-// POURQUOI LE MARQUAGE SE FAIT ICI ET PAS DANS L'INTERFACE : le nom du compte
-// d'administration est une règle du SERVEUR (c'est lui qui refuse de le
-// désactiver). La laisser à la page obligerait à la connaître des deux côtés,
-// et le jour où l'une des deux change, l'autre protège un compte qui n'existe
-// plus — en silence.
+// WHY THE MARKING HAPPENS HERE AND NOT IN THE INTERFACE: the name of the
+// administration account is a SERVER rule (it is what refuses to deactivate
+// it). Leaving it to the page would force both sides to know it, and the day
+// one of the two changes, the other protects an account that no longer
+// exists — silently.
 func (s *Server) listUsers(r *http.Request) ([]KCUser, error) {
 	resp, err := s.kcReq(r, http.MethodGet, "/admin/realms/"+realm+"/users", "")
 	if err != nil {
@@ -136,7 +137,7 @@ func (s *Server) listUsers(r *http.Request) ([]KCUser, error) {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/users → liste ; POST /api/users → création (mot de passe non-temporaire).
+// GET /api/users → list; POST /api/users → creation (non-temporary password).
 
 func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -155,32 +156,32 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			Password string `json:"password"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Username) == "" {
-			apiErr(w, 400, "username requis")
+			apiErr(w, 400, "username required")
 			return
 		}
 		id, err := s.createUser(r, body.Username, body.Email, body.Password)
 		if err != nil {
-			apiErr(w, 502, "création utilisateur: "+err.Error())
+			apiErr(w, 502, "user creation: "+err.Error())
 			return
 		}
 		writeJSON(w, 201, map[string]any{"id": id, "username": body.Username, "created": true})
 
 	default:
-		apiErr(w, 405, "méthode non supportée")
+		apiErr(w, 405, "method not supported")
 	}
 }
 
-// estUtilisateurProtege dit si l'identifiant envoyé par le client désigne le
-// compte d'administration de la plateforme.
+// estUtilisateurProtege says whether the identifier sent by the client
+// designates the platform administration account.
 //
-// ON ACCEPTE DEUX FORMES : le nom (« adminceffio ») et l'id Keycloak (un UUID).
-// L'interface envoie l'id, un appel direct pourrait envoyer l'un ou l'autre —
-// ne vérifier que le nom laisserait passer l'id, et inversement.
+// WE ACCEPT TWO FORMS: the name ("adminceffio") and the Keycloak id (a UUID).
+// The interface sends the id, a direct call could send either one — checking
+// only the name would let the id through, and conversely.
 //
-// En cas de doute — identifiant inconnu, Keycloak injoignable — on répond NON
-// protégé : refuser une action légitime parce qu'une vérification a échoué
-// serait aussi gênant que l'inverse, et le contrôle porte sur un compte dont
-// l'identifiant se lit d'abord dans la réponse de Keycloak.
+// In case of doubt — unknown identifier, unreachable Keycloak — we answer NOT
+// protected: refusing a legitimate action because a check failed would be as
+// annoying as the opposite, and the check bears on an account whose
+// identifier is first read from the Keycloak response.
 func (s *Server) estUtilisateurProtege(r *http.Request, idOuNom string) bool {
 	if estCompteProtege(idOuNom) {
 		return true
@@ -198,11 +199,11 @@ func (s *Server) estUtilisateurProtege(r *http.Request, idOuNom string) bool {
 }
 
 func (s *Server) createUser(r *http.Request, username, email, password string) (string, error) {
-	// ON NE FABRIQUE PAS UN SECOND COMPTE D'ADMINISTRATION par mégarde : le nom
-	// est réservé, et une création qui le reprend échouerait sur un conflit peu
-	// lisible. Le refus est explicite.
+	// WE DO NOT MAKE A SECOND ADMINISTRATION ACCOUNT by mistake: the name is
+	// reserved, and a creation reusing it would fail on a conflict that is
+	// hard to read. The refusal is explicit.
 	if estCompteProtege(username) {
-		return "", fmt.Errorf("« %s » est réservé au compte d'administration de la plateforme", compteAdmin)
+		return "", fmt.Errorf("%q is reserved for the platform administration account", compteAdmin)
 	}
 	payload := map[string]any{"username": username, "enabled": true}
 	if email != "" {
@@ -216,12 +217,12 @@ func (s *Server) createUser(r *http.Request, username, email, password string) (
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusConflict {
-		return "", fmt.Errorf("l'utilisateur %q existe déjà", username)
+		return "", fmt.Errorf("user %q already exists", username)
 	}
 	if resp.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("Keycloak a répondu %d", resp.StatusCode)
+		return "", fmt.Errorf("Keycloak responded %d", resp.StatusCode)
 	}
-	// L'id est dans l'en-tête Location.
+	// The id is in the Location header.
 	loc := resp.Header.Get("Location")
 	id := loc[strings.LastIndex(loc, "/")+1:]
 	if password != "" {
@@ -232,7 +233,7 @@ func (s *Server) createUser(r *http.Request, username, email, password string) (
 	return id, nil
 }
 
-// setPassword pose un mot de passe non-temporaire à l'utilisateur.
+// setPassword sets a non-temporary password to the user.
 func (s *Server) setPassword(r *http.Request, id, password string) error {
 	payload, _ := json.Marshal(map[string]any{"type": "password", "value": password, "temporary": false})
 	resp, err := s.kcReq(r, http.MethodPut, "/admin/realms/"+realm+"/users/"+id+"/reset-password", string(payload))
@@ -241,7 +242,7 @@ func (s *Server) setPassword(r *http.Request, id, password string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("reset mdp: HTTP %d", resp.StatusCode)
+		return fmt.Errorf("password reset: HTTP %d", resp.StatusCode)
 	}
 	return nil
 }
@@ -251,26 +252,27 @@ func (s *Server) handleUsersByID(w http.ResponseWriter, r *http.Request) {
 	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/users/"), "/")
 	parts := strings.Split(rest, "/")
 	if len(parts) != 2 || parts[0] == "" {
-		apiErr(w, 400, "chemin attendu: /api/users/{id}/{action}")
+		apiErr(w, 400, "expected path: /api/users/{id}/{action}")
 		return
 	}
 	id, action := parts[0], parts[1]
 	if r.Method != http.MethodPost {
-		apiErr(w, 405, "méthode non supportée")
+		apiErr(w, 405, "method not supported")
 		return
 	}
 
-	// LE COMPTE D'ADMINISTRATION N'EST PAS UN UTILISATEUR : on refuse AVANT
-	// d'agir, et on le dit. Sans ce contrôle, l'interface pourrait cacher les
-	// boutons sans que l'API cesse d'obéir — un appel direct désactiverait le
-	// compte administrateur de la plateforme, et plus personne n'administrerait
-	// Nextcloud ni le mail.
+	// THE ADMINISTRATION ACCOUNT IS NOT A USER: we refuse BEFORE acting, and
+	// we say it. Without this check, the interface could hide the buttons
+	// without the API stopping to obey — a direct call would deactivate the
+	// platform administration account, and no one would administer Nextcloud
+	// or mail anymore.
 	//
-	// On résout le nom par l'IDENTIFIANT : le client pourrait envoyer l'id
-	// Keycloak seul, et comparer l'action au nom n'aurait alors aucun effet.
+	// We resolve the name BY THE IDENTIFIER: the client could send the
+	// Keycloak id alone, and comparing the action to the name would then have
+	// no effect.
 	if s.estUtilisateurProtege(r, id) {
-		apiErr(w, 403, "« "+compteAdmin+" » est le compte d'administration de la plateforme : "+
-			"il ne peut être ni désactivé, ni modifié ici. Utilisez la page Administration.")
+		apiErr(w, 403, "\""+compteAdmin+"\" is the platform administration account: "+
+			"it can be neither deactivated nor modified here. Use the Administration page.")
 		return
 	}
 
@@ -279,19 +281,20 @@ func (s *Server) handleUsersByID(w http.ResponseWriter, r *http.Request) {
 		payload, _ := json.Marshal(map[string]any{"enabled": false})
 		resp, err := s.kcReq(r, http.MethodPut, "/admin/realms/"+realm+"/users/"+id, string(payload))
 		if err != nil {
-			apiErr(w, 502, "désactivation: "+err.Error())
+			apiErr(w, 502, "deactivation: "+err.Error())
 			return
 		}
 		resp.Body.Close()
 		writeJSON(w, 200, map[string]any{"deactivated": true, "id": id})
-	// RÉACTIVER est l'INVERSE de désactiver, et n'existait pas : désactiver un
-	// compte par erreur laissait sans recours depuis l'interface, alors que
-	// Keycloak n'oublie rien. Une action sans son inverse est une impasse.
+	// REACTIVATE is the INVERSE of deactivate, and it did not exist:
+	// deactivating an account by mistake left no recourse from the interface,
+	// while Keycloak forgets nothing. An action without its inverse is a dead
+	// end.
 	case "reactivate":
 		payload, _ := json.Marshal(map[string]any{"enabled": true})
 		resp, err := s.kcReq(r, http.MethodPut, "/admin/realms/"+realm+"/users/"+id, string(payload))
 		if err != nil {
-			apiErr(w, 502, "réactivation: "+err.Error())
+			apiErr(w, 502, "reactivation: "+err.Error())
 			return
 		}
 		resp.Body.Close()
@@ -302,15 +305,15 @@ func (s *Server) handleUsersByID(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		if body.Password == "" {
-			apiErr(w, 400, "password requis")
+			apiErr(w, 400, "password required")
 			return
 		}
 		if err := s.setPassword(r, id, body.Password); err != nil {
-			apiErr(w, 502, "reset mot de passe: "+err.Error())
+			apiErr(w, 502, "password reset: "+err.Error())
 			return
 		}
 		writeJSON(w, 200, map[string]any{"passwordUpdated": true, "id": id})
 	default:
-		apiErr(w, 405, "action inconnue")
+		apiErr(w, 405, "unknown action")
 	}
 }

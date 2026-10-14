@@ -10,38 +10,38 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// newOfficeCmd déploie la couche bureautique SEULE.
+// newOfficeCmd deploys the office layer ALONE.
 //
-// MÊME RAISON QUE POUR LA MESSAGERIE ET LA CONSOLE : ONLYOFFICE n'était
-// déployable que par `install`, qui rejoue toute la pile. Or c'est précisément le
-// composant dont le jeton de signature est partagé avec Nextcloud — donc celui
-// qu'on veut pouvoir redéployer seul après une rotation, sans toucher au reste.
+// SAME REASON AS FOR MAIL AND THE CONSOLE: ONLYOFFICE was only deployable
+// through `install`, which replays the whole stack. Yet it is precisely the
+// component whose signing token is shared with Nextcloud — so the one we want
+// to be able to redeploy alone after a rotation, without touching the rest.
 func newOfficeCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "office",
-		Short: "Déployer la couche bureautique (ONLYOFFICE) seule",
-		Long: `Déploie le serveur de documents et (re)branche son connecteur dans Nextcloud.
+		Short: "Deploy the office layer (ONLYOFFICE) alone",
+		Long: `Deploys the document server and (re)plugs its connector into Nextcloud.
 
-LE JETON DE SIGNATURE EST LU DANS LE COFFRE, avec repli sur le Secret Kubernetes.
-Ce même jeton doit alimenter les deux côtés — le serveur et la configuration du
-connecteur. Les lire au même endroit est ce qui rend une rotation complète : sinon
-la signature cesse de correspondre, et le symptôme est une erreur
-d'authentification sur les documents plutôt qu'une rotation à moitié faite.`,
+THE SIGNING TOKEN IS READ FROM THE VAULT, with fallback to the Kubernetes
+Secret. This same token must feed both sides — the server and the connector
+configuration. Reading them from the same place is what makes a rotation
+complete: otherwise the signature stops matching, and the symptom is an
+authentication error on documents rather than a half-done rotation.`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(c *cobra.Command, args []string) error {
-			// On résout l'accès au coffre AVANT tout le reste : sans cela, la
-			// commande se rabattrait silencieusement sur les Secrets Kubernetes
-			// et ne lirait jamais le coffre — le repli donnerait l'illusion que
-			// la bascule a eu lieu.
+			// We resolve vault access BEFORE everything else: without it, the
+			// command would silently fall back on the Kubernetes Secrets and
+			// would never read the vault — the fallback would give the
+			// illusion that the switch happened.
 			if client, err := k8sapi.Nouveau(); err == nil {
 				if adresse, jeton, err := vault.Acces(c.Context(), client); err == nil {
 					os.Setenv("BAO_ADDR", adresse)
 					os.Setenv("BAO_TOKEN", jeton)
 					os.Setenv("BAO_MOTEUR", "kv")
-					fmt.Printf("  ∙ coffre : %s (les secrets en viennent en priorité)\n", adresse)
+					fmt.Printf("  ∙ vault: %s (secrets come from it first)\n", adresse)
 				} else {
-					fmt.Printf("  ∙ coffre non résolu (%v) — les secrets viendront de Kubernetes\n", err)
+					fmt.Printf("  ∙ vault unresolved (%v) — secrets will come from Kubernetes\n", err)
 				}
 			}
 			return office.Deploy(c.Context())

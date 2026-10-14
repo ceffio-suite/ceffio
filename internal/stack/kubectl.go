@@ -13,11 +13,12 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/k8s"
 )
 
-// kubectlJSON exécute kubectl et renvoie sa sortie JSON.
+// kubectlJSON runs kubectl and returns its JSON output.
 //
-// Passe par internal/k8s pour l'environnement : le kubectl de K3s est un symlink
-// vers le binaire k3s, qui lit /etc/rancher/k3s/k3s.yaml en dur avant toute
-// résolution standard — d'où la nécessité de forcer KUBECONFIG explicitement.
+// Goes through internal/k8s for the environment: K3s's kubectl is a symlink
+// to the k3s binary, which reads /etc/rancher/k3s/k3s.yaml in hardcoded
+// fashion before any standard resolution — hence the need to force
+// KUBECONFIG explicitly.
 func kubectlJSON(ctx context.Context, args ...string) ([]byte, error) {
 	kubectl, err := findKubectl()
 	if err != nil {
@@ -46,29 +47,30 @@ func kubectlJSON(ctx context.Context, args ...string) ([]byte, error) {
 	return out, nil
 }
 
-// humanError transforme la sortie de kubectl en une phrase exploitable.
+// humanError turns kubectl's output into an actionable sentence.
 //
-// kubectl écrit sur stderr des messages internes très verbeux (horodatage,
-// numéro de ligne, chemin de fichier Go) suivis de l'erreur réelle. Recopiés
-// tels quels dans un diagnostic, ils noient l'information utile. On garde donc
-// la cause en langage clair, et on résume le reste.
+// kubectl writes very verbose internal messages to stderr (timestamp, line
+// number, Go file path) followed by the actual error. Copied verbatim into a
+// diagnostic, they drown the useful information. We therefore keep the cause
+// in plain language, and summarize the rest.
 func humanError(stderr string, err error) string {
 	low := strings.ToLower(stderr)
 	switch {
 	case strings.Contains(low, "connection refused"):
-		return "Aucun serveur Kubernetes ne répond à l'adresse du kubeconfig."
+		return "No Kubernetes server is responding at the kubeconfig address."
 	case strings.Contains(low, "permission denied") && strings.Contains(low, "k3s.yaml"):
-		return "Le kubeconfig K3s (/etc/rancher/k3s/k3s.yaml) n'est pas lisible par cet utilisateur (root, 0600)."
+		return "The K3s kubeconfig (/etc/rancher/k3s/k3s.yaml) is not readable by this user (root, 0600)."
 	case strings.Contains(low, "no such file") && strings.Contains(low, "config"):
-		return "Kubeconfig introuvable."
+		return "Kubeconfig not found."
 	case strings.Contains(low, "unauthorized"), strings.Contains(low, "forbidden"):
-		return "Le cluster refuse la requête (droits insuffisants)."
+		return "The cluster refuses the request (insufficient permissions)."
 	case strings.Contains(low, "no route to host"), strings.Contains(low, "i/o timeout"):
-		return "Le serveur Kubernetes est injoignable sur le réseau."
+		return "The Kubernetes server is unreachable on the network."
 	case strings.Contains(low, "the server could not find the requested resource"):
-		return "Ressource absente du cluster (cert-manager ou l'application ne sont pas installés)."
+		return "Resource missing from the cluster (cert-manager or the application is not installed)."
 	}
-	// Sinon : première ligne qui ressemble à une erreur, sans le verbiage kubectl.
+	// Otherwise: the first line that looks like an error, without the
+	// kubectl verbosity.
 	for _, l := range strings.Split(stderr, "\n") {
 		l = strings.TrimSpace(l)
 		if l == "" {
@@ -87,7 +89,7 @@ func humanError(stderr string, err error) string {
 	return oneLine(err.Error())
 }
 
-// findKubectl localise kubectl : PATH, puis les emplacements connus.
+// findKubectl locates kubectl: PATH first, then the known locations.
 func findKubectl() (string, error) {
 	if p, err := exec.LookPath("kubectl"); err == nil {
 		return p, nil
@@ -107,7 +109,7 @@ func findKubectl() (string, error) {
 			return p, nil
 		}
 	}
-	return "", fmt.Errorf("kubectl introuvable — Ceffio doit être installé sur cette machine, ou kubectl présent dans le PATH")
+	return "", fmt.Errorf("kubectl not found — Ceffio must be installed on this machine, or kubectl must be in the PATH")
 }
 
 func fileExists(p string) bool {
@@ -115,8 +117,8 @@ func fileExists(p string) bool {
 	return err == nil && !st.IsDir()
 }
 
-// deriveDomain déduit le domaine de base depuis un hôte d'ingress.
-// « cloud.demo.local » → « demo.local » : on retire le premier label.
+// deriveDomain infers the base domain from an ingress host.
+// "cloud.demo.local" → "demo.local": we drop the first label.
 func deriveDomain(host string) string {
 	parts := strings.SplitN(host, ".", 2)
 	if len(parts) < 2 {

@@ -11,30 +11,30 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/k8s"
 )
 
-// Restaurer remet en place une sauvegarde.
+// Restaurer puts a backup back in place.
 //
-// Ordre imposé par les dépendances, et non par confort :
-//  1. les Secrets d'abord — les bases restaurées ne servent à rien si les mots
-//     de passe applicatifs ne correspondent plus ;
-//  2. les bases ensuite — identités, comptes, métadonnées ;
-//  3. les volumes enfin — les documents, qui référencent les métadonnées.
+// Order imposed by dependencies, not by convenience:
+//  1. Secrets first — restored databases are useless if the application
+//     passwords no longer match;
+//  2. databases next — identities, accounts, metadata;
+//  3. volumes last — the documents, which reference the metadata.
 //
-// La restauration des bases est DESTRUCTIVE (pg_restore --clean) : l'appelant
-// doit avoir confirmé. Le CLI s'en charge, cette fonction ne le fait pas à sa
-// place — mais elle le dit dans son rapport.
+// Restoring the databases is DESTRUCTIVE (pg_restore --clean): the caller
+// must have confirmed. The CLI handles that; this function does not do it in
+// its place — but it says so in its report.
 func Restaurer(ctx context.Context, archive string, progress func(string)) (*Manifest, error) {
 	if progress == nil {
 		progress = func(string) {}
 	}
 
-	// Vérification avant tout : restaurer une archive incomplète ne ferait
-	// qu'ajouter une panne à la panne.
+	// Verification first: restoring an incomplete archive would only add an
+	// outage to the outage.
 	man, err := Verifier(archive)
 	if err != nil {
 		return nil, err
 	}
 	if len(man.Errors) > 0 {
-		return man, fmt.Errorf("archive incomplète ou altérée : %s", strings.Join(man.Errors, " ; "))
+		return man, fmt.Errorf("incomplete or tampered archive: %s", strings.Join(man.Errors, " ; "))
 	}
 
 	work, err := os.MkdirTemp("", "ceffio-restore-")
@@ -48,16 +48,16 @@ func Restaurer(ctx context.Context, archive string, progress func(string)) (*Man
 
 	pod := pgPodName(ctx)
 	if pod == "" {
-		return man, fmt.Errorf("pod PostgreSQL introuvable : impossible de restaurer les bases")
+		return man, fmt.Errorf("PostgreSQL pod not found: cannot restore the databases")
 	}
 
 	// 1. Secrets.
-	progress("secrets applicatifs")
+	progress("application secrets")
 	if err := restoreSecrets(ctx, filepath.Join(work, "secrets/applicatifs.json"), &man.Errors); err != nil {
 		man.Errors = append(man.Errors, "secrets : "+err.Error())
 	}
 
-	// 2. Bases.
+	// 2. Databases.
 	for _, e := range man.Entries {
 		if e.Kind != "base" {
 			continue
@@ -75,13 +75,13 @@ func Restaurer(ctx context.Context, archive string, progress func(string)) (*Man
 		}
 		v, ok := volumeByName(e.Name)
 		if !ok {
-			man.Errors = append(man.Errors, "volume inconnu : "+e.Name)
+			man.Errors = append(man.Errors, "unknown volume: "+e.Name)
 			continue
 		}
 		progress("volume " + e.Name)
 		podName := podFor(ctx, v.Namespace, v.PodLabel)
 		if podName == "" {
-			man.Errors = append(man.Errors, fmt.Sprintf("volume %s : aucun pod %s", e.Name, v.PodLabel))
+			man.Errors = append(man.Errors, fmt.Sprintf("volume %s : no pod %s", e.Name, v.PodLabel))
 			continue
 		}
 		if err := restoreVolume(ctx, v, podName, filepath.Join(work, e.File)); err != nil {
@@ -102,11 +102,11 @@ func volumeByName(name string) (Volume, bool) {
 	return Volume{}, false
 }
 
-// restoreSecrets réapplique les Secrets, en créant les namespaces manquants.
+// restoreSecrets re-applies the Secrets, creating the missing namespaces.
 func restoreSecrets(ctx context.Context, path string, errs *[]string) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("fichier de secrets absent de l'archive")
+		return fmt.Errorf("secrets file missing from the archive")
 	}
 	var doc struct {
 		Secrets []struct {
@@ -119,21 +119,21 @@ func restoreSecrets(ctx context.Context, path string, errs *[]string) error {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return err
 	}
-	// Les secrets absents de la sauvegarde correspondent à des couches non
-	// installées au moment du backup (ex. la visio sans --video). Ce n'est pas
-	// une erreur de restauration : on le signale sans bloquer.
+	// Secrets absent from the backup correspond to layers not installed at
+	// backup time (e.g. video without --video). This is not a restore
+	// error: we report it without blocking.
 	if len(doc.Manquants) > 0 {
-		fmt.Printf("  (secrets non présents dans la sauvegarde : %s)\n", strings.Join(doc.Manquants, ", "))
+		fmt.Printf("  (secrets not present in the backup: %s)\n", strings.Join(doc.Manquants, ", "))
 	}
 	for _, s := range doc.Secrets {
-		// Le namespace peut ne pas exister sur une machine reconstruite à neuf.
+		// The namespace may not exist on a freshly rebuilt machine.
 		kubectlOut(ctx, "create", "namespace", s.Namespace)
 
-		// Remplacement franc plutôt que `kubectl apply` : apply refuse un objet
-		// créé impérativement (annotation last-applied-configuration absente).
-		// Or c'est précisément le cas ici — les Secrets ont été créés par
-		// `kubectl create secret` lors de l'installation. On supprime puis on
-		// recrée, ce qui remet EXACTEMENT l'état sauvegardé.
+		// Straight replacement rather than `kubectl apply`: apply refuses an
+		// object created imperatively (missing last-applied-configuration
+		// annotation). And that is precisely the case here — the Secrets
+		// were created by `kubectl create secret` at install time. We delete
+		// then recreate, which restores EXACTLY the saved state.
 		kubectlOut(ctx, "delete", "secret", s.Name, "-n", s.Namespace, "--ignore-not-found")
 
 		obj := map[string]any{
@@ -150,8 +150,8 @@ func restoreSecrets(ctx context.Context, path string, errs *[]string) error {
 		cmd.Stderr = &stderr
 		if err := cmd.Run(); err != nil {
 			msg := oneLine(stderr.String())
-			// « AlreadyExists » ne peut plus arriver après le delete, mais on
-			// tolère tout message de succès partiel.
+			// "AlreadyExists" can no longer happen after the delete, but we
+			// tolerate any partially successful message.
 			if !strings.Contains(msg, "AlreadyExists") {
 				*errs = append(*errs, fmt.Sprintf("secret %s/%s : %s", s.Namespace, s.Name, msg))
 			}
@@ -160,13 +160,13 @@ func restoreSecrets(ctx context.Context, path string, errs *[]string) error {
 	return nil
 }
 
-// restoreBase recharge un dump dans sa base.
+// restoreBase reloads a dump into its database.
 //
-// La base cible est recréée : pg_dump a été pris avec --clean --if-exists, donc
-// le dump supprime puis recrée les objets. On ne fait PAS DROP DATABASE : une
-// base absente est créée si besoin, sinon son contenu est remplacé objet par
-// objet — approche moins brutale, qui laisse la base en place si la
-// restauration échoue au milieu.
+// The target database is recreated: pg_dump was taken with --clean
+// --if-exists, so the dump drops then recreates the objects. We do NOT do
+// DROP DATABASE: a missing database is created if needed, otherwise its
+// content is replaced object by object — a gentler approach that leaves the
+// database in place if the restore fails midway.
 func restoreBase(ctx context.Context, pod, base, dumpPath string) error {
 	f, err := os.Open(dumpPath)
 	if err != nil {
@@ -174,11 +174,11 @@ func restoreBase(ctx context.Context, pod, base, dumpPath string) error {
 	}
 	defer f.Close()
 
-	// La base doit exister pour recevoir le dump.
+	// The database must exist to receive the dump.
 	if strings.TrimSpace(query(ctx, pod, "postgres",
 		"SELECT 1 FROM pg_database WHERE datname='"+base+"'")) != "1" {
 		if err := execSQL(ctx, pod, "postgres", "CREATE DATABASE "+quoteIdent(base)); err != nil {
-			return fmt.Errorf("création de la base : %w", err)
+			return fmt.Errorf("creating the database: %w", err)
 		}
 	}
 
@@ -188,7 +188,7 @@ func restoreBase(ctx context.Context, pod, base, dumpPath string) error {
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("rechargement : %w : %s", err, oneLine(stderr.String()))
+		return fmt.Errorf("reload: %w : %s", err, oneLine(stderr.String()))
 	}
 	return nil
 }
@@ -204,7 +204,8 @@ func execSQL(ctx context.Context, pod, db, sql string) error {
 	return nil
 }
 
-// itoa convertit un entier en chaîne (évite d'importer strconv pour si peu).
+// itoa converts an integer to a string (avoids importing strconv for so
+// little).
 func itoa(n int) string {
 	if n == 0 {
 		return "0"
@@ -224,25 +225,26 @@ func itoa(n int) string {
 	return string(b)
 }
 
-// quoteIdent protège un nom d'identifiant SQL (les noms de bases sont fixes
-// dans ce programme, mais la fonction est réutilisable sans piège).
+// quoteIdent protects a SQL identifier name (database names are fixed in
+// this program, but the function is reusable without pitfalls).
 func quoteIdent(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 }
 
-// restoreVolume réinjecte un tar dans le pod correspondant.
+// restoreVolume re-injects a tar into the corresponding pod.
 //
-// Deux problèmes réels rencontrés en test, et leur solution :
+// Two real problems encountered in testing, and their solution:
 //
-//  1. Le tar a été pris en root, l'extraction se fait avec l'utilisateur du
-//     conteneur → `--no-same-owner` évite qu'il tente de restaurer la propriété.
-//  2. Extraire directement dans le point de montage fait échouer tar sur « . »
-//     (utime/mode interdits sur le répertoire racine du volume monté) et tar
-//     sort en code 2 — alors que les fichiers, eux, sont bien écrits.
+//  1. The tar was taken as root, extraction happens as the container's user
+//     → `--no-same-owner` stops it from trying to restore ownership.
+//  2. Extracting directly into the mount point makes tar fail on "."
+//     (utime/mode forbidden on the root directory of the mounted volume)
+//     and tar exits with code 2 — even though the files themselves are
+//     written correctly.
 //
-// Solution : extraire dans un sous-répertoire temporaire DU MÊME volume, puis
-// copier le contenu à sa place. On reste dans le volume (donc pas de question de
-// place), et le point de montage n'est jamais touché directement.
+// Solution: extract into a temporary subdirectory OF THE SAME volume, then
+// copy the contents into place. We stay within the volume (so no space
+// concerns), and the mount point is never touched directly.
 func restoreVolume(ctx context.Context, v Volume, pod, tarPath string) error {
 	f, err := os.Open(tarPath)
 	if err != nil {
@@ -250,15 +252,15 @@ func restoreVolume(ctx context.Context, v Volume, pod, tarPath string) error {
 	}
 	defer f.Close()
 
-	// --no-same-owner : le tar a été pris en root, l'extraction se fait avec
-	// l'utilisateur du conteneur ; sans cette option tar tente de restaurer la
-	// propriété et échoue sur le point de montage.
-	// Puis l'ownership est REMIS explicitement à l'UID/GID attendu par
-	// l'application : sans ce chown, tout appartient à root et l'application
-	// (www-data pour Nextcloud) perd le droit d'écrire — panne silencieuse
-	// constatée en test (Nextcloud 503 après restauration).
-	// cp -R sans --preserve : préserver les horodatages de la cible échoue sur
-	// un point de montage.
+	// --no-same-owner: the tar was taken as root, extraction happens as the
+	// container's user; without this option tar tries to restore ownership
+	// and fails on the mount point.
+	// Then ownership is explicitly RESTORED to the UID/GID expected by the
+	// application: without this chown, everything belongs to root and the
+	// application (www-data for Nextcloud) loses write access — a silent
+	// outage observed in testing (Nextcloud 503 after restore).
+	// cp -R without --preserve: preserving the target's timestamps fails on
+	// a mount point.
 	const staging = ".ceffio-restore"
 	script := "set -e; " +
 		"rm -rf " + v.Path + "/" + staging + "; " +
@@ -273,7 +275,7 @@ func restoreVolume(ctx context.Context, v Volume, pod, tarPath string) error {
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("extraction : %w : %s", err, oneLine(stderr.String()))
+		return fmt.Errorf("extraction: %w : %s", err, oneLine(stderr.String()))
 	}
 	return nil
 }

@@ -34,10 +34,10 @@ type installOptions struct {
 	office          bool
 	monitoring      bool
 
-	// Relais d'expédition sortant. INDISPENSABLE en pratique : le port 25
-	// sortant est bloqué chez les FAI grand public (vérifié sur Free), donc
-	// Stalwart ne peut pas livrer vers Gmail par lui-même. Le relais authentifié
-	// sur 587 contourne ce blocage et endosse le reverse DNS.
+	// Outbound delivery relay. INDISPENSABLE in practice: outbound port 25 is
+	// blocked by consumer ISPs (verified on Free), so Stalwart cannot deliver
+	// to Gmail by itself. The authenticated relay on 587 works around this
+	// block and provides the reverse DNS.
 	relaisSmtpHote string
 	relaisSmtpPort int
 	relaisSmtpUser string
@@ -51,12 +51,12 @@ func newInstallCmd() *cobra.Command {
 
 	c := &cobra.Command{
 		Use:   "install",
-		Short: "Installer Ceffio sur une machine ou un cluster Kubernetes",
-		Long: `Installe Ceffio de bout en bout : bootstrap Kubernetes (K3s par défaut),
-puis déploiement de la plateforme (ingress, TLS, base de données, identité)
-et des applications collaboratives.
+		Short: "Install Ceffio on a machine or a Kubernetes cluster",
+		Long: `Installs Ceffio end to end: Kubernetes bootstrap (K3s by default),
+then deployment of the platform (ingress, TLS, database, identity)
+and of the collaborative applications.
 
-Exemples :
+Examples:
   ceffio install
   ceffio install --domain company.fr --profile business-50
   ceffio install --runtime rke2
@@ -67,32 +67,32 @@ Exemples :
 	}
 
 	f := c.Flags()
-	// DÉFAUT DE PRODUCTION : *.ceffio.mandem-it.com est le domaine de reference
-	// de l'installation en service (DNS wildcard + certificat + OPNsense câblés).
-	// Consigne utilisateur : tout deploiement passe par ce domaine jusqu'a
-	// nouvel ordre. Surchargeable avec --domain pour un autre environnement.
-	f.StringVar(&o.domain, "domain", "ceffio.mandem-it.com", "Domaine de base (ex. company.fr)")
-	f.StringVar(&o.profile, "profile", "small", "Profil de déploiement (small, business-50, business-100, enterprise-ha)")
-	f.StringVar(&o.runtime, "runtime", "k3s", "Runtime Kubernetes (k3s, rke2)")
-	f.BoolVar(&o.existingCluster, "existing-cluster", false, "Utiliser un cluster Kubernetes existant")
-	f.BoolVar(&o.mail, "mail", false, "Activer la messagerie")
-	f.BoolVar(&o.office, "office", true, "Activer ONLYOFFICE")
-	f.BoolVar(&o.monitoring, "monitoring", true, "Activer l'observabilité")
-	// Relais d'expédition. Par défaut : aucun (Stalwart reçoit mais n'envoie
-	// pas vers l'extérieur). Le port 25 sortant étant bloqué chez les FAI, ce
-	// relais est ce qui rend la messagerie réellement utilisable.
+	// PRODUCTION DEFAULT: *.ceffio.example.com is the reference domain of the
+	// in-service installation (wildcard DNS + certificate + OPNsense wired up).
+	// User directive: every deployment goes through this domain until further
+	// notice. Overridable with --domain for another environment.
+	f.StringVar(&o.domain, "domain", "ceffio.example.com", "Base domain (e.g. company.fr)")
+	f.StringVar(&o.profile, "profile", "small", "Deployment profile (small, business-50, business-100, enterprise-ha)")
+	f.StringVar(&o.runtime, "runtime", "k3s", "Kubernetes runtime (k3s, rke2)")
+	f.BoolVar(&o.existingCluster, "existing-cluster", false, "Use an existing Kubernetes cluster")
+	f.BoolVar(&o.mail, "mail", false, "Enable mail")
+	f.BoolVar(&o.office, "office", true, "Enable ONLYOFFICE")
+	f.BoolVar(&o.monitoring, "monitoring", true, "Enable observability")
+	// Outbound relay. Default: none (Stalwart receives but does not send
+	// to the outside). Since outbound port 25 is blocked by ISPs, this relay
+	// is what makes mail actually usable.
 	f.StringVar(&o.relaisSmtpHote, "smtp-relais", "",
-		"Relais SMTP sortant (ex. send.one.com) — nécessaire car le port 25 sortant est souvent bloqué")
-	f.IntVar(&o.relaisSmtpPort, "smtp-relais-port", 587, "Port du relais SMTP sortant")
-	f.StringVar(&o.relaisSmtpUser, "smtp-relais-user", "", "Utilisateur du relais SMTP sortant")
-	f.StringVar(&o.relaisSmtpPass, "smtp-relais-pass", "", "Mot de passe du relais SMTP sortant")
+		"Outbound SMTP relay (e.g. send.one.com) — required because outbound port 25 is often blocked")
+	f.IntVar(&o.relaisSmtpPort, "smtp-relais-port", 587, "Outbound SMTP relay port")
+	f.StringVar(&o.relaisSmtpUser, "smtp-relais-user", "", "Outbound SMTP relay user")
+	f.StringVar(&o.relaisSmtpPass, "smtp-relais-pass", "", "Outbound SMTP relay password")
 
 	return c
 }
 
 func runInstall(cmd *cobra.Command, o *installOptions) error {
 	if o.domain == "" {
-		return fmt.Errorf("--domain est requis (ex. --domain company.fr)")
+		return fmt.Errorf("--domain is required (e.g. --domain company.fr)")
 	}
 
 	fmt.Println("Ceffio Installer")
@@ -107,7 +107,7 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 
 	ctx := cmd.Context()
 
-	// 1. Détection + validation matérielle/OS.
+	// 1. Hardware/OS detection + validation.
 	hw := bootstrap.Detect()
 	if err := bootstrap.Validate(hw.OS, hw.Arch); err != nil {
 		return err
@@ -118,22 +118,22 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	}
 	fmt.Printf("Machine:    %s/%s · %d vCPU · RAM %s\n", hw.OS, hw.Arch, hw.CPUs, mem)
 
-	// 2. Résolution du runtime.
+	// 2. Runtime resolution.
 	rt, err := resolveRuntime(o, hw.OS)
 	if err != nil {
 		return err
 	}
 
-	// 3. Provisionnement du cluster Kubernetes.
+	// 3. Kubernetes cluster provisioning.
 	fmt.Printf("\nProvisioning cluster %q (%s)...\n", devClusterName, rt)
 	if _, err := cluster.Provision(ctx, rt, devClusterName); err != nil {
 		return err
 	}
 
-	// 4. Attente + check de santé.
-	// 5 min : sur une VM à froid, k3s doit démarrer son API, tirer les images
-	// système (Traefik, CoreDNS, local-path) et faire passer le nœud Ready.
-	// 120 s échouait systématiquement au premier boot (nœud Ready vers ~3 min).
+	// 4. Wait + health check.
+	// 5 min: on a cold VM, k3s must start its API, pull the system images
+	// (Traefik, CoreDNS, local-path) and get the node Ready.
+	// 120 s systematically failed on first boot (node Ready around ~3 min).
 	if err := cluster.WaitReady(ctx, 5*time.Minute); err != nil {
 		return err
 	}
@@ -142,125 +142,126 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 		return err
 	}
 
-	fmt.Printf("\n✓ Cluster %q prêt (%d nœud(s))\n", devClusterName, len(nodes))
+	fmt.Printf("\n✓ Cluster %q ready (%d node(s))\n", devClusterName, len(nodes))
 	for _, n := range nodes {
 		fmt.Printf("  ✓ node/%s Ready\n", n)
 	}
 
-	// 5. Déploiement de la plateforme (Phase 2).
+	// 5. Platform deployment (Phase 2).
 	//
-	// Parallélisation : on ne sérialise QUE les dépendances réelles.
-	//   platform (namespaces, cert-manager, issuers) et data (PostgreSQL, Redis)
-	//   ne dépendent pas l'un de l'autre → menés en parallèle.
-	//   identity dépend de data (Keycloak a besoin de sa base) → après.
-	fmt.Println("\n∙ phases 2-3 en parallèle (plateforme ‖ données)")
+	// Parallelization: we serialize ONLY the real dependencies.
+	//   platform (namespaces, cert-manager, issuers) and data (PostgreSQL, Redis)
+	//   do not depend on each other → run in parallel.
+	//   identity depends on data (Keycloak needs its database) → after.
+	fmt.Println("\n∙ phases 2-3 in parallel (platform ‖ data)")
 	if err := runParallel(ctx,
-		namedTask{"plateforme (Phase 2)", func(ctx context.Context) error { return platform.Deploy(ctx) }},
-		namedTask{"données (Phase 3)", func(ctx context.Context) error { return data.Deploy(ctx) }},
+		namedTask{"platform (Phase 2)", func(ctx context.Context) error { return platform.Deploy(ctx) }},
+		namedTask{"data (Phase 3)", func(ctx context.Context) error { return data.Deploy(ctx) }},
 	); err != nil {
 		return err
 	}
 
-	// 6. Coffre de secrets (OpenBao).
+	// 6. Secrets vault (OpenBao).
 	//
-	// PLACÉ ICI, ET PAS AILLEURS : avant l'identité et avant toutes les couches
-	// applicatives, parce que c'est à partir de là que les composants peuvent
-	// LIRE leurs secrets au lieu de les inventer. S'il était déployé plus tard,
-	// chaque composant aurait déjà généré les siens et il faudrait les migrer
-	// après coup — c'est-à-dire refaire le travail.
+	// PLACED HERE, AND NOWHERE ELSE: before identity and before every
+	// application layer, because from this point on the components can READ
+	// their secrets instead of inventing them. If it were deployed later, each
+	// component would already have generated its own and they would have to be
+	// migrated after the fact — which means doing the work over again.
 	//
-	// APRÈS la plateforme, en revanche : le coffre n'a besoin ni de cert-manager
-	// ni de PostgreSQL. L'ordre est donc : plateforme → coffre → tout le reste.
+	// AFTER the platform, on the other hand: the vault needs neither
+	// cert-manager nor PostgreSQL. The order is therefore:
+	// platform → vault → everything else.
 	//
-	// Rien n'est obligatoire ici : si le coffre échoue, poursuivre avec les
-	// Secrets Kubernetes est le comportement attendu (voir internal/secrets).
+	// Nothing here is mandatory: if the vault fails, continuing with
+	// Kubernetes Secrets is the expected behavior (see internal/secrets).
 	//
-	// ON PUBLIE L'ADRESSE ET LE JETON DANS L'ENVIRONNEMENT : c'est ainsi que les
-	// modules suivants les trouveront, via secrets.DepuisEnvironnement(). Sans
-	// cette publication, le coffre serait déployé mais personne ne lirait
-	// dedans — un coffre plein que les composants continueraient d'ignorer.
+	// WE PUBLISH THE ADDRESS AND THE TOKEN INTO THE ENVIRONMENT: this is how
+	// the following modules will find them, via secrets.DepuisEnvironnement().
+	// Without this publication, the vault would be deployed but nobody would
+	// read from it — a full vault that the components would keep ignoring.
 	//
-	// Le nom est coffreBao et non coffre : la suite du fichier nomme déjà
-	// « coffre » la configuration lue depuis l'environnement.
+	// The name is coffreBao and not coffre: the rest of the file already calls
+	// "coffre" the configuration read from the environment.
 	coffreBao := vault.Deploy(ctx, o.domain)
 	if coffreBao.Pret {
 		os.Setenv("BAO_ADDR", coffreBao.Adresse)
 		os.Setenv("BAO_TOKEN", coffreBao.Jeton)
 		os.Setenv("BAO_MOTEUR", "kv")
-		fmt.Printf("∙ coffre publié pour la suite : %s (jeton non affiché)\n", coffreBao.Adresse)
+		fmt.Printf("∙ vault published for the following steps: %s (token not shown)\n", coffreBao.Adresse)
 	} else {
-		fmt.Println("∙ coffre indisponible : les secrets resteront dans Kubernetes (comportement prévu)")
+		fmt.Println("∙ vault unavailable: secrets will stay in Kubernetes (expected behavior)")
 	}
 
-	// 7. Identité / SSO (Phase 4) — dépend de la base PostgreSQL.
+	// 7. Identity / SSO (Phase 4) — depends on the PostgreSQL database.
 	if err := identity.Deploy(ctx); err != nil {
 		return err
 	}
 
-	// 8-10. Couches applicatives : fichiers, chat et visio sont INDÉPENDANTES
-	// les unes des autres — elles ne dépendent que de la plateforme (namespaces,
-	// ingress) et de l'identité (hostAliases → Traefik, CA). On les déploie donc
-	// en parallèle, ce qui divise le temps de cette étape par ~3.
-	// Sont EXCLUES du parallèle (dépendances réelles, vérifiées dans le code) :
-	//   - office : s'active via « occ » DANS Nextcloud → exige Nextcloud Ready ;
-	//   - sso/AdoptURLs : écrivent dans Keycloak, Nextcloud et Synapse → après tous.
-	fmt.Println("\n∙ phases 5/7/10 en parallèle (fichiers ‖ chat ‖ visio)")
-	// Chat et visio sont désormais fournis par Nextcloud Talk (app Nextcloud),
-	// déployée avec la couche fichiers : plus de Synapse/Element ni de Jitsi.
+	// 8-10. Application layers: files, chat and video are INDEPENDENT of each
+	// other — they only depend on the platform (namespaces, ingress) and on
+	// identity (hostAliases → Traefik, CA). They are therefore deployed in
+	// parallel, which divides this step's time by ~3.
+	// EXCLUDED from the parallel batch (real dependencies, verified in code):
+	//   - office: activated via "occ" INSIDE Nextcloud → requires Nextcloud Ready;
+	//   - sso/AdoptURLs: write into Keycloak, Nextcloud and Synapse → after all.
+	fmt.Println("\n∙ phases 5/7/10 in parallel (files ‖ chat ‖ video)")
+	// Chat and video are now provided by Nextcloud Talk (a Nextcloud app),
+	// deployed with the files layer: no more Synapse/Element or Jitsi.
 	appTasks := []namedTask{
-		{"fichiers (Phase 5)", func(ctx context.Context) error { return files.Deploy(ctx) }},
+		{"files (Phase 5)", func(ctx context.Context) error { return files.Deploy(ctx) }},
 	}
 	if err := runParallel(ctx, appTasks...); err != nil {
 		return err
 	}
 
-	// 11. Office (Phase 6) — APRÈS fichiers : le connecteur ONLYOFFICE est
-	// configuré via « occ » dans le pod Nextcloud (il doit être Ready).
+	// 11. Office (Phase 6) — AFTER files: the ONLYOFFICE connector is
+	// configured via "occ" in the Nextcloud pod (it must be Ready).
 	if err := office.Deploy(ctx); err != nil {
 		return err
 	}
 
-	// 12. SSO (login unique du MVB) : clients OIDC Keycloak + Nextcloud + Synapse.
+	// 12. SSO (the MVB's single sign-on): Keycloak OIDC clients + Nextcloud + Synapse.
 	if err := sso.EnsureOIDCClients(ctx, o.domain); err != nil {
 		return err
 	}
-	// Retrait de l'ancienne pile (Matrix + Jitsi) : nettoyage idempotent des
-	// vestiges sur un cluster existant. Talk remplace chat ET visio.
+	// Removal of the old stack (Matrix + Jitsi): idempotent cleanup of its
+	// remnants on an existing cluster. Talk replaces BOTH chat and video.
 	if err := stacks.RetirerMatrixEtJitsi(ctx, o.domain); err != nil {
 		return err
 	}
-	// Talk + High Performance Backend : messagerie ET visioconférence, dans
-	// Nextcloud. Déployé après le retrait, pour libérer d'abord les ressources.
+	// Talk + High Performance Backend: messaging AND videoconferencing, inside
+	// Nextcloud. Deployed after the removal, to free up resources first.
 	if err := talk.Deploy(ctx); err != nil {
 		return err
 	}
-	// Applications Nextcloud (Phase 12) : les apps de collaboration controlees
-	// (licence libre, version stable). Sans ce module, une installation neuve
-	// n'aurait AUCUNE de ces apps — elles ne vivraient que sur la machine ou
-	// elles ont ete installees a la main.
+	// Nextcloud applications (Phase 12): the controlled collaboration apps
+	// (free license, stable version). Without this module, a fresh install
+	// would have NONE of these apps — they would only live on the machine
+	// where they were installed by hand.
 	if err := apps.Deploy(ctx); err != nil {
 		return err
 	}
 
-	// 12bis. Messagerie (Phase 13) : Stalwart. Nextcloud fournit l'interface
-	// (app Mail) mais pas le serveur de courrier. Le relais d'expédition est
-	// INDISPENSABLE ici : le port 25 sortant est bloqué chez le FAI (vérifié),
-	// donc Stalwart ne peut pas livrer vers Gmail par lui-même.
+	// 12bis. Mail (Phase 13): Stalwart. Nextcloud provides the interface
+	// (Mail app) but not the mail server. The outbound relay is INDISPENSABLE
+	// here: outbound port 25 is blocked by the ISP (verified), so Stalwart
+	// cannot deliver to Gmail by itself.
 	if err := mail.Deploy(ctx, o.domain, o.relaisSmtpHote, o.relaisSmtpPort,
 		o.relaisSmtpUser, o.relaisSmtpPass); err != nil {
 		return err
 	}
 
-	// 12ter. Authentification unique de Stalwart. Le serveur de messagerie a sa
-	// propre interface d'administration, et elle doit déléguer à Keycloak comme
-	// le reste de la plateforme. Ce bloc rejoue exactement la configuration qui
-	// a été établie à la main : chaque ligne correspond à un blocage réel, et
-	// notamment aux quatre tables de rôles de l'objet Authentication, sans
-	// lesquelles une connexion pourtant réussie se solde par un « 403 ».
+	// 12ter. Stalwart single sign-on. The mail server has its own
+	// administration interface, and it must delegate to Keycloak like the
+	// rest of the platform. This block replays exactly the configuration that
+	// was established by hand: each line corresponds to a real blocker,
+	// notably the four role tables of the Authentication object, without
+	// which an otherwise successful login ends in a "403".
 	//
-	// Le domaine des ADRESSES est le domaine de la plateforme, pas l'hôte web
-	// « mail.<domaine> » : ce sont deux choses distinctes, et les confondre
-	// placerait les enregistrements MX au mauvais endroit.
+	// The domain of the ADDRESSES is the platform domain, not the web host
+	// "mail.<domain>": those are two distinct things, and confusing them
+	// would put the MX records in the wrong place.
 	if err := mail.ConfigurerSSO(ctx, o.domain, mail.SSO{
 		Hote:         mail.DomaineMessagerie(o.domain),
 		Issuer:       "https://keycloak." + o.domain + "/realms/ceffio",
@@ -271,54 +272,54 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 		return err
 	}
 
-	// Coffre de secrets : OpenBao s'il est configure, Kubernetes sinon.
-	// On ne fait que DIRE lequel est utilise — c'est une information
-	// d'exploitation, et c'est aussi la preuve que le coffre reste optionnel :
-	// aucun deploiement ne doit echouer parce qu'il est absent.
+	// Secrets vault: OpenBao when configured, Kubernetes otherwise.
+	// We only STATE which one is used — it is operational information, and it
+	// is also proof that the vault remains optional: no deployment should
+	// fail because it is absent.
 	coffre := secrets.DepuisEnvironnement()
-	fmt.Println("\nCoffre de secrets : " + coffre.Description())
+	fmt.Println("\nSecrets vault: " + coffre.Description())
 	if err := files.ConfigureOIDC(ctx, o.domain); err != nil {
 		return err
 	}
 
-	fmt.Println("\n✓ SSO OIDC configuré (login unique Keycloak sur Nextcloud).")
+	fmt.Println("\n✓ OIDC SSO configured (single Keycloak login on Nextcloud).")
 
-	// 13. Ingress / TLS réel (Phase 9).
+	// 13. Ingress / real TLS (Phase 9).
 	if err := ingress.Deploy(ctx, o.domain); err != nil {
 		return err
 	}
 
-	// 14. Adoption des URLs publiques dans les apps (homeserver, redirects SSO, https).
+	// 14. Adoption of the public URLs into the apps (homeserver, SSO redirects, https).
 	if err := ingress.AdoptURLs(ctx, o.domain); err != nil {
 		return err
 	}
 
-	// 15. Console d'administration (dashboard + utilisateurs SSO).
+	// 15. Administration console (dashboard + SSO users).
 	if err := console.Deploy(ctx, o.domain); err != nil {
 		return err
 	}
 
-	// La visioconférence a déjà été déployée dans le lot parallèle ci-dessus
-	// (Phase 10, avec fichiers ‖ chat). Ne PAS la rejouer ici : l'appel
-	// dupliqué ne faisait que reconfirmer ce qui était fait, en payant une
-	// seconde fois l'attente `kubectl rollout status` (240 s au pire) pour un
-	// résultat identique. Un déploiement deux fois plus long sans bénéfice.
+	// Videoconferencing was already deployed in the parallel batch above
+	// (Phase 10, with files ‖ chat). Do NOT replay it here: the duplicate call
+	// only reconfirmed what was done, paying a second time the
+	// `kubectl rollout status` wait (240 s worst case) for an identical
+	// result. A deployment twice as long with no benefit.
 	return nil
 }
 
 func resolveRuntime(o *installOptions, osName string) (cluster.Runtime, error) {
 	if o.existingCluster {
-		return "", fmt.Errorf("--existing-cluster : pas encore implémenté (BYO Kubernetes)")
+		return "", fmt.Errorf("--existing-cluster: not implemented yet (BYO Kubernetes)")
 	}
 	switch o.runtime {
 	case "k3s":
 		if osName == "darwin" {
-			return cluster.RuntimeDev, nil // macOS → k3d (boucle de dev)
+			return cluster.RuntimeDev, nil // macOS → k3d (dev loop)
 		}
-		return cluster.RuntimeK3s, nil // Linux → vrai K3s
+		return cluster.RuntimeK3s, nil // Linux → real K3s
 	case "rke2":
-		return "", fmt.Errorf("runtime rke2 : pas encore implémenté (Phase 17)")
+		return "", fmt.Errorf("runtime rke2: not implemented yet (Phase 17)")
 	default:
-		return "", fmt.Errorf("runtime inconnu %q", o.runtime)
+		return "", fmt.Errorf("unknown runtime %q", o.runtime)
 	}
 }

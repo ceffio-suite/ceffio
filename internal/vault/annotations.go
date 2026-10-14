@@ -5,29 +5,30 @@ import (
 	"strings"
 )
 
-// Ce fichier produit les annotations qui font poser les secrets par l'injecteur
-// d'OpenBao.
+// This file produces the annotations that make OpenBao's injector place the
+// secrets.
 //
-// POURQUOI L'INJECTEUR PLUTÔT QU'UN INIT-CONTAINER ÉCRIT À LA MAIN. Un
-// init-container maison oblige à composer soi-même le HCL de l'agent, la ConfigMap
-// qui le porte, le volume partagé, ses montages, et à régler l'utilisateur et le
-// groupe — sans quoi le fichier rendu est illisible par le conteneur applicatif, et
-// le pod boucle sur « Permission denied ». L'injecteur fait tout cela depuis ces
-// quelques annotations : il pose l'agent avec le bon couple utilisateur/groupe, et
-// garde les secrets dans un volume EN MÉMOIRE (medium: Memory), jamais sur disque.
-// Mesuré sur deux charges : quarante lignes de manifeste remplacées par neuf
+// WHY THE INJECTOR RATHER THAN A HAND-WRITTEN INIT-CONTAINER. A home-made
+// init-container forces you to compose the agent's HCL yourself, the ConfigMap
+// carrying it, the shared volume, its mounts, and to set the user and group —
+// without which the rendered file is unreadable by the application container,
+// and the pod loops on "Permission denied". The injector does all of that from
+// these few annotations: it places the agent with the right user/group pair,
+// and keeps the secrets in an IN-MEMORY volume (medium: Memory), never on
+// disk. Measured on two workloads: forty manifest lines replaced by nine
 // annotations.
 //
-// CE QUI RESTE À NOTRE CHARGE, et c'est tout :
-//   - le ServiceAccount — c'est lui que le rôle du coffre désigne pour authentifier ;
-//   - la politique et le rôle, posés une fois par la commande « vault » ;
-//   - la ligne qui charge le fichier rendu au démarrage du service :
-//     « set -a; . /secrets/env; set +a » — inévitable, ni Stalwart ni ONLYOFFICE ne
-//     lisent un fichier d'eux-mêmes.
+// WHAT REMAINS OURS, and that is all:
+//   - the ServiceAccount — it is what the vault role designates to
+//     authenticate;
+//   - the policy and the role, placed once by the "vault" command;
+//   - the line that loads the rendered file at service startup:
+//     "set -a; . /secrets/env; set +a" — unavoidable, neither Stalwart nor
+//     ONLYOFFICE read a file by themselves.
 
-// AnnotationsAgent rend le bloc YAML à insérer dans les annotations du gabarit de
-// pod. indent est l'indentation, en espaces, des lignes produites : elle doit
-// correspondre à celle des autres annotations de ce pod.
+// AnnotationsAgent renders the YAML block to insert into the pod template's
+// annotations. indent is the indentation, in spaces, of the produced lines: it
+// must match that of the pod's other annotations.
 func AnnotationsAgent(indent int, role, chemin, gabarit string) string {
 	marge := strings.Repeat(" ", indent)
 	interne := strings.Repeat(" ", indent+2)
@@ -36,21 +37,22 @@ func AnnotationsAgent(indent int, role, chemin, gabarit string) string {
 	for _, l := range [][2]string{
 		{"vault.hashicorp.com/agent-inject", "true"},
 		{"vault.hashicorp.com/role", role},
-		// MODE INIT-CONTAINER SEUL : l'agent rend les secrets puis s'arrête, et
-		// aucun sidecar ne reste à tourner. C'est le motif qui correspond à ces
-		// services, qui lisent leurs variables une fois au démarrage.
+		// INIT-CONTAINER MODE ONLY: the agent renders the secrets then stops,
+		// and no sidecar keeps running. That is the pattern matching these
+		// services, which read their variables once at startup.
 		{"vault.hashicorp.com/agent-pre-populate-only", "true"},
 		{"vault.hashicorp.com/secret-volume-path", "/secrets"},
 		{"vault.hashicorp.com/agent-inject-secret-env", chemin},
 		{"vault.hashicorp.com/agent-inject-perms-env", "0644"},
-		// ÉCHEC BRUYANT : une clé absente fait échouer le rendu au lieu d'écrire
-		// une valeur vide. Un secret vide est pire qu'un pod qui ne démarre pas.
+		// LOUD FAILURE: a missing key makes the render fail instead of writing
+		// an empty value. An empty secret is worse than a pod that does not
+		// start.
 		{"vault.hashicorp.com/error-on-missing-key-env", "true"},
 	} {
 		fmt.Fprintf(&b, "%s%s: %q\n", marge, l[0], l[1])
 	}
 
-	// Le gabarit part en bloc littéral : il contient des sauts de ligne.
+	// The template goes out as a literal block: it contains newlines.
 	fmt.Fprintf(&b, "%svault.hashicorp.com/agent-inject-template-env: |\n", marge)
 	for _, l := range strings.Split(strings.TrimRight(gabarit, "\n"), "\n") {
 		fmt.Fprintf(&b, "%s%s\n", interne, l)
@@ -58,12 +60,12 @@ func AnnotationsAgent(indent int, role, chemin, gabarit string) string {
 	return b.String()
 }
 
-// ChampCoffre rend l'accès à un champ d'une entrée KV versionnée.
+// ChampCoffre renders access to one field of a versioned KV entry.
 //
-// LE TIRET COMPTE : « .Data.data.hash-key » n'est PAS une expression valide en
-// syntaxe Go — le tiret y est un opérateur —, et l'erreur rendue par l'agent parle
-// de « gabarit invalide » sans jamais mentionner le tiret. Passer par « index »
-// règle le cas, et le point aussi, par précaution.
+// THE DASH MATTERS: ".Data.data.hash-key" is NOT a valid expression in Go
+// template syntax — the dash is an operator there —, and the error the agent
+// renders speaks of an "invalid template" without ever mentioning the dash.
+// Going through "index" settles the case, and the dot too, as a precaution.
 func ChampCoffre(champ string) string {
 	if strings.ContainsAny(champ, "-.") {
 		return fmt.Sprintf("{{ index .Data.data %q }}", champ)
@@ -71,20 +73,20 @@ func ChampCoffre(champ string) string {
 	return "{{ .Data.data." + champ + " }}"
 }
 
-// Source désigne une entrée du coffre et les variables à en tirer.
+// Source designates one vault entry and the variables to draw from it.
 type Source struct {
 	Chemin string
 	Paires [][2]string
 }
 
-// GabaritMulti compose un gabarit qui lit PLUSIEURS entrées du coffre et écrit un
-// seul fichier.
+// GabaritMulti composes a template that reads SEVERAL vault entries and writes
+// a single file.
 //
-// POURQUOI PLUSIEURS ENTRÉES DANS UN MÊME FICHIER : un service tire souvent ses
-// valeurs de comptes distincts — Nextcloud prend ses identifiants de base dans
-// « nextcloud/db », son compte d'administration dans « nextcloud/admin », et son
-// relais d'expédition ailleurs encore. Le conteneur n'a pas à connaître cette
-// répartition : il charge UN fichier, et l'injecteur le compose.
+// WHY SEVERAL ENTRIES IN ONE FILE: a service often draws its values from
+// distinct accounts — Nextcloud takes its database credentials from
+// "nextcloud/db", its administration account from "nextcloud/admin", and its
+// sending relay from yet another place. The container does not have to know
+// about that split: it loads ONE file, and the injector composes it.
 func GabaritMulti(sources []Source) string {
 	var b strings.Builder
 	for _, s := range sources {
@@ -97,13 +99,13 @@ func GabaritMulti(sources []Source) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// GabaritExports rend un gabarit qui écrit des affectations shell, chargeables par
-// « set -a; . /secrets/env; set +a » — la façon documentée de servir une
-// application qui n'attend que des variables d'environnement.
+// GabaritExports renders a template that writes shell assignments, loadable
+// with "set -a; . /secrets/env; set +a" — the documented way to serve an
+// application that expects nothing but environment variables.
 //
-// Chaque paire est {nom de la variable shell, valeur}. La valeur est le plus souvent
-// un ChampCoffre, mais elle peut être composée — « admin: » suivi du mot de passe,
-// par exemple, car Stalwart attend « utilisateur:motdepasse » dans UNE SEULE chaîne.
+// Each pair is {shell variable name, value}. The value is most often a
+// ChampCoffre, but it can be composed — "admin:" followed by the password, for
+// example, because Stalwart expects "user:password" in ONE SINGLE string.
 func GabaritExports(chemin string, paires ...[2]string) string {
 	return GabaritMulti([]Source{{Chemin: chemin, Paires: paires}})
 }

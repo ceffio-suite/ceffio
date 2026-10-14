@@ -1,38 +1,46 @@
 name: CI
 
-# POURQUOI CETTE CI, ET POURQUOI ELLE CONSTRUIT LE BINAIRE.
+# WHY THIS CI EXISTS — AND WHY IT BUILDS THE BINARY.
 #
-# Tant qu'aucune automatisation ne construisait le projet, une erreur de
-# compilation pouvait vivre des jours dans le dépôt : elle n'apparaissait qu'au
-# moment où quelqu'un tapait `go build` sur sa machine. C'est arrivé, sur ce
-# dépôt, et c'est exactement ce qu'une CI existe pour empêcher.
+# As long as nothing automated the project, a compilation error could live in
+# the repository for days: it only surfaced when someone ran `go build` on
+# their machine. That happened, in this repository, and it is exactly what a
+# CI exists to prevent.
 #
-# Elle a trois étages, du moins coûteux au plus coûteux :
-#   1. le formatage et le vet — quelques secondes, attrapent les fautes ;
-#   2. la compilation — attrape ce que vet ne voit pas ;
-#   3. les tests, avec la course activée (les pannes d'accès concurrent
-#      n'apparaissent pas dans un `go test` séquentiel) ;
-#   4. la construction RÉELLE du binaire pour les architectures de production,
-#      publiée comme artefact téléchargeable.
+# It has several stages, from cheapest to most expensive:
+#   1. formatting and vet — a few seconds, catch mistakes;
+#   2. compilation — catches what vet cannot see;
+#   3. tests, with the race detector on (concurrency failures do not show up
+#      in a sequential `go test`);
+#   4. the REAL build of the binary for production architectures, published
+#      as a downloadable artifact.
 #
-# LE POINT QUI COMPTE : l'artefact. Un `go build` vert dans un journal de CI ne
-# prouve pas qu'un binaire utilisable existe. En publiant le fichier, on peut le
-# TÉLÉCHARGER et l'exécuter — c'est la seule vérification qui vaille.
+# THE POINT THAT MATTERS: the artifact. A green `go build` in a CI log does
+# not prove a usable binary exists. By publishing the file, it can be
+# DOWNLOADED and RUN — the only verification that counts.
+#
+# BRANCHES: CI runs on main and develop (the GitFlow branches, see
+# CONTRIBUTING.md) and on every pull request targeting them. Releases are NOT
+# built here — the `release.yml` workflow owns tags, so a tag is never built
+# twice by two different definitions of "done".
 
 on:
   push:
-    branches: [main]
-    tags: ["v*"]
+    branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  qualite:
-    name: formatage, vet et tests
+  quality:
+    name: format, vet and tests
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -42,30 +50,30 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Formatage
+      - name: Formatting
         run: |
-          non_formate=$(gofmt -l . | grep -v '^$' || true)
-          if [ -n "$non_formate" ]; then
-            echo "::error::Ces fichiers ne sont pas au format gofmt :"
-            echo "$non_formate"
+          unformatted=$(gofmt -l . | grep -v '^$' || true)
+          if [ -n "$unformatted" ]; then
+            echo "::error::These files are not gofmt-formatted:"
+            echo "$unformatted"
             exit 1
           fi
 
       - name: Vet
         run: go vet ./...
 
-      - name: Tests (avec détection de course)
+      - name: Tests (with race detection)
         run: go test -race ./...
 
-      - name: Cohérence du registre de versions
-        # Le test porte la promesse écrite dans internal/version : aucune image
-        # en `latest`, toutes qualifiées, et le coffre bien déclaré.
+      - name: Version registry coherence
+        # The test carries the promise written in internal/version: no image
+        # on `latest`, all versions pinned, and the vault properly declared.
         run: go test ./internal/version/ -v -run 'TestRegistry|TestAucuneVersion|TestImages|TestOpenBao'
 
-  binaire:
-    name: construction du binaire
+  binary:
+    name: build binary (${{ matrix.goarch }})
     runs-on: ubuntu-24.04
-    needs: qualite
+    needs: quality
     strategy:
       matrix:
         include:
@@ -73,22 +81,24 @@ jobs:
           - { goarch: arm64, suffixe: linux-arm64 }
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
 
-      - name: Construction
+      - name: Build
         env:
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
         run: |
           set -euo pipefail
-          # Le nom de version est injecté et non inventé : une version affichée
-          # qui ne correspond à rien est pire qu'une version absente, parce
-          # qu'elle fait croire qu'on sait ce qui tourne.
+          # The version string is injected, never invented: a displayed version
+          # that matches nothing is worse than no version at all, because it
+          # makes people believe they know what is running.
           VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo 0.0.0-dev)"
           COMMIT="$(git rev-parse --short HEAD)"
           DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -97,38 +107,38 @@ jobs:
             -o "bin/ceffio-${VERSION}-linux-${GOARCH}" ./cmd/ceffio
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
-      - name: Vérification du binaire produit
-        # On ne se contente pas de constater que la construction s'est terminée :
-        # on EXÉCUTE ce qui vient d'être produit, quand c'est possible.
+      - name: Verify the produced binary
+        # We do not just note that the build finished: we RUN what was just
+        # produced, when that is possible.
         #
-        # QUAND CE N'EST PAS POSSIBLE, ET POURQUOI ON LE DIT : un binaire arm64 ne
-        # s'exécute pas sur un runner amd64. Tenter de le lancer ferait échouer la
-        # CI pour une raison qui n'a rien à voir avec la qualité du code — c'est
-        # arrivé, deux fois, dans l'écriture de ce fichier. On exécute donc
-        # seulement l'architecture NATIVE du runner, et on annonce clairement que
-        # l'autre n'est pas exécutée. Un artefact publié sans avoir été exécuté se
-        # dit, il ne se cache pas.
+        # WHEN IT IS NOT POSSIBLE, AND WHY WE SAY SO: an arm64 binary does not
+        # run on an amd64 runner. Trying to launch it would fail CI for a
+        # reason that has nothing to do with code quality — this happened
+        # twice while writing this file. So we only execute the runner's
+        # NATIVE architecture, and state clearly that the other was not
+        # executed. A published artifact that was never run must say so, not
+        # hide it.
         #
-        # Les commandes exécutées sont choisies pour une raison : il n'existe PAS
-        # de sous-commande `version` dans ce projet. On exerce donc l'arbre de
-        # commandes réel — l'aide générale et deux parcours de commandes.
+        # The commands run are chosen on purpose: there is NO `version`
+        # subcommand in this project. We exercise the real command tree —
+        # general help and two command paths.
         run: |
           set -euo pipefail
           BIN="bin/ceffio-${VERSION}-linux-${{ matrix.goarch }}"
-          test -x "$BIN" || { echo "::error::le binaire n'est pas exécutable"; exit 1; }
+          test -x "$BIN" || { echo "::error::the binary is not executable"; exit 1; }
           file "$BIN"
 
-          NATIF="$(go env GOARCH)"
-          if [ "${{ matrix.goarch }}" != "$NATIF" ]; then
-            echo "architecture ${{ matrix.goarch }} : construite mais NON exécutée ici (runner $NATIF)."
-            echo "Vérification complète à faire sur une machine ${{ matrix.goarch }}."
+          NATIVE="$(go env GOARCH)"
+          if [ "${{ matrix.goarch }}" != "$NATIVE" ]; then
+            echo "architecture ${{ matrix.goarch }}: built but NOT executed here (runner $NATIVE)."
+            echo "Full verification to be done on a ${{ matrix.goarch }} machine."
             exit 0
           fi
 
           ./"$BIN" --help > /dev/null
           ./"$BIN" install --help > /dev/null
           ./"$BIN" status --help > /dev/null
-          echo "le binaire démarre et son arbre de commandes répond"
+          echo "the binary starts and its command tree responds"
 
       - uses: actions/upload-artifact@v7
         with:

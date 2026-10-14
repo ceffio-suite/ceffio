@@ -14,6 +14,6 @@ lint: vet
 clean:
 	rm -rf bin/
 
-# Reproduction intégrale à zéro (à lancer après chaque phase).
+# Full reproduction from scratch (run after each phase).
 test-clean:
 	bash scripts/clean-test.sh

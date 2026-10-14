@@ -9,7 +9,7 @@ import (
 func newUsersCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "users",
-		Short: "Gérer les utilisateurs (provisioning Keycloak + applications)",
+		Short: "Manage users (Keycloak + application provisioning)",
 	}
 	c.AddCommand(newUsersAddCmd())
 	return c
@@ -18,10 +18,10 @@ func newUsersCmd() *cobra.Command {
 func newUsersAddCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "add EMAIL",
-		Short: "Créer un utilisateur (Keycloak, Nextcloud, boîte mail)",
+		Short: "Create a user (Keycloak, Nextcloud, mailbox)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("provisioning de l'utilisateur %q : pas encore implémenté", args[0])
+			return fmt.Errorf("provisioning user %q: not implemented yet", args[0])
 		},
 	}
 }
