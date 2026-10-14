@@ -301,8 +301,28 @@ func brancherTalk(ctx context.Context, domain string) error {
 		return err
 	}
 
-	// The Talk setting is a JSON array of {url, secret}.
-	reglage := fmt.Sprintf(`[{"url":"%s","secret":"%s"}]`, url, entree["recording-secret"])
+	// THE SHAPE OF THIS VALUE IS WHAT MAKES THE FEATURE WORK, and it is not the
+	// obvious one. Talk reads an OBJECT with two keys:
+	//
+	//     {"servers":[{"server":"URL"}],"secret":"SECRET"}
+	//
+	// read by Config::getRecordingServers() -> $recording['servers']
+	//     and Config::getRecordingSecret()  -> $recording['secret']
+	//
+	// Both go through getAppValueArray(), which json_decodes the stored string
+	// and returns it as an array. An object with those two keys gives the two
+	// lookups something to find.
+	//
+	// This was written first as an ARRAY — [{"url":...,"secret":...}] — which
+	// looks natural and is wrong twice over: the outer shape is a list, so
+	// neither key exists at the top level, both getters return their default
+	// ([] and ""), and Config::isRecordingEnabled() returns false. Talk then
+	// greys out "record this call" with "the recording server is not
+	// installed" — while the recorder is running, declared, and healthy.
+	//
+	// The entry field is "server", NOT "url" — same trap as the signaling
+	// server above, verified in the same file.
+	reglage := reglageRecording(url, entree["recording-secret"])
 	cmd := k8s.Command(ctx, "kubectl", "exec", "-n", "ceffio-files", "deploy/nextcloud",
 		"-c", "nextcloud", "--",
 		"php", "occ", "config:app:set", "spreed", "recording_servers", "--value", reglage)
@@ -312,6 +332,14 @@ func brancherTalk(ctx context.Context, domain string) error {
 	}
 	fmt.Println("  ✓ recording server declared in Talk")
 	return nil
+}
+
+// reglageRecording builds the value Talk expects for "recording_servers".
+//
+// A function rather than an inline format so the SHAPE can be tested: getting
+// it wrong leaves the recording button greyed out with no error anywhere.
+func reglageRecording(url, secret string) string {
+	return fmt.Sprintf(`{"servers":[{"server":%q}],"secret":%q}`, url, secret)
 }
 
 // ---------------------------------------------------------------------------
