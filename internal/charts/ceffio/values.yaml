@@ -1,27 +1,46 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright © MANDEM
-# Valeurs du chart umbrella Ceffio.
-# Ce chart possède les namespaces de la plateforme (Phase 2).
-# Les sous-charts applicatifs arrivent dans les phases suivantes.
+# Values for the Ceffio umbrella chart.
+# This chart owns the platform namespaces (Phase 2); the application
+# sub-charts arrive in the following phases.
 
 global:
   partOf: ceffio
-  managedBy: ceffio-operator
+  # HELM OWNS THESE NAMESPACES. This used to read "ceffio-operator", which does
+  # not exist: there is no Operator in Ceffio, the CLI applies the manifests
+  # itself through client-go. The label told anyone inspecting a namespace that
+  # a controller was managing it — and sent whoever followed that lead to code
+  # that is not there.
+  managedBy: ceffio-cli
 
-# Noms logiques des namespaces applicatifs. Le template rend "ceffio-<nom>".
-# NB : "ceffio-system" est le namespace de la release helm (créé par --create-namespace)
-# et ne doit PAS être redéclaré ici sinon conflit "already exists" au déploiement.
+# Logical namespaces. The template renders "ceffio-<name>".
+#
+# "ceffio-system" is NOT here: it is the Helm release namespace, created by
+# --create-namespace, and declaring it again triggers "already exists".
+#
+# "chat" is NOT here either: it belonged to the Matrix stack (Synapse +
+# Element), removed when Ceffio became a Nextcloud product. Talk — a Nextcloud
+# app — covers chat AND video. Declaring it created an empty namespace on every
+# fresh install. internal/stacks/retrait.go deletes the leftovers on an
+# existing cluster.
+#
+# "vault" IS here, and it was missing. Everything OpenBao-related lives in
+# ceffio-vault (the injector render, the Ingress, the policies), but no
+# manifest ever created it: it only existed because the OpenBao Helm release was
+# installed with --create-namespace, and it therefore carried none of the
+# platform labels. On a cluster where that step is skipped, every vault resource
+# fails with "namespace not found".
 namespaces:
   identity: {}
   data: {}
   files: {}
   office: {}
-  chat: {}
   video: {}
   mail: {}
+  vault: {}
   observability: {}
 
-# cert-manager (installé à part, au niveau cluster).
+# cert-manager (installed separately, at cluster level).
 certmanager:
   repo: jetstack
   version: v1.21.1
