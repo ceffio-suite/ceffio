@@ -22,7 +22,7 @@ LICENSE file (not a badge or a tag), on 2026-10-14.
 | — libsrtp (in the Janus image) | — | BSD-3-Clause | [cisco/libsrtp](https://github.com/cisco/libsrtp) |
 | coturn | `docker.io/coturn/coturn:4.18` | BSD-3-Clause | [coturn/coturn](https://github.com/coturn/coturn) |
 | NATS | `docker.io/library/nats:2.15` | Apache-2.0 | [nats-io/nats-server](https://github.com/nats-io/nats-server) |
-| ONLYOFFICE Docs | `docker.io/onlyoffice/documentserver:9.4.0.1` | AGPL-3.0 + additional terms (section 7) | [ONLYOFFICE/DocumentServer](https://github.com/ONLYOFFICE/DocumentServer) |
+| ONLYOFFICE Docs | `docker.io/onlyoffice/documentserver:9.4.0.1` | AGPL-3.0 + 5 additional terms (LICENSE, §7) | [ONLYOFFICE/DocumentServer](https://github.com/ONLYOFFICE/DocumentServer) |
 | OpenBao | `docker.io/openbao/openbao:2.7.1` | MPL-2.0 | [openbao/openbao](https://github.com/openbao/openbao) |
 | vault-k8s agent injector | `docker.io/hashicorp/vault-k8s:1.7.6` (init-container agent) | MPL-2.0 | [hashicorp/vault-k8s](https://github.com/hashicorp/vault-k8s) |
 | Stalwart Mail | `docker.io/stalwartlabs/stalwart:v0.16.26` | AGPL-3.0-only (community edition) + Stalwart Enterprise License (not used) | [stalwartlabs/stalwart](https://github.com/stalwartlabs/stalwart) |
@@ -36,11 +36,18 @@ LICENSE file (not a badge or a tag), on 2026-10-14.
 
 ### ONLYOFFICE Docs — additional terms
 
-Since version 9.4, ONLYOFFICE DocumentServer ships under AGPL-3.0 **with
-additional terms** that require keeping an "About" section citing ONLYOFFICE
-in any modified version. **Ceffio deploys the image unmodified and does not
-mask the ONLYOFFICE branding**, so this obligation is not triggered; if you
-modify the image, preserve that section.
+ONLYOFFICE DocumentServer ships under AGPL-3.0 with **five additional terms**
+(section 7 of its LICENSE, verified in the upstream file — not a separate
+document): retain notices and attribution, mark modified versions with their
+date and state they derive from ONLYOFFICE, expose ONLYOFFICE attribution
+through a visible UI notice **in versions with a modified interface**, no
+trademark rights, and CC BY-SA 4.0 for non-code content (icons, docs).
+
+**Ceffio deploys the upstream image unmodified and does not mask the
+branding**, so none of these terms is triggered. If you modify the image,
+terms 1, 2 and 3 apply: keep attribution, state the version is modified, and
+keep that notice visible in the interface. ONLYOFFICE's name and logo remain
+covered by its trademark policy in all cases.
 
 ### Stalwart Mail — community edition only
 
