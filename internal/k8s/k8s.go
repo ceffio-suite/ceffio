@@ -30,6 +30,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // Env returns the current process environment enriched with KUBECONFIG
@@ -65,4 +66,56 @@ func Command(ctx context.Context, name string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env = Env()
 	return cmd
+}
+
+// AvecSecrets sources the secrets the OpenBao injector wrote into the pod,
+// then runs the command given on the shell.
+//
+// USE IT FOR EVERY `kubectl exec` THAT READS A SECRET, and there are many:
+// kcadm for Keycloak, curl for Stalwart, psql for a generated database
+// password. Each of them failed for the same reason, and the failure was
+// always the same shape — a credential error that looks like a wrong password
+// but is really an empty variable.
+//
+// WHY THE VARIABLES ARE EMPTY. The injector writes /secrets/env, and each
+// component's CONTAINER COMMAND sources it for its own process. A
+// `kubectl exec` opens a NEW shell inside that container: it inherits the
+// image's environment, NOT what the entrypoint exported. Without this prefix,
+// `"$KC_BOOTSTRAP_ADMIN_PASSWORD"` is an empty string, kcadm reports "Invalid
+// user credentials", and one goes looking for a password problem that is not
+// there.
+//
+// `set -a` exports everything the file defines so later commands in the same
+// shell see the values. The work happens INSIDE the pod: only the variable
+// NAMES reach the process table, never the values.
+//
+// If /secrets/env is absent — an injector that never ran — the source fails
+// silently (2>/dev/null) and the command runs without credentials, failing
+// loudly on its own error rather than pretending to succeed.
+func AvecSecrets(commande string) string {
+	return `set -a; . /secrets/env 2>/dev/null; set +a; ` + commande
+}
+
+// ExecAvecSecrets runs command inside pod, with the injected secrets sourced
+// first. It is the short form of the common case:
+//
+//	kubectl [-n ns] exec [-i] <cible> -c <conteneur> -- sh -c AvecSecrets(…)
+//
+// stdin is passed through when non-empty, which is what the JMAP calls need.
+func ExecAvecSecrets(ctx context.Context, ns, cible, conteneur, commande string, stdin string) (string, error) {
+	args := []string{}
+	if ns != "" {
+		args = append(args, "-n", ns)
+	}
+	args = append(args, "exec")
+	if stdin != "" {
+		args = append(args, "-i")
+	}
+	args = append(args, cible, "-c", conteneur, "--", "sh", "-c", AvecSecrets(commande))
+	cmd := Command(ctx, "kubectl", args...)
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }

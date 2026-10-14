@@ -169,8 +169,8 @@ func ConfigurerSSO(ctx context.Context, domaineMessagerie string, o SSO) error {
 	var dernier string
 	for essai := 0; essai < 6; essai++ {
 		out, err := k8s.Command(ctx, "kubectl", "-n", ns, "exec", "deploy/stalwart", "-c", "stalwart", "--",
-			"sh", "-c", `curl -s --max-time 15 -u "$STALWART_RECOVERY_ADMIN" `+
-				`"http://localhost:8080/api/discover/`+compte+`"`).CombinedOutput()
+			"sh", "-c", scriptAvecSecrets(`curl -s --max-time 15 -u "$STALWART_RECOVERY_ADMIN" `+
+				`"http://localhost:8080/api/discover/`+compte+`"`)).CombinedOutput()
 		if err == nil {
 			dernier = string(out)
 			if strings.Contains(dernier, o.Issuer) {
@@ -355,8 +355,15 @@ func assurerClientWebUI(ctx context.Context, clientID string) error {
 //
 // FORMAT: all of Stalwart v0.16 configuration is a JMAP object. We go through
 // the pod (and not through the Ingress): the call stays on the internal network
-// and STALWART_RECOVERY_ADMIN is already in the container environment — the
-// secret therefore never travels through a command line.
+// and the credential never travels through a command line.
+//
+// THE SECRET MUST BE SOURCED, and the comment here used to claim otherwise
+// ("STALWART_RECOVERY_ADMIN is already in the container environment" — it is
+// not). The injector writes /secrets/env and the container's own command
+// sources it for the Stalwart process; a `kubectl exec` opens a NEW shell that
+// inherits nothing of that. Without the source below, curl is called with an
+// empty -u, prompts for a password it cannot read, and the API answers 401 —
+// which is exactly how this failed in production.
 // ---------------------------------------------------------------------------
 
 // appelJMAP sends a JMAP request and returns the first response body.
@@ -369,8 +376,8 @@ func appelJMAP(ctx context.Context, methode string, args map[string]any) (map[st
 	if err != nil {
 		return nil, err
 	}
-	script := `curl -s --max-time 20 -u "$STALWART_RECOVERY_ADMIN" ` +
-		`-H "Content-Type: application/json" -X POST http://localhost:8080/jmap --data @-`
+	script := scriptAvecSecrets(`curl -s --max-time 20 -u "$STALWART_RECOVERY_ADMIN" ` +
+		`-H "Content-Type: application/json" -X POST http://localhost:8080/jmap --data @-`)
 	cmd := k8s.Command(ctx, "kubectl", "-n", ns, "exec", "-i", "deploy/stalwart", "-c", "stalwart", "--",
 		"sh", "-c", script)
 	cmd.Stdin = strings.NewReader(string(brut))

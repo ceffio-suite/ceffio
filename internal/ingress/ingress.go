@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/ceffio-suite/ceffio/internal/k8s"
+	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"os"
 	"os/exec"
 	"strings"
@@ -486,7 +487,34 @@ func rolloutRestart(ctx context.Context, target string) error {
 	return cmd.Run()
 }
 
+// runKcadm runs kcadm.sh in the Keycloak pod and returns the combined output.
+//
+// ADMIN CREDENTIALS COME FROM THE VAULT and travel through STANDARD INPUT,
+// never through the command line (an argument is readable in
+// /proc/<pid>/cmdline, and inspecting a process must not reveal a secret).
+//
+// THIS CODE USED TO READ $KC_BOOTSTRAP_ADMIN_* FROM THE POD ENVIRONMENT, which
+// no longer works: the OpenBao injector migration removed those variables from
+// the Deployment. They now live only in /secrets/env, sourced by the
+// CONTAINER'S STARTUP COMMAND for its own process — a `kubectl exec` opens a
+// NEW shell that inherits none of it. The variables were EMPTY, kcadm answered
+// "Invalid user credentials", and this surfaced as:
+//
+//	get client nextcloud: exit status 1
+//
+// which points at a password problem that does not exist. internal/sso already
+// did it correctly (its own runKcadm); this copy had not been updated.
 func runKcadm(ctx context.Context, args ...string) (string, error) {
+	coffre := secrets.DepuisEnvironnement()
+	entree, err := secrets.LireEntreeCoffre(ctx, coffre, "keycloak", "admin")
+	if err != nil {
+		return "", fmt.Errorf("Keycloak admin credentials unreadable in the vault: %w", err)
+	}
+	utilisateur, motdepasse := entree["username"], entree["password"]
+	if utilisateur == "" || motdepasse == "" {
+		return "", fmt.Errorf("incomplete keycloak/admin vault entry (username and password required)")
+	}
+
 	// Injects -r ceffio after the verb (the SSO clients live in the application realm).
 	quoted := make([]string, 0, len(args)+3)
 	for i, a := range args {
@@ -495,9 +523,15 @@ func runKcadm(ctx context.Context, args ...string) (string, error) {
 			quoted = append(quoted, "'-r'", "'ceffio'")
 		}
 	}
-	cmdStr := `/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user "$KC_BOOTSTRAP_ADMIN_USERNAME" --password "$KC_BOOTSTRAP_ADMIN_PASSWORD" >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh ` + strings.Join(quoted, " ")
-	full := []string{"exec", "-n", "ceffio-identity", "deploy/keycloak", "-c", "keycloak", "--", "sh", "-c", cmdStr}
-	out, err := k8s.Command(ctx, "kubectl", full...).CombinedOutput()
+	script := `IFS= read -r motdepasse; ` +
+		`/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master ` +
+		`--user '` + strings.ReplaceAll(utilisateur, "'", `'\''`) + `' --password "$motdepasse" >/dev/null 2>&1 && ` +
+		`/opt/keycloak/bin/kcadm.sh ` + strings.Join(quoted, " ")
+
+	full := []string{"exec", "-i", "-n", "ceffio-identity", "deploy/keycloak", "-c", "keycloak", "--", "sh", "-c", script}
+	cmd := k8s.Command(ctx, "kubectl", full...)
+	cmd.Stdin = strings.NewReader(motdepasse + "\n")
+	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }
 

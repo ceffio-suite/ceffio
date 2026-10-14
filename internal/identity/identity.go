@@ -271,13 +271,54 @@ func ensureRealm(ctx context.Context) error {
 		return nil
 	}
 	fmt.Println("∙ creating the ceffio realm (kcadm)")
-	cmd := k8s.Command(ctx, "kubectl", "exec", "-n", ns, "deploy/keycloak", "-c", "keycloak", "--",
-		"sh", "-c",
-		`/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user "$KC_BOOTSTRAP_ADMIN_USERNAME" --password "$KC_BOOTSTRAP_ADMIN_PASSWORD" >/dev/null && /opt/keycloak/bin/kcadm.sh create realms -s "realm=ceffio" -s enabled=true -s registrationAllowed=false -s loginWithEmailAllowed=true -s duplicateEmailsAllowed=false -s resetPasswordAllowed=true -s editUsernameAllowed=false -s sslRequired=external`)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("creating the ceffio realm: %w", err)
+	if err := creerRealm(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+// creerRealm creates the "ceffio" realm via kcadm.
+//
+// ADMIN CREDENTIALS COME FROM THE VAULT and travel through STANDARD INPUT,
+// never through the command line.
+//
+// THIS CODE USED TO READ $KC_BOOTSTRAP_ADMIN_* FROM THE POD ENVIRONMENT, and
+// that can no longer work: the migration to the OpenBao injector removed those
+// variables from the Deployment. They now live only in /secrets/env, which the
+// CONTAINER'S STARTUP COMMAND sources for its own process. A `kubectl exec`
+// opens a NEW shell that inherits none of it, so the variables were EMPTY,
+// kcadm answered "Invalid user credentials", and the whole identity layer
+// stopped there — with an error that pointed at a password problem that did
+// not exist.
+//
+// The reasoning is the one already applied in internal/sso (runKcadm); this
+// file had simply not been updated to match.
+func creerRealm(ctx context.Context) error {
+	coffre := secrets.DepuisEnvironnement()
+	entree, err := secrets.LireEntreeCoffre(ctx, coffre, "keycloak", "admin")
+	if err != nil {
+		return fmt.Errorf("Keycloak admin credentials unreadable in the vault: %w", err)
+	}
+	utilisateur, motdepasse := entree["username"], entree["password"]
+	if utilisateur == "" || motdepasse == "" {
+		return fmt.Errorf("incomplete keycloak/admin vault entry (username and password required)")
+	}
+
+	// IFS= read -r keeps the password intact (no trimming, no backslash
+	// interpretation) while it comes in on stdin.
+	script := `IFS= read -r motdepasse; ` +
+		`/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master ` +
+		`--user '` + strings.ReplaceAll(utilisateur, "'", `'\''`) + `' --password "$motdepasse" >/dev/null && ` +
+		`/opt/keycloak/bin/kcadm.sh create realms -s "realm=ceffio" -s enabled=true ` +
+		`-s registrationAllowed=false -s loginWithEmailAllowed=true -s duplicateEmailsAllowed=false ` +
+		`-s resetPasswordAllowed=true -s editUsernameAllowed=false -s sslRequired=external`
+
+	cmd := k8s.Command(ctx, "kubectl", "exec", "-i", "-n", ns, "deploy/keycloak", "-c", "keycloak",
+		"--", "sh", "-c", script)
+	cmd.Stdin = strings.NewReader(motdepasse + "\n")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("creating the ceffio realm: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

@@ -401,11 +401,17 @@ func waitReady(ctx context.Context) error {
 func configurerRelais(ctx context.Context, hote string, port int, utilisateur, motdepasse string) error {
 	fmt.Printf("∙ send relay: %s:%d\n", hote, port)
 
-	// Basic authentication: STALWART_RECOVERY_ADMIN ALREADY contains the
-	// "user:password" form expected by curl -u. It is the secret that is read
-	// INSIDE the pod: it never travels through the command line, where it would
-	// be visible in the process table.
-	script := `curl -s -o /dev/null -w "%{http_code}" --max-time 10 -u "$STALWART_RECOVERY_ADMIN" http://localhost:8080/api/account`
+	// Basic authentication: STALWART_RECOVERY_ADMIN contains the "user:password"
+	// form expected by curl -u. It is the secret that is read INSIDE the pod: it
+	// never travels through the command line, where it would be visible in the
+	// process table.
+	//
+	// IT MUST BE SOURCED FIRST. The container's own command sources /secrets/env
+	// for the Stalwart process, but `kubectl exec` opens a NEW shell that
+	// inherits nothing of it — without scriptAvecSecrets the variable is empty,
+	// curl prompts for a password it cannot read, and this reports a 401 that
+	// looks like a bad credential rather than a missing source.
+	script := scriptAvecSecrets(`curl -s -o /dev/null -w "%{http_code}" --max-time 10 -u "$STALWART_RECOVERY_ADMIN" http://localhost:8080/api/account`)
 	out, err := k8s.Command(ctx, "kubectl", "-n", ns, "exec", "deploy/stalwart", "-c", "stalwart", "--",
 		"sh", "-c", script).CombinedOutput()
 	if err != nil {
