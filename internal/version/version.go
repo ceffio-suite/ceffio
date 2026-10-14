@@ -69,8 +69,8 @@ var Registry = []Composant{
 		Module: "internal/office", Role: "document editing",
 	},
 	{
-		Nom: "redis", Image: "docker.io/valkey/valkey:8.1.10",
-		Module: "internal/data", Role: "cache and shared state (Valkey, Redis-compatible)",
+		Nom: "valkey", Image: "docker.io/valkey/valkey:8.1.10",
+		Module: "internal/data", Role: "cache and shared state",
 	},
 	{
 		Nom: "stalwart", Image: "docker.io/stalwartlabs/stalwart:v0.16.26",

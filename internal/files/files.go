@@ -34,11 +34,15 @@ const (
 	dbName    = "nextcloud"
 	dbUser    = "nextcloud"
 	dbService = "ceffio-pg-rw.ceffio-data.svc"
-	// Valkey (Redis-compatible, deployed in Phase 3). The Service name stays
-	// `ceffio-redis`: it is the interface the Nextcloud image expects, and
-	// renaming it would break existing installations.
-	redisService = "ceffio-redis.ceffio-data.svc"
-	redisPort    = "6379"
+	// Valkey (Redis-compatible, deployed in Phase 3).
+	//
+	// The SERVICE is ours, so it is named after what it runs: ceffio-valkey.
+	// The ENVIRONMENT VARIABLES below cannot follow — REDIS_HOST and
+	// REDIS_HOST_PORT are read by the Nextcloud image's own entrypoint, which
+	// expects those exact names. Renaming them here would silently disconnect
+	// Nextcloud from its cache.
+	valkeyService = "ceffio-valkey.ceffio-data.svc"
+	valkeyPort    = "6379"
 )
 
 // Deploy installs the files layer (Phase 5), idempotently:
@@ -250,7 +254,7 @@ spec:
     - name: http
       port: 80
       targetPort: 80
-`, ns, ns, annotations, nextcloudImage, dbService, dbName, redisService, redisPort, ns)
+`, ns, ns, annotations, nextcloudImage, dbService, dbName, valkeyService, valkeyPort, ns)
 	return apply(ctx, manifest)
 }
 
