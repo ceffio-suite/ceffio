@@ -795,10 +795,19 @@ func brancherNextcloud(ctx context.Context) error {
 		return fmt.Errorf("shared secret missing from the vault's talk/signaling entry")
 	}
 
-	// The URL goes in as "url" and is handled by the app's own code; the
-	// "verify" flag keeps certificate verification on — the certificate is
+	// The URL goes in as "server" — NOT "url". Talk reads $server['server']:
+	// getAllServerUrlsForCSP() calls
+	// getWebSocketDomainForSignalingServer($server['server']), and that method
+	// takes a non-nullable string. Passing "url" instead leaves the field null
+	// and Talk throws a TypeError on EVERY page load, taking the whole
+	// dashboard down with it, not just Talk:
+	//
+	//   getWebSocketDomainForSignalingServer(): Argument #1 ($url) must be of
+	//   type string, null given
+	//
+	// The "verify" flag keeps certificate verification on; the certificate is
 	// issued by the cluster's own CA and trusted inside the namespace.
-	reglage := fmt.Sprintf(`{"servers":[{"url":%q,"verify":true}],"secret":%q}`, url, secret)
+	reglage := reglageSignaling(url, secret)
 	if err := occ(ctx, "config:app:set", "spreed", "signaling_servers", "--value", reglage); err != nil {
 		return fmt.Errorf("signaling servers: %w", err)
 	}
@@ -830,6 +839,16 @@ func brancherNextcloud(ctx context.Context) error {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// reglageSignaling builds the value Talk expects for "signaling_servers".
+//
+// It is a function rather than an inline format so the shape can be tested:
+// the field name is what broke the dashboard once already.
+func reglageSignaling(url, secret string) string {
+	return fmt.Sprintf(`{"servers":[{"server":%q,"verify":true}],"secret":%q}`, url, secret)
+}
+
+// occ runs an occ command inside the Nextcloud pod.
 
 // occ runs an occ command in the Nextcloud pod.
 func occ(ctx context.Context, args ...string) error {
