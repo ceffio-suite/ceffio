@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Package k8s centralizes the execution of the Kubernetes tools (kubectl, helm)
 // with an explicit environment.
 //

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Package vault deploys the OpenBao vault of the Ceffio suite.
 //
 // WHY THIS MODULE, AND NOT ONLY A CLIENT: internal/secrets already knows how

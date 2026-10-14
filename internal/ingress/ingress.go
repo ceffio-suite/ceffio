@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Package ingress makes the suite reachable from a browser: cert-manager TLS
 // issuers (self-signed CA for domains without public ACME — dev/SME) and
 // Traefik Ingresses with their own hosts (*.<domain>).

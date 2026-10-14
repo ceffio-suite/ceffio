@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright © MANDEM
 # "From scratch" test: really deletes the k3d cluster, then replays the full
 # installation from zero to prove the suite rebuilds itself in one command.
 # To run after EACH phase (project rule): make test-clean

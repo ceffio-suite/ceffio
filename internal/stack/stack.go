@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Package stack queries the real state of a Ceffio installation through the
 // Kubernetes API. It is the common building block for `ceffio status` and
 // `ceffio doctor`.

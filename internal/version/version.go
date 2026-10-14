@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Package version records the image and chart versions deployed by Ceffio.
 // It is the single source of truth for:
 //

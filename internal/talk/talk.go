@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Package talk deploys Nextcloud Talk with its High Performance Backend (HPB).
 //
 // WHY THIS MODULE: Talk replaces both chat (ex-Synapse/Element) and

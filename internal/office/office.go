@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Package office orchestrates the deployment of the office layer (Phase 6):
 // the ONLYOFFICE Docs Server (JWT), then the connector in Nextcloud.
 //

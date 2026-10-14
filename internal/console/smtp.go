@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Package console — SMTP configuration of the platform.
 //
 // WHY IN THE CONSOLE AND NOT IN THE CODE:

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Package files orchestrates the deployment of the files layer (Phase 5):
 // the dedicated PostgreSQL user/secret, the Nextcloud admin, then Nextcloud
 // wired to the `nextcloud` database and Redis. Data on a PVC.

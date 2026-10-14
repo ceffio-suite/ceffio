@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Package platform orchestrates the deployment of the base platform on the
 // cluster: namespaces (umbrella chart), cert-manager and the TLS issuers.
 package platform

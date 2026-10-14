@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Package data orchestrates the deployment of the data layer (Phase 3):
 // the CloudNativePG operator, the PostgreSQL cluster (separate databases)
 // and Redis.

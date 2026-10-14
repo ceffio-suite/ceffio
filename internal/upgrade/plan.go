@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
 // Package upgrade upgrades a Ceffio installation.
 //
 // An upgrade is only acceptable if it is reversible. This package therefore
