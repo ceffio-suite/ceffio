@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="fr">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ceffio — Console d'administration</title>
+<title>Ceffio — Administration console</title>
 <style>
   :root{
     --bg:#0a0e18; --bg2:#0e1424; --panel:#121a2e; --panel2:#182238;
@@ -53,7 +53,7 @@
   .kpi.bad .val{color:var(--ko)}
   .kpi.warn .val{color:var(--warn)}
 
-  /* cartes de services */
+  /* service cards */
   .grid-services{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
   .svc{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;display:flex;flex-direction:column;gap:8px;transition:border-color .15s}
   .svc:hover{border-color:var(--line2)}
@@ -62,7 +62,7 @@
   .svc .dot{width:9px;height:9px;border-radius:50%;flex:0 0 9px}
   .svc .dot.ok{background:var(--ok);box-shadow:0 0 8px rgba(52,211,153,.6)}
   .svc .dot.ko{background:var(--ko);box-shadow:0 0 8px rgba(248,113,113,.6)}
-  .svc .dot.inconnue{background:var(--faint)}
+  .svc .dot.unknown{background:var(--faint)}
   .svc b{font-size:15px}
   .svc .spacer{flex:1}
   .svc .role{color:var(--muted);font-size:12.5px;line-height:1.5;min-height:38px}
@@ -137,11 +137,11 @@
   <aside class="side">
     <div class="brand">
       <div class="logo">C</div>
-      <div><b>Ceffio</b><small>Console d'administration</small></div>
+      <div><b>Ceffio</b><small>Administration console</small></div>
     </div>
     <div class="nav-item active" data-tab="dashboard">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
-      Vue d'ensemble
+      Overview
     </div>
     <div class="nav-item" data-tab="services">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9S14.5 18.5 12 21c-2.5-2.5-3.5-5.5-3.5-9S9.5 5.5 12 3z"/></svg>
@@ -153,15 +153,15 @@
     </div>
     <div class="nav-item" data-tab="smtp">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="m2 7 10 6 10-6"/></svg>
-      Messagerie
+      Mail
     </div>
     <div class="nav-item" data-tab="users">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17.5" cy="8.5" r="2.5"/><path d="M21 20c0-2.5-1.5-4.5-3.5-5.5"/></svg>
-      Utilisateurs
+      Users
     </div>
     <div class="nav-item" data-tab="certs">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><circle cx="12" cy="15" r="1.5"/></svg>
-      Certificats TLS
+      TLS certificates
     </div>
     <div class="nav-item" data-tab="infra">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><circle cx="7" cy="7" r="0.5" fill="currentColor"/><circle cx="7" cy="17" r="0.5" fill="currentColor"/></svg>
@@ -172,70 +172,70 @@
 
   <div class="main">
     <div class="topbar">
-      <h1 id="pageTitle">Vue d'ensemble</h1>
-      <span class="crumb" id="crumb">état de la plateforme</span>
+      <h1 id="pageTitle">Overview</h1>
+      <span class="crumb" id="crumb">platform status</span>
       <div class="spacer"></div>
       <span class="badge mut" id="clock"></span>
-      <button class="btn-ghost" onclick="openKeyModal()">Clé API</button>
-      <button class="btn-ghost" onclick="refresh()">Rafraîchir</button>
+      <button class="btn-ghost" onclick="openKeyModal()">API key</button>
+      <button class="btn-ghost" onclick="refresh()">Refresh</button>
     </div>
 
     <div class="content">
-      <!-- VUE D'ENSEMBLE -->
+      <!-- OVERVIEW -->
       <section class="section active" id="tab-dashboard">
         <div class="grid-kpi" id="kpis"></div>
         <div class="card">
-          <h3>Applications utilisateurs</h3>
+          <h3>User applications</h3>
           <div class="grid-services" id="svcMain"></div>
         </div>
         <div style="height:16px"></div>
         <div class="card">
-          <h3>Composants techniques</h3>
-          <div class="note">Ces services ne s'utilisent pas directement : ils sont appelés par les autres
-          applications ou par votre navigateur pendant leur fonctionnement. Ils doivent rester exposés
-          pour que la suite fonctionne — ils ne sont pas des « pages en trop ».</div>
+          <h3>Technical components</h3>
+          <div class="note">These services are not used directly: they are called by the other
+          applications or by your browser while they run. They must stay exposed
+          for the suite to work — they are not "extra pages".</div>
           <div class="grid-services" id="svcTech"></div>
         </div>
       </section>
 
       <!-- APPLICATIONS -->
       <section class="section" id="tab-services">
-        <h2 class="section-title">Applications &amp; expositions publiques</h2>
-        <p class="section-sub">Tout ce qui est joignable sur Internet, avec son rôle réel et son état.</p>
+        <h2 class="section-title">Applications &amp; public exposures</h2>
+        <p class="section-sub">Everything reachable on the Internet, with its actual role and status.</p>
         <div class="grid-services" id="svcAll"></div>
       </section>
 
       <!-- USERS -->
       <section class="section" id="tab-users">
-        <h2 class="section-title">Comptes du SSO</h2>
-        <p class="section-sub">Realm Keycloak « ceffio » — un compte créé ici fonctionne sur Nextcloud, Element et Jitsi.</p>
+        <h2 class="section-title">SSO accounts</h2>
+        <p class="section-sub">Keycloak realm "ceffio" — an account created here works on Nextcloud, Element and Jitsi.</p>
 
-        <!-- LE COMPTE D'ADMINISTRATION EST SÉPARÉ, ET EN TÊTE : il ne se gère pas
-             comme un utilisateur (pas de désactivation, pas de suppression, pas
-             de réinitialisation depuis ici — sa rotation vit dans Administration).
-             Le laisser dans la liste ci-dessous laissait croire le contraire. -->
+        <!-- THE ADMINISTRATION ACCOUNT IS SEPARATED, AND AT THE TOP: it is not managed
+             like a user (no deactivation, no deletion, no reset from here — its
+             rotation lives in Administration). Leaving it in the list below let
+             people believe the opposite. -->
         <div class="card" id="adminCard" style="display:none">
-          <h3>Compte d'administration</h3>
-          <p class="section-sub" style="margin-top:0">Ce compte administre la plateforme :
-          il ne peut être ni désactivé, ni supprimé. Son mot de passe se régénère
-          depuis la page <b>Administration</b>, d'où la rotation se propage à tous les services.</p>
+          <h3>Administration account</h3>
+          <p class="section-sub" style="margin-top:0">This account administers the platform:
+          it can be neither deactivated nor deleted. Its password is regenerated
+          from the <b>Administration</b> page, from which the rotation propagates to every service.</p>
           <div id="adminUserEtat"></div>
         </div>
 
         <div style="height:14px" id="adminCardSpacer" ></div>
 
         <div class="card">
-          <h3>Créer un compte</h3>
+          <h3>Create an account</h3>
           <div class="form-row">
-            <input id="u_name" placeholder="Identifiant">
+            <input id="u_name" placeholder="Username">
             <input id="u_email" placeholder="Email">
-            <input id="u_pwd" type="password" placeholder="Mot de passe">
-            <button class="btn" id="btnCreate" onclick="createUser()">Créer le compte</button>
+            <input id="u_pwd" type="password" placeholder="Password">
+            <button class="btn" id="btnCreate" onclick="createUser()">Create account</button>
           </div>
         </div>
         <div style="height:14px"></div>
         <table class="table" id="usersTable">
-          <thead><tr><th>Identifiant</th><th>Email</th><th>État</th><th style="text-align:right">Actions</th></tr></thead>
+          <thead><tr><th>Username</th><th>Email</th><th>Status</th><th style="text-align:right">Actions</th></tr></thead>
           <tbody></tbody>
         </table>
       </section>
@@ -243,44 +243,44 @@
       <!-- ADMINISTRATION -->
       <section class="section" id="tab-admin">
         <h2 class="section-title">Administration</h2>
-        <p class="section-sub">Un seul compte administre la plateforme : Nextcloud, le serveur
-        de mail et cette console. Il est créé dans l'annuaire d'authentification (Keycloak),
-        donc la même identité fonctionne partout — et la rotation du mot de passe s'y propage.</p>
+        <p class="section-sub">A single account administers the platform: Nextcloud, the mail
+        server and this console. It is created in the authentication directory (Keycloak),
+        so the same identity works everywhere — and the password rotation propagates from there.</p>
 
         <div class="card">
-          <h3>Compte administrateur</h3>
-          <div id="adminEtat"><div class="note">Chargement…</div></div>
+          <h3>Administrator account</h3>
+          <div id="adminEtat"><div class="note">Loading…</div></div>
         </div>
 
         <div style="height:14px"></div>
 
         <div class="card">
-          <h3>Interfaces d'administration</h3>
-          <p class="section-sub" style="margin-top:0">La console ne réimplémente pas ces
-          interfaces : elle vous y conduit. Celle de Nextcloud connaît son catalogue
-          d'applications (catégories, compatibilité, avis) mieux qu'une page reconstruite ici.</p>
+          <h3>Administration interfaces</h3>
+          <p class="section-sub" style="margin-top:0">The console does not reimplement these
+          interfaces: it takes you there. Nextcloud's knows its application
+          catalogue (categories, compatibility, reviews) better than a page rebuilt here.</p>
           <div id="adminLiens"></div>
         </div>
 
         <div style="height:14px"></div>
 
         <div class="card">
-          <h3>Rotation du mot de passe</h3>
-          <p class="section-sub" style="margin-top:0">Le mot de passe est généré ici puis
-          appliqué à chaque système. Il est affiché <b>une seule fois</b> : notez-le avant de
-          quitter cette page. Aucun système ne peut le relire ensuite — seul un empreinte
-          irréversible est conservée, c'est ce qui protège le compte.</p>
-          <button class="btn" id="btnRotate" onclick="tournerMdp()">Régénérer le mot de passe</button>
+          <h3>Password rotation</h3>
+          <p class="section-sub" style="margin-top:0">The password is generated here and then
+          applied to each system. It is shown <b>only once</b>: note it down before
+          leaving this page. No system can read it back afterwards — only an irreversible
+          fingerprint is kept, which is what protects the account.</p>
+          <button class="btn" id="btnRotate" onclick="tournerMdp()">Regenerate password</button>
 
           <div id="mdpBoite" style="display:none;margin-top:14px">
             <div class="note" style="margin-bottom:8px">
-              <b>Ce mot de passe ne sera plus affiché.</b> Copiez-le maintenant.
+              <b>This password will not be shown again.</b> Copy it now.
             </div>
             <div style="display:flex;gap:8px;align-items:center">
               <input id="mdpValeur" readonly class="mono"
                      style="flex:1;font-size:13px;background:var(--bg2);border:1px solid var(--border);padding:10px;border-radius:8px">
-              <button class="btn-ghost" onclick="copierMdp()">Copier</button>
-              <button class="btn-ghost" onclick="masquerMdp()">Masquer</button>
+              <button class="btn-ghost" onclick="copierMdp()">Copy</button>
+              <button class="btn-ghost" onclick="masquerMdp()">Hide</button>
             </div>
           </div>
         </div>
@@ -288,68 +288,68 @@
         <div style="height:14px"></div>
 
         <div class="card">
-          <h3>Journal de la rotation</h3>
+          <h3>Rotation log</h3>
           <pre class="mono" id="adminJournal" style="max-height:240px;overflow:auto;font-size:11.5px;background:var(--bg2);padding:12px;border-radius:8px;white-space:pre-wrap">—</pre>
         </div>
       </section>
 
-      <!-- MESSAGERIE -->
+      <!-- MAIL -->
       <section class="section" id="tab-smtp">
-        <h2 class="section-title">Messagerie de la plateforme</h2>
-        <p class="section-sub">Configuration de l'envoi de mail par Nextcloud lui-même :
-        invitations à un partage, réinitialisation de mot de passe, notifications.
-        Ce n'est pas le compte de votre app Mail — celle-ci lit vos propres boîtes,
-        celle-ci est l'adresse depuis laquelle la plateforme écrit.</p>
+        <h2 class="section-title">Platform mail</h2>
+        <p class="section-sub">Configuration of mail sending by Nextcloud itself:
+        share invitations, password reset, notifications.
+        This is not your Mail app account — that one reads your own mailboxes;
+        this one is the address the platform writes from.</p>
 
         <div class="card">
-          <h3>Serveur d'envoi</h3>
+          <h3>Sending server</h3>
           <div class="form-row">
-            <input id="s_hote" placeholder="Serveur (ex. send.one.com)" style="flex:2">
+            <input id="s_hote" placeholder="Server (e.g. send.one.com)" style="flex:2">
             <input id="s_port" placeholder="Port" style="flex:1">
             <select id="s_securite" style="flex:1">
               <option value="tls">TLS (STARTTLS)</option>
               <option value="ssl">SSL</option>
-              <option value="aucune">Aucun chiffrement</option>
+              <option value="aucune">No encryption</option>
             </select>
           </div>
           <div class="form-row">
-            <input id="s_user" placeholder="Utilisateur (adresse d'envoi)" style="flex:2">
-            <input id="s_pass" type="password" placeholder="Mot de passe" style="flex:2"
+            <input id="s_user" placeholder="User (sender address)" style="flex:2">
+            <input id="s_pass" type="password" placeholder="Password" style="flex:2"
                    autocomplete="new-password">
           </div>
           <div class="form-row">
-            <input id="s_exped" placeholder="Expéditeur (ex. noreply@exemple.com)" style="flex:2">
-            <input id="s_domaine" placeholder="Domaine" style="flex:2">
+            <input id="s_exped" placeholder="Sender (e.g. noreply@example.com)" style="flex:2">
+            <input id="s_domaine" placeholder="Domain" style="flex:2">
           </div>
           <div class="note" id="s_etat">—</div>
           <div class="form-row" style="margin-top:12px">
-            <button class="btn-ghost" id="btnTestSmtp" onclick="testerSmtp()">Tester l'envoi</button>
-            <button class="btn" id="btnSaveSmtp" onclick="sauverSmtp()">Enregistrer</button>
+            <button class="btn-ghost" id="btnTestSmtp" onclick="testerSmtp()">Test sending</button>
+            <button class="btn" id="btnSaveSmtp" onclick="sauverSmtp()">Save</button>
           </div>
         </div>
 
         <div class="card" id="smtpResultat" style="display:none">
-          <h3>Résultat du test</h3>
+          <h3>Test result</h3>
           <pre class="mono" id="smtpJournal" style="max-height:260px;overflow:auto;font-size:11.5px;background:var(--bg2);padding:12px;border-radius:8px;white-space:pre-wrap"></pre>
         </div>
       </section>
 
-      <!-- CERTIFICATS -->
+      <!-- CERTIFICATES -->
       <section class="section" id="tab-certs">
-        <h2 class="section-title">Certificats TLS</h2>
-        <p class="section-sub">Émis par cert-manager (autorité « ceffio-ca »). L'expiration est surveillée : un certificat expiré casse le HTTPS du service correspondant.</p>
+        <h2 class="section-title">TLS certificates</h2>
+        <p class="section-sub">Issued by cert-manager (authority "ceffio-ca"). Expiry is monitored: an expired certificate breaks the HTTPS of the corresponding service.</p>
         <table class="table" id="certTable">
-          <thead><tr><th>Domaine</th><th>Certificat</th><th>État</th><th>Expire</th></tr></thead>
+          <thead><tr><th>Domain</th><th>Certificate</th><th>Status</th><th>Expires</th></tr></thead>
           <tbody></tbody>
         </table>
       </section>
 
       <!-- INFRA -->
       <section class="section" id="tab-infra">
-        <h2 class="section-title">Infrastructure interne</h2>
-        <p class="section-sub">Vue diagnostic : pods par couche Kubernetes. Les couches sont internes à la plateforme — elles ne correspondent pas à des sites accessibles.</p>
+        <h2 class="section-title">Internal infrastructure</h2>
+        <p class="section-sub">Diagnostic view: pods per Kubernetes layer. The layers are internal to the platform — they do not correspond to reachable sites.</p>
         <table class="table" id="stackTable">
-          <thead><tr><th>Couche</th><th>Pods prêts</th><th>Redémarrages</th><th>Détail</th></tr></thead>
+          <thead><tr><th>Layer</th><th>Ready pods</th><th>Restarts</th><th>Details</th></tr></thead>
           <tbody></tbody>
         </table>
       </section>
@@ -359,23 +359,23 @@
 
 <div class="overlay" id="keyOverlay">
   <div class="modal">
-    <h2>Clé d'administration</h2>
-    <p>La clé d'administration vit dans le coffre de secrets (OpenBao), à l'entrée
-    <span class="mono">kv/ceffio/console/api</span> — et nulle part ailleurs.
-    Elle n'est stockée que dans votre navigateur.</p>
+    <h2>Administration key</h2>
+    <p>The administration key lives in the secrets vault (OpenBao), at entry
+    <span class="mono">kv/ceffio/console/api</span> — and nowhere else.
+    It is only stored in your browser.</p>
     <p class="mono" style="font-size:11px;background:var(--bg2);padding:8px 10px;border-radius:6px;margin:10px 0">
       kubectl exec -n ceffio-vault openbao-0 -- sh -c 'BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$(cat /tmp/bao-token)" bao kv get -field=key kv/ceffio/console/api'
     </p>
-    <p class="section-sub" style="font-size:11.5px">Le jeton d'administration se lit d'abord
-    dans le Secret <span class="mono">openbao-installation</span> (namespace
-    <span class="mono">ceffio-vault</span>) et se dépose dans le pod. C'est le jeton
-    d'<b>installation</b> qui administre le coffre ; celui nommé
-    <span class="mono">openbao-token</span> est réservé aux services et ne donne pas
-    accès à cette entrée.</p>
-    <input id="keyInput" type="password" placeholder="Clé admin" autocomplete="off">
+    <p class="section-sub" style="font-size:11.5px">The administration token is first read
+    from the <span class="mono">openbao-installation</span> Secret (namespace
+    <span class="mono">ceffio-vault</span>) and dropped into the pod. It is the
+    <b>installation</b> token that administers the vault; the one named
+    <span class="mono">openbao-token</span> is reserved for services and does not grant
+    access to this entry.</p>
+    <input id="keyInput" type="password" placeholder="Admin key" autocomplete="off">
     <div class="form-row">
-      <button class="btn" onclick="saveKey()" style="flex:1">Connexion</button>
-      <button class="btn-ghost" onclick="clearKey()">Oublier</button>
+      <button class="btn" onclick="saveKey()" style="flex:1">Connect</button>
+      <button class="btn-ghost" onclick="clearKey()">Forget</button>
     </div>
   </div>
 </div>
@@ -389,13 +389,13 @@
   const esc = s => String(s ?? '').replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
 
   const TITLES = {
-    dashboard: ["Vue d'ensemble", 'état de la plateforme'],
-    services:  ['Applications', 'expositions publiques et rôles'],
-    apps:      ['Apps Nextcloud', 'installation et désinstallation'],
-    smtp:      ['Messagerie', 'envoi de mail de la plateforme'],
-    users:     ['Utilisateurs', 'comptes du login unique'],
-    certs:     ['Certificats TLS', 'validité et expiration'],
-    infra:     ['Infrastructure', 'couches internes et pods'],
+    dashboard: ["Overview", 'platform status'],
+    services:  ['Applications', 'public exposures and roles'],
+    apps:      ['Nextcloud apps', 'installation and uninstallation'],
+    smtp:      ['Mail', 'platform mail delivery'],
+    users:     ['Users', 'single sign-on accounts'],
+    certs:     ['TLS certificates', 'validity and expiry'],
+    infra:     ['Infrastructure', 'internal layers and pods'],
   };
 
   document.querySelectorAll('.nav-item').forEach(el => el.onclick = () => {
@@ -408,7 +408,7 @@
     $('crumb').textContent = TITLES[tab][1];
   });
 
-  setInterval(() => { $('clock').textContent = new Date().toLocaleTimeString('fr-FR'); }, 1000);
+  setInterval(() => { $('clock').textContent = new Date().toLocaleTimeString('en-GB'); }, 1000);
 
   function toast(msg, kind = 'ok') {
     const t = document.createElement('div');
@@ -423,9 +423,9 @@
     key = $('keyInput').value.trim();
     localStorage.setItem('ceffio_key', key);
     $('keyOverlay').classList.remove('show');
-    if (key) { toast('Clé enregistrée'); refresh(); }
+    if (key) { toast('Key saved'); refresh(); }
   };
-  window.clearKey = () => { key = ''; localStorage.removeItem('ceffio_key'); $('keyOverlay').classList.remove('show'); toast('Clé oubliée', 'ko'); };
+  window.clearKey = () => { key = ''; localStorage.removeItem('ceffio_key'); $('keyOverlay').classList.remove('show'); toast('Key forgotten', 'ko'); };
   $('keyInput').addEventListener('keydown', e => { if (e.key === 'Enter') saveKey(); });
 
   async function api(path, opt = {}) {
@@ -436,13 +436,13 @@
     return d;
   }
 
-  // ── carte de service ──
+  // ── service card ──
   function svcCard(s) {
     const dot = s.sante;
     const badges = [];
     if (s.sso) badges.push('<span class="badge info">SSO Keycloak</span>');
-    if (s.technique) badges.push('<span class="badge mut">technique</span>');
-    badges.push(`<span class="badge ${s.sante==='ok'?'ok':s.sante==='ko'?'ko':'mut'}"><span class="bdot"></span>${s.sante==='ok'?'en ligne':s.sante==='ko'?'dégradé':'inconnu'}</span>`);
+    if (s.technique) badges.push('<span class="badge mut">technical</span>');
+    badges.push(`<span class="badge ${s.sante==='ok'?'ok':s.sante==='ko'?'ko':'mut'}"><span class="bdot"></span>${s.sante==='ok'?'online':s.sante==='ko'?'degraded':'unknown'}</span>`);
     const pods = (s.pods||[]).map(p =>
       `<div class="pod"><span class="dot ${p.ready?'ok':'ko'}" style="width:6px;height:6px;border-radius:50%;background:${p.ready?'var(--ok)':'var(--ko)'};display:inline-block"></span>${esc(p.name)} · ${esc(p.age||'')}${p.restarts?` · ${p.restarts} restart(s)`:''}</div>`).join('');
     return `<div class="svc ${s.sante==='ko'?'ko':''}">
@@ -455,8 +455,8 @@
       <div class="meta">${badges.join('')}</div>
       <a class="open" href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.hote)} ↗</a>
       <details class="pods">
-        <summary>${s.podsReady}/${s.podsTotal} pod(s) — détail</summary>
-        <div class="podlist">${pods || '<div class="pod">aucun pod</div>'}</div>
+        <summary>${s.podsReady}/${s.podsTotal} pod(s) — details</summary>
+        <div class="podlist">${pods || '<div class="pod">no pods</div>'}</div>
       </details>
     </div>`;
   }
@@ -467,10 +467,10 @@
     const certMin = (st.certs||[]).reduce((m,c) => (c.jours >= 0 && (m < 0 || c.jours < m)) ? c.jours : m, -1);
     const certAlert = certMin >= 0 && certMin < 30;
     const kpis = [
-      { lbl: 'Applications', val: `${enLigne}/${svcs.length}`, sub: 'en ligne', cls: enLigne === svcs.length ? 'good' : 'bad' },
-      { lbl: 'Pods', val: `${st.podsReady}/${st.podsTotal}`, sub: 'prêts', cls: st.podsReady === st.podsTotal ? 'good' : 'bad' },
-      { lbl: 'Certificats TLS', val: `${st.certsOK}/${st.certsN}`, sub: certMin >= 0 ? `prochaine expiration : ${certMin} j` : 'valides', cls: certAlert ? 'warn' : 'good' },
-      { lbl: 'Domaine', val: '✓', sub: esc(st.domain || ''), cls: 'good' },
+      { lbl: 'Applications', val: `${enLigne}/${svcs.length}`, sub: 'online', cls: enLigne === svcs.length ? 'good' : 'bad' },
+      { lbl: 'Pods', val: `${st.podsReady}/${st.podsTotal}`, sub: 'ready', cls: st.podsReady === st.podsTotal ? 'good' : 'bad' },
+      { lbl: 'TLS certificates', val: `${st.certsOK}/${st.certsN}`, sub: certMin >= 0 ? `next expiry: ${certMin} d` : 'valid', cls: certAlert ? 'warn' : 'good' },
+      { lbl: 'Domain', val: '✓', sub: esc(st.domain || ''), cls: 'good' },
     ];
     $('kpis').innerHTML = kpis.map(k => `<div class="kpi ${k.cls}"><div class="lbl">${k.lbl}</div><div class="val">${k.val}</div><div class="sub">${k.sub}</div></div>`).join('');
 
@@ -489,7 +489,7 @@
         <td style="text-transform:capitalize;font-weight:600">${esc(l.name)}</td>
         <td><span class="badge ${good ? 'ok' : 'ko'}"><span class="bdot"></span>${l.ready}/${l.total}</span></td>
         <td>${restarts ? `<span class="badge warn">${restarts}</span>` : '<span class="muted">0</span>'}</td>
-        <td><details class="pods"><summary>voir</summary><div class="podlist">${pods}</div></details></td>
+        <td><details class="pods"><summary>view</summary><div class="podlist">${pods}</div></details></td>
       </tr>`;
     }).join('');
   }
@@ -497,11 +497,11 @@
   function renderCerts(st) {
     $('certTable').querySelector('tbody').innerHTML = (st.certs || []).map(c => {
       const ok = c.condition === 'True';
-      let exp = '<span class="muted">inconnue</span>';
+      let exp = '<span class="muted">unknown</span>';
       if (c.jours >= 0) {
         const cls = c.jours < 15 ? 'ko' : c.jours < 30 ? 'warn' : 'ok';
-        const d = new Date(c.notAfter).toLocaleDateString('fr-FR');
-        exp = `<span class="badge ${cls}">${c.jours} j · ${d}</span>`;
+        const d = new Date(c.notAfter).toLocaleDateString('en-GB');
+        exp = `<span class="badge ${cls}">${c.jours} d · ${d}</span>`;
       }
       return `<tr>
         <td class="mono">${esc(c.hote || '—')}</td>
@@ -516,11 +516,11 @@
     const d = await api('/api/users');
     const tous = d.users || [];
 
-    // SÉPARATION : le compte d'administration sort de la liste. Le drapeau vient
-    // du SERVEUR (`protege`) — c'est lui qui refuse les actions, la page ne fait
-    // que refléter sa règle. Décider ici quel nom est protégé créerait deux
-    // vérités, et le jour où elles divergent, la page cacherait des boutons que
-    // l'API exécuterait quand même.
+    // SEPARATION: the administration account is taken out of the list. The
+    // flag comes from the SERVER (`protege`) — it is what refuses the actions,
+    // the page only reflects its rule. Deciding here which name is protected
+    // would create two truths, and the day they diverge, the page would hide
+    // buttons that the API would still execute.
     const admin = tous.filter(u => u.protege);
     const users = tous.filter(u => !u.protege);
 
@@ -531,12 +531,12 @@
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
           <span class="mono" style="font-weight:600">${esc(u.username)}</span>
           <span class="muted mono">${esc(u.email || '—')}</span>
-          ${u.enabled ? '<span class="badge ok"><span class="bdot"></span>actif</span>' : '<span class="badge ko"><span class="bdot"></span>désactivé</span>'}
-          <span class="badge mut">compte d\'administration</span>
+          ${u.enabled ? '<span class="badge ok"><span class="bdot"></span>active</span>' : '<span class="badge ko"><span class="bdot"></span>deactivated</span>'}
+          <span class="badge mut">administration account</span>
         </div>
-        <div class="note" style="margin-top:10px">Aucune action de désactivation ni de
-        suppression n\'est proposée sur ce compte : elle couperait l\'administration de
-        la plateforme. Le mot de passe se change depuis <b>Administration → Rotation</b>.</div>
+        <div class="note" style="margin-top:10px">No deactivation or deletion action is
+        offered on this account: it would cut the administration of
+        the platform. The password is changed from <b>Administration → Rotation</b>.</div>
       `).join('');
     } else {
       carte.style.display = 'none';
@@ -545,171 +545,171 @@
     const rows = users.map(u => `<tr>
       <td style="font-weight:600">${esc(u.username)}</td>
       <td class="muted">${esc(u.email || '—')}</td>
-      <td>${u.enabled ? '<span class="badge ok"><span class="bdot"></span>actif</span>' : '<span class="badge ko"><span class="bdot"></span>désactivé</span>'}</td>
+      <td>${u.enabled ? '<span class="badge ok"><span class="bdot"></span>active</span>' : '<span class="badge ko"><span class="bdot"></span>deactivated</span>'}</td>
       <td style="text-align:right;white-space:nowrap">
-        <button class="btn-ghost" onclick="resetPwd('${esc(u.id)}')">Réinit. mdp</button>
+        <button class="btn-ghost" onclick="resetPwd('${esc(u.id)}')">Reset pwd</button>
         ${u.enabled
-          ? `<button class="btn-danger" onclick="deact('${esc(u.id)}','${esc(u.username)}')">Désactiver</button>`
-          : `<button class="btn" onclick="react('${esc(u.id)}','${esc(u.username)}')">Réactiver</button>`}
+          ? `<button class="btn-danger" onclick="deact('${esc(u.id)}','${esc(u.username)}')">Deactivate</button>`
+          : `<button class="btn" onclick="react('${esc(u.id)}','${esc(u.username)}')">Reactivate</button>`}
       </td></tr>`).join('');
-    $('usersTable').querySelector('tbody').innerHTML = rows || `<tr><td colspan="4"><div class="empty">Aucun autre compte — créez le premier ci-dessus.</div></td></tr>`;
+    $('usersTable').querySelector('tbody').innerHTML = rows || `<tr><td colspan="4"><div class="empty">No other accounts — create the first one above.</div></td></tr>`;
   }
 
   window.createUser = async () => {
     const username = $('u_name').value.trim(), email = $('u_email').value.trim(), password = $('u_pwd').value;
-    if (!username) { toast('Identifiant requis', 'ko'); return; }
-    if (!password) { toast('Mot de passe requis', 'ko'); return; }
+    if (!username) { toast('Username required', 'ko'); return; }
+    if (!password) { toast('Password required', 'ko'); return; }
     $('btnCreate').disabled = true;
     try {
       await api('/api/users', { method: 'POST', body: JSON.stringify({ username, email, password }) });
-      toast('Compte « ' + username + ' » créé');
+      toast('Account "' + username + '" created');
       $('u_name').value = $('u_email').value = $('u_pwd').value = '';
       await renderUsers();
-    } catch (e) { toast('Erreur : ' + e.message, 'ko'); }
+    } catch (e) { toast('Error: ' + e.message, 'ko'); }
     finally { $('btnCreate').disabled = false; }
   };
 
   window.deact = async (id, name) => {
-    if (!confirm('Désactiver « ' + name + ' » ?')) return;
-    try { await api('/api/users/' + id + '/deactivate', { method: 'POST' }); toast(name + ' désactivé'); await renderUsers(); }
-    catch (e) { toast('Erreur : ' + e.message, 'ko'); }
+    if (!confirm('Deactivate "' + name + '"?')) return;
+    try { await api('/api/users/' + id + '/deactivate', { method: 'POST' }); toast(name + ' deactivated'); await renderUsers(); }
+    catch (e) { toast('Error: ' + e.message, 'ko'); }
   };
 
   window.react = async (id, name) => {
-    try { await api('/api/users/' + id + '/reactivate', { method: 'POST' }); toast(name + ' réactivé'); await renderUsers(); }
-    catch (e) { toast('Erreur : ' + e.message, 'ko'); }
+    try { await api('/api/users/' + id + '/reactivate', { method: 'POST' }); toast(name + ' reactivated'); await renderUsers(); }
+    catch (e) { toast('Error: ' + e.message, 'ko'); }
   };
 
   window.resetPwd = async id => {
-    const p = prompt('Nouveau mot de passe :');
+    const p = prompt('New password:');
     if (!p) return;
-    try { await api('/api/users/' + id + '/password', { method: 'POST', body: JSON.stringify({ password: p }) }); toast('Mot de passe réinitialisé'); }
-    catch (e) { toast('Erreur : ' + e.message, 'ko'); }
+    try { await api('/api/users/' + id + '/password', { method: 'POST', body: JSON.stringify({ password: p }) }); toast('Password reset'); }
+    catch (e) { toast('Error: ' + e.message, 'ko'); }
   };
 
-  // ── Applications Nextcloud ──────────────────────────────────────────────
+  // ── Nextcloud applications ──────────────────────────────────────────────
   //
-  // Tout passe par l'API OCS de Nextcloud : la console ne fait que des appels
-  // ── Administration (compte unique + rotation du mot de passe) ──────────
+  // Everything goes through the Nextcloud OCS API: the console only makes calls
+  // ── Administration (single account + password rotation) ──────────
   //
-  // La gestion des applications Nextcloud se fait dans l'INTERFACE DE NEXTCLOUD.
-  // Elle n'est pas reproduite ici : l'UI native connaît son catalogue (catégories,
-  // compatibilité, avis) et suit les évolutions de Nextcloud. La console se
-  // contente d'y conduire — c'est le lien fourni ci-dessous.
+  // Nextcloud application management happens in the INTERFACE OF NEXTCLOUD.
+  // It is not reproduced here: the native UI knows its catalogue (categories,
+  // compatibility, reviews) and follows Nextcloud's evolution. The console just
+  // takes you there — that is the link provided below.
 
   async function renderAdmin() {
     try {
       const d = await api('/api/admin');
 
-      // Etat du compte : présence dans chaque système. On affiche ce qui est
-      // VÉRIFIÉ, pas ce qui est supposé — un compte absent quelque part doit
-      // se voir, sinon la rotation échouerait sans que rien ne l'annonce.
+      // Account state: presence in each system. We show what is VERIFIED, not
+      // what is assumed — an account absent somewhere must be visible,
+      // otherwise the rotation would fail without anything announcing it.
       const pastille = (ok, txt) =>
         `<span class="badge ${ok ? 'ok' : 'warn'}">${esc(txt)}</span>`;
       $('adminEtat').innerHTML = `
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
           <div style="flex:1;min-width:200px">
             <div style="font-weight:600;font-size:15px" class="mono">${esc(d.identifiant)}</div>
-            <div class="muted" style="font-size:12px">${esc(d.email || 'sans adresse de courriel')}</div>
+            <div class="muted" style="font-size:12px">${esc(d.email || 'no email address')}</div>
           </div>
-          ${pastille(d.existe_keycloak, d.existe_keycloak ? 'annuaire' : 'absent de l\'annuaire')}
-          ${pastille(d.existe_nextcloud, d.existe_nextcloud ? 'Nextcloud' : 'absent de Nextcloud')}
-          ${pastille(d.dans_groupe_admin, d.dans_groupe_admin ? 'administrateur' : 'SANS droits admin')}
-          ${d.actif ? '' : '<span class="badge warn">compte inactif</span>'}
+          ${pastille(d.existe_keycloak, d.existe_keycloak ? 'directory' : 'missing from the directory')}
+          ${pastille(d.existe_nextcloud, d.existe_nextcloud ? 'Nextcloud' : 'missing from Nextcloud')}
+          ${pastille(d.dans_groupe_admin, d.dans_groupe_admin ? 'administrator' : 'WITHOUT admin rights')}
+          ${d.actif ? '' : '<span class="badge warn">inactive account</span>'}
         </div>
         ${d.note ? `<div class="note" style="margin-top:12px">${esc(d.note)}</div>` : ''}`;
 
-      // Liens vers les interfaces d'administration réelles.
+      // Links to the real administration interfaces.
       let liens = `<div style="display:flex;flex-direction:column;gap:10px">
         <div style="display:flex;align-items:center;gap:10px">
           <div style="flex:1">
-            <div style="font-weight:600;font-size:13px">Applications Nextcloud</div>
-            <div class="muted" style="font-size:12px">Activer, désactiver ou installer une
-            application. Le catalogue est celui de Nextcloud.</div>
+            <div style="font-weight:600;font-size:13px">Nextcloud applications</div>
+            <div class="muted" style="font-size:12px">Enable, disable or install an
+            application. The catalogue is Nextcloud's.</div>
           </div>
-          <a class="btn-ghost" href="${esc(d.url_admin_nextcloud)}" target="_blank" rel="noopener">Ouvrir ↗</a>
+          <a class="btn-ghost" href="${esc(d.url_admin_nextcloud)}" target="_blank" rel="noopener">Open ↗</a>
         </div>`;
       if (d.url_admin_stalwart) {
         liens += `
         <div style="display:flex;align-items:center;gap:10px;padding-top:10px;border-top:1px solid var(--line)">
           <div style="flex:1">
-            <div style="font-weight:600;font-size:13px">Serveur de mail (Stalwart)</div>
-            <div class="muted" style="font-size:12px">Domaines, boîtes, quotas et filtres
-            du serveur de courrier. Administration séparée, derrière le même compte.</div>
+            <div style="font-weight:600;font-size:13px">Mail server (Stalwart)</div>
+            <div class="muted" style="font-size:12px">Domains, mailboxes, quotas and filters
+            of the mail server. Separate administration, behind the same account.</div>
           </div>
-          <a class="btn-ghost" href="${esc(d.url_admin_stalwart)}" target="_blank" rel="noopener">Ouvrir ↗</a>
+          <a class="btn-ghost" href="${esc(d.url_admin_stalwart)}" target="_blank" rel="noopener">Open ↗</a>
         </div>`;
       } else {
         liens += `
         <div style="padding-top:10px;border-top:1px solid var(--line)">
-          <div style="font-weight:600;font-size:13px" class="muted">Serveur de mail (Stalwart)</div>
-          <div class="muted" style="font-size:12px">Non déployé. Le lien apparaîtra dès que
-          le service sera en place.</div>
+          <div style="font-weight:600;font-size:13px" class="muted">Mail server (Stalwart)</div>
+          <div class="muted" style="font-size:12px">Not deployed. The link will appear as soon as
+          the service is in place.</div>
         </div>`;
       }
-      // Coffre de secrets : même principe que les deux ci-dessus — la console y
-      // CONDUIT. Son interface sait montrer les versions d'un secret, ses
-      // métadonnées et son historique ; une page reconstruite ici ne le saurait
-      // pas, et vieillirait à chaque évolution du coffre.
+      // Secrets vault: same principle as the two above — the console takes you
+      // THERE. Its interface knows how to show a secret's versions, its
+      // metadata and its history; a page rebuilt here could not, and would age
+      // with every vault evolution.
       if (d.url_admin_coffre) {
         liens += `
         <div style="display:flex;align-items:center;gap:10px;padding-top:10px;border-top:1px solid var(--line)">
           <div style="flex:1">
-            <div style="font-weight:600;font-size:13px">Coffre de secrets (OpenBao)</div>
-            <div class="muted" style="font-size:12px">Secrets de la suite, versions et
-            historique. Accès par le même compte, en SSO.</div>
+            <div style="font-weight:600;font-size:13px">Secrets vault (OpenBao)</div>
+            <div class="muted" style="font-size:12px">Suite secrets, versions and
+            history. Access with the same account, via SSO.</div>
           </div>
-          <a class="btn-ghost" href="${esc(d.url_admin_coffre)}" target="_blank" rel="noopener">Ouvrir ↗</a>
+          <a class="btn-ghost" href="${esc(d.url_admin_coffre)}" target="_blank" rel="noopener">Open ↗</a>
         </div>`;
       } else {
         liens += `
         <div style="padding-top:10px;border-top:1px solid var(--line)">
-          <div style="font-weight:600;font-size:13px" class="muted">Coffre de secrets (OpenBao)</div>
-          <div class="muted" style="font-size:12px">Non déployé. Le lien apparaîtra dès que
-          le service sera en place.</div>
+          <div style="font-weight:600;font-size:13px" class="muted">Secrets vault (OpenBao)</div>
+          <div class="muted" style="font-size:12px">Not deployed. The link will appear as soon as
+          the service is in place.</div>
         </div>`;
       }
       liens += `</div>`;
       $('adminLiens').innerHTML = liens;
 
-      // Si le compte manque quelque part, on le dit AVANT que l'utilisateur
-      // tente une rotation qui échouerait à moitié.
+      // If the account is missing somewhere, we say it BEFORE the user
+      // attempts a rotation that would half-fail.
       if (!d.existe_keycloak || !d.existe_nextcloud) {
         $('adminJournal').textContent =
-          'Attention : le compte n\'est pas complet.\n' +
-          `  annuaire   : ${d.existe_keycloak ? 'présent' : 'ABSENT'}\n` +
-          `  Nextcloud  : ${d.existe_nextcloud ? 'présent' : 'ABSENT'}\n` +
-          'La rotation ne s\'appliquera qu\'aux systèmes où le compte existe.';
+          'Warning: the account is not complete.\n' +
+          `  directory  : ${d.existe_keycloak ? 'present' : 'ABSENT'}\n` +
+          `  Nextcloud  : ${d.existe_nextcloud ? 'present' : 'ABSENT'}\n` +
+          'The rotation will only apply to the systems where the account exists.';
       }
     } catch (e) {
-      // PAS DE CLE : on explique quoi faire au lieu de laisser la page vide.
-      if (e.message === 'auth' || /jeton|auth/i.test(e.message)) {
+      // NO KEY: we explain what to do instead of leaving the page empty.
+      if (e.message === 'auth' || /token|auth/i.test(e.message)) {
         $('adminEtat').innerHTML = `
-          <div class="note">Clé d'administration requise pour afficher cet onglet.</div>
+          <div class="note">Administration key required to display this tab.</div>
           <div class="form-row" style="margin-top:12px">
-            <button class="btn" onclick="openKeyModal()" style="flex:1">Saisir la clé</button>
+            <button class="btn" onclick="openKeyModal()" style="flex:1">Enter the key</button>
           </div>`;
         return;
       }
-      $('adminEtat').innerHTML = `<div class="note">Erreur : ${esc(e.message)}</div>`;
+      $('adminEtat').innerHTML = `<div class="note">Error: ${esc(e.message)}</div>`;
     }
   }
 
-  // Rotation du mot de passe.
+  // Password rotation.
   //
-  // Le mot de passe n'existe en clair que dans la réponse à cet appel. Il n'est
-  // écrit nulle part — ni en base, ni dans un fichier. Si l'utilisateur quitte
-  // la page sans le noter, il doit refaire une rotation. C'est voulu : c'est le
-  // prix d'un secret qui n'est stocké qu'en empreinte.
+  // The password only exists in clear text in the response to this call. It is
+  // written nowhere — neither in a database, nor in a file. If the user leaves
+  // the page without noting it, they must rotate again. That is intentional:
+  // it is the price of a secret stored only as a fingerprint.
   window.tournerMdp = async () => {
-    if (!confirm('Régénérer le mot de passe du compte administrateur ?\n\n' +
-                 'Il sera appliqué à l\'annuaire, à Nextcloud et au serveur de mail.\n' +
-                 'Vous devrez vous reconnecter partout avec le nouveau.')) return;
+    if (!confirm('Regenerate the administrator account password?\n\n' +
+                 'It will be applied to the directory, to Nextcloud and to the mail server.\n' +
+                 'You will have to sign in everywhere with the new one.')) return;
 
     const b = $('btnRotate');
     b.disabled = true;
     $('mdpBoite').style.display = 'none';
-    $('adminJournal').textContent = 'Rotation en cours…';
+    $('adminJournal').textContent = 'Rotation in progress…';
 
     try {
       const d = await api('/api/admin/rotate', { method: 'POST' });
@@ -720,14 +720,14 @@
       if (d.mot_de_passe) {
         $('mdpValeur').value = d.mot_de_passe;
         $('mdpBoite').style.display = '';
-        toast('Mot de passe régénéré — notez-le maintenant');
+        toast('Password regenerated — note it down now');
       } else {
-        toast(d.message || 'Échec de la rotation', 'ko');
+        toast(d.message || 'Rotation failed', 'ko');
       }
       await renderAdmin();
     } catch (e) {
-      $('adminJournal').textContent = 'Erreur : ' + e.message;
-      toast('Erreur : ' + e.message, 'ko');
+      $('adminJournal').textContent = 'Error: ' + e.message;
+      toast('Error: ' + e.message, 'ko');
     } finally {
       b.disabled = false;
     }
@@ -737,31 +737,31 @@
     const v = $('mdpValeur').value;
     try {
       await navigator.clipboard.writeText(v);
-      toast('Mot de passe copié');
+      toast('Password copied');
     } catch (e) {
-      // Le presse-papiers peut être refusé (contexte non sécurisé, permission).
-      // On sélectionne alors le texte : l'utilisateur copie à la main plutôt
-      // que de se retrouver sans solution.
+      // The clipboard can be refused (non-secure context, permission).
+      // We then select the text: the user copies by hand rather than being
+      // left with no solution.
       $('mdpValeur').select();
-      toast('Copie automatique refusée — le texte est sélectionné', 'ko');
+      toast('Automatic copy refused — the text is selected', 'ko');
     }
   };
 
-  // Masquer = oublier. On vide la valeur du champ : la garder dans le DOM la
-  // laisserait accessible à toute inspection de la page.
+  // Hide = forget. We empty the field's value: keeping it in the DOM would
+  // leave it accessible to any inspection of the page.
   window.masquerMdp = () => {
     $('mdpValeur').value = '';
     $('mdpBoite').style.display = 'none';
-    toast('Mot de passe masqué');
+    toast('Password hidden');
   };
 
 
 
-  // ── Messagerie (SMTP de la plateforme) ─────────────────────────────────
+  // ── Mail (platform SMTP) ─────────────────────────────────
   //
-  // Le TEST AVANT SAUVEGARDE est le point important : on teste ce qui est SAISI,
-  // pas ce qui est enregistre. L'utilisateur ajuste, teste, puis sauvegarde
-  // seulement quand le test passe — au lieu de decouvrir l'erreur apres coup.
+  // THE TEST BEFORE SAVE is the important point: we test what is ENTERED, not
+  // what is saved. The user adjusts, tests, then saves only when the test
+  // passes — instead of discovering the error afterwards.
 
   async function chargerSmtp() {
     try {
@@ -772,18 +772,17 @@
       $('s_user').value = d.utilisateur || '';
       $('s_exped').value = d.expediteur || '';
       $('s_domaine').value = d.nom_expediteur || '';
-      // Le mot de passe n'est JAMAIS renvoye par l'API : on dit seulement
-      // s'il est deja defini, pour que l'utilisateur sache qu'il peut tester
-      // sans le ressaisir.
+      // The password is NEVER sent back by the API: we only say whether it is
+      // already set, so the user knows they can test without retyping it.
       $('s_etat').innerHTML = d.hote
         ? (d.mot_de_passe_defini
-            ? 'Configuration actuelle : <b>' + esc(d.hote) + ':' + d.port +
-              '</b> — mot de passe enregistré'
-            : 'Configuration actuelle : <b>' + esc(d.hote) + ':' + d.port +
-              '</b> — aucun mot de passe enregistré')
-        : 'Aucun serveur d\'envoi configuré. Les mails de la plateforme ne partent pas.';
+            ? 'Current configuration: <b>' + esc(d.hote) + ':' + d.port +
+              '</b> — password saved'
+            : 'Current configuration: <b>' + esc(d.hote) + ':' + d.port +
+              '</b> — no password saved')
+        : 'No sending server configured. The platform\'s mails are not being sent.';
     } catch (e) {
-      $('s_etat').textContent = 'Erreur : ' + e.message;
+      $('s_etat').textContent = 'Error: ' + e.message;
     }
   }
 
@@ -799,9 +798,9 @@
     };
   }
 
-  // Toute modification d'un champ ANNULE le test : sinon on testerait une
-  // configuration, on en changerait un champ, et on enregistrerait autre chose
-  // que ce qui a été vérifié — le verrou ne servirait à rien.
+  // Any change to a field CANCELS the test: otherwise we would test a
+  // configuration, change one field, and save something other than what was
+  // verified — the lock would be pointless.
   ['s_hote', 's_port', 's_securite', 's_user', 's_pass', 's_exped', 's_domaine']
     .forEach(id => {
       const el = $(id);
@@ -809,39 +808,39 @@
       if (el) el.addEventListener('change', () => { smtpTeste = false; majBoutonSmtp(); });
     });
 
-  // Le bouton Enregistrer reste VERROUILLÉ tant que la configuration n'a pas
-  // été testée avec succès. On ne peut donc pas enregistrer une configuration
-  // non vérifiée : c'est exactement ce qui évite de casser l'envoi de mails de
-  // toute l'instance avec une faute de frappe.
-  let smtpTeste = false;   // un test a-t-il réussi pour ce qui est SAISI ?
+  // The Save button stays LOCKED as long as the configuration has not been
+  // tested successfully. So an unverified configuration cannot be saved: this
+  // is exactly what avoids breaking mail sending for the whole instance with
+  // a typo.
+  let smtpTeste = false;   // has a test succeeded for what is ENTERED?
 
   window.majBoutonSmtp = () => {
     const b = $('btnSaveSmtp');
     if (!b) return;
     b.disabled = !smtpTeste;
-    b.title = smtpTeste ? '' : 'Testez d\'abord la configuration';
+    b.title = smtpTeste ? '' : 'Test the configuration first';
     b.style.opacity = smtpTeste ? '' : '.45';
   };
 
   window.testerSmtp = async () => {
     const c = corpsSmtp();
-    if (!c.hote || !c.utilisateur) { toast('Serveur et utilisateur requis', 'ko'); return; }
+    if (!c.hote || !c.utilisateur) { toast('Server and user required', 'ko'); return; }
     $('btnTestSmtp').disabled = true;
     $('smtpResultat').style.display = '';
-    $('smtpJournal').textContent = 'Test en cours…';
+    $('smtpJournal').textContent = 'Test in progress…';
     try {
       const d = await api('/api/smtp/tester', { method: 'POST', body: JSON.stringify(c) });
-      // On affiche CHAQUE etape : « ca ne marche pas » ne dit pas quoi corriger,
-      // alors que « identifiants refuses » est directement actionnable.
+      // We show EACH step: "it doesn't work" does not say what to fix,
+      // whereas "credentials refused" is directly actionable.
       $('smtpJournal').textContent = (d.etapes || []).join('\n');
       smtpTeste = !!d.ok;
       majBoutonSmtp();
-      toast(d.ok ? 'Test réussi — vous pouvez enregistrer' : 'Test en échec : ' + (d.erreur || ''),
+      toast(d.ok ? 'Test passed — you can save' : 'Test failed: ' + (d.erreur || ''),
             d.ok ? 'ok' : 'ko');
     } catch (e) {
       smtpTeste = false; majBoutonSmtp();
-      $('smtpJournal').textContent = 'Erreur : ' + e.message;
-      toast('Erreur : ' + e.message, 'ko');
+      $('smtpJournal').textContent = 'Error: ' + e.message;
+      toast('Error: ' + e.message, 'ko');
     } finally {
       $('btnTestSmtp').disabled = false;
     }
@@ -849,26 +848,26 @@
 
   window.sauverSmtp = async () => {
     const c = corpsSmtp();
-    if (!c.hote || !c.utilisateur) { toast('Serveur et utilisateur requis', 'ko'); return; }
-    if (!smtpTeste) { toast('Testez la configuration avant d\'enregistrer', 'ko'); return; }
+    if (!c.hote || !c.utilisateur) { toast('Server and user required', 'ko'); return; }
+    if (!smtpTeste) { toast('Test the configuration before saving', 'ko'); return; }
     $('btnSaveSmtp').disabled = true;
     try {
       const d = await api('/api/smtp', { method: 'POST', body: JSON.stringify(c) });
-      // Le serveur teste AVANT d'enregistrer : s'il refuse, rien n'a été écrit
-      // et on affiche le detail pour que l'utilisateur corrige.
+      // The server tests BEFORE saving: if it refuses, nothing was written
+      // and we show the detail so the user corrects.
       if (d.ok === false) {
         $('smtpResultat').style.display = '';
         $('smtpJournal').textContent = (d.etapes || []).join('\n');
-        toast('NON enregistré : ' + (d.erreur || 'test en échec'), 'ko');
+        toast('NOT saved: ' + (d.erreur || 'test failed'), 'ko');
         smtpTeste = false; majBoutonSmtp();
         return;
       }
-      toast(d.message || 'Configuration enregistrée');
+      toast(d.message || 'Configuration saved');
       $('s_pass').value = '';
-      smtpTeste = false; majBoutonSmtp();   // une nouvelle saisie devra être testée
+      smtpTeste = false; majBoutonSmtp();   // a new entry will have to be tested
       await chargerSmtp();
     } catch (e) {
-      toast('Erreur : ' + e.message, 'ko');
+      toast('Error: ' + e.message, 'ko');
     } finally {
       $('btnSaveSmtp').disabled = !smtpTeste;
     }
@@ -884,8 +883,8 @@
       await renderUsers();
       await renderAdmin();
       await chargerSmtp();
-      $('sideFoot').innerHTML = esc(st.domain || '') + '<br>MAJ ' + new Date().toLocaleTimeString('fr-FR');
-    } catch (e) { if (e.message !== 'auth') toast('Erreur : ' + e.message, 'ko'); }
+      $('sideFoot').innerHTML = esc(st.domain || '') + '<br>UPD ' + new Date().toLocaleTimeString('en-GB');
+    } catch (e) { if (e.message !== 'auth') toast('Error: ' + e.message, 'ko'); }
   };
 
   refresh();

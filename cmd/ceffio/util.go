@@ -9,7 +9,7 @@ import (
 )
 
 func notImplemented(command string) error {
-	return fmt.Errorf("commande %q : pas encore implémentée (roadmap Phase 0+)", command)
+	return fmt.Errorf("command %q: not implemented yet (roadmap Phase 0+)", command)
 }
 
 func yesNo(b bool) string {
@@ -19,21 +19,20 @@ func yesNo(b bool) string {
 	return "No"
 }
 
-// namedTask est une étape de déploiement nommée (pour les logs d'erreur).
+// namedTask is a named deployment step (for error logs).
 type namedTask struct {
 	name string
 	run  func(context.Context) error
 }
 
-// runParallel exécute des étapes indépendantes EN PARALLÈLE et retourne la
-// première erreur rencontrée (en annulant les sœurs encore en vol).
+// runParallel executes independent steps IN PARALLEL and returns the first
+// error encountered (canceling the sisters still in flight).
 //
-// À n'utiliser que pour des étapes réellement indépendantes : une phase qui
-// écrit dans une autre app (occ dans Nextcloud, kcadm dans Keycloak) doit
-// rester séquentielle après elle.
+// Use only for genuinely independent steps: a phase that writes into another
+// app (occ in Nextcloud, kcadm in Keycloak) must stay sequential after it.
 //
-// Un signal de progression est émis au lancement, puis chaque étape annonce sa
-// fin avec sa durée — indispensable pour diagnostiquer un run long.
+// A progress signal is emitted at launch, then each step announces its end
+// with its duration — essential for diagnosing a long run.
 func runParallel(ctx context.Context, tasks ...namedTask) error {
 	if len(tasks) == 0 {
 		return nil
@@ -55,16 +54,16 @@ func runParallel(ctx context.Context, tasks ...namedTask) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			fmt.Printf("   ├─ %s : démarré\n", t.name)
+			fmt.Printf("   ├─ %s : started\n", t.name)
 			start := time.Now()
 			if err := t.run(ctx); err != nil {
 				mu.Lock()
 				if firstErr == nil {
 					firstErr = fmt.Errorf("%s: %w", t.name, err)
-					cancel() // arrête les tâches sœurs encore en vol
+					cancel() // stops the sister tasks still in flight
 				}
 				mu.Unlock()
-				fmt.Fprintf(os.Stderr, "   └─ %s : ÉCHEC (%s)\n", t.name, time.Since(start).Round(time.Second))
+				fmt.Fprintf(os.Stderr, "   └─ %s : FAILED (%s)\n", t.name, time.Since(start).Round(time.Second))
 				return
 			}
 			fmt.Printf("   └─ %s : OK (%s)\n", t.name, time.Since(start).Round(time.Second))

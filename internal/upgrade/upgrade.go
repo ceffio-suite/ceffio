@@ -11,104 +11,104 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/version"
 )
 
-// Options d'exécution d'une mise à niveau.
+// Execution options for an upgrade.
 type Options struct {
 	Domain    string
 	BackupDir string
 	Progress  func(string)
-	// Appliquer rejoue le déploiement complet (idempotent). C'est ce qui met
-	// réellement à jour les images : chaque module Déploy() vise la version
-	// épinglée dans le registre.
+	// Appliquer replays the full deployment (idempotent). This is what
+	// actually updates the images: each module's Deploy() targets the
+	// version pinned in the registry.
 	Appliquer func(ctx context.Context) error
 }
 
-// Resultat rend compte de ce qui s'est passé, y compris en cas d'échec.
+// Resultat reports what happened, including on failure.
 type Resultat struct {
 	Sauvegarde string   `json:"sauvegarde"`
 	BackupOK   bool     `json:"backup_ok"`
 	Applique   bool     `json:"applique"`
 	Erreurs    []string `json:"erreurs,omitempty"`
-	Rollback   string   `json:"rollback,omitempty"` // consigne de retour arrière
+	Rollback   string   `json:"rollback,omitempty"` // rollback instructions
 }
 
-// Executer applique la mise à niveau.
+// Executer applies the upgrade.
 //
-// Séquence, et pourquoi elle est dans cet ordre :
+// Sequence, and why it is in this order:
 //
-//  1. Le plan est reconstruit ici (et non passé par l'appelant) : une mise à
-//     niveau ne doit pas pouvoir démarrer sur un plan périmé.
-//  2. La sauvegarde passe AVANT toute modification. Si elle échoue, on s'arrête :
-//     mettre à niveau sans filet, c'est prendre un risque qu'aucun gain ne
-//     justifie.
-//  3. La sauvegarde est VÉRIFIÉE. Une archive non lue n'est pas un filet.
-//  4. Le déploiement est rejoué (idempotent), ce qui applique les nouvelles
-//     versions épinglées.
-//  5. L'état est relu après coup et comparé au plan : sans cette relecture, on
-//     ne pourrait pas distinguer « la commande a réussi » de « ça a changé ».
+//  1. The plan is rebuilt here (not passed by the caller): an upgrade must
+//     not be able to start on a stale plan.
+//  2. The backup happens BEFORE any modification. If it fails, we stop:
+//     upgrading without a net is taking a risk no gain justifies.
+//  3. The backup is VERIFIED. An unread archive is not a net.
+//  4. The deployment is replayed (idempotent), which applies the new pinned
+//     versions.
+//  5. The state is re-read afterwards and compared to the plan: without
+//     this re-read, we could not tell "the command succeeded" from "it
+//     changed".
 func Executer(ctx context.Context, cible []version.Composant, o Options) (*Resultat, error) {
 	if o.Progress == nil {
 		o.Progress = func(string) {}
 	}
 	res := &Resultat{}
 
-	// 1. Plan à jour.
-	o.Progress("préflight")
+	// 1. Fresh plan.
+	o.Progress("preflight")
 	plan := Preparer(ctx, cible)
 	if !plan.Pret {
 		res.Erreurs = append(res.Erreurs, plan.Blocages...)
-		return res, fmt.Errorf("préflight refusé : %s", strings.Join(plan.Blocages, " ; "))
+		return res, fmt.Errorf("preflight refused: %s", strings.Join(plan.Blocages, " ; "))
 	}
 	if len(plan.Changements) == 0 {
-		o.Progress("aucun écart de version : rien à faire")
+		o.Progress("no version drift: nothing to do")
 		res.Applique = true
 		return res, nil
 	}
 
-	// 2. Sauvegarde obligatoire.
+	// 2. Mandatory backup.
 	dir := o.BackupDir
 	if dir == "" {
 		dir = "."
 	}
-	o.Progress("sauvegarde (obligatoire avant modification)")
+	o.Progress("backup (mandatory before modification)")
 	archive, err := backup.Sauvegarder(ctx, dir, func(e string) { o.Progress("  " + e) })
 	if err != nil {
-		res.Erreurs = append(res.Erreurs, "sauvegarde impossible : "+err.Error())
-		return res, fmt.Errorf("mise à niveau annulée : la sauvegarde a échoué (%w)", err)
+		res.Erreurs = append(res.Erreurs, "backup impossible: "+err.Error())
+		return res, fmt.Errorf("upgrade cancelled: the backup failed (%w)", err)
 	}
 	res.Sauvegarde = archive
 
-	// 3. La sauvegarde est-elle exploitable ? Une archive qu'on ne sait pas
-	//    relire ne protège de rien.
-	o.Progress("vérification de la sauvegarde")
+	// 3. Is the backup usable? An archive we cannot re-read protects from
+	//    nothing.
+	o.Progress("backup verification")
 	man, err := backup.Verifier(archive)
 	if err != nil || !man.Complete {
-		msg := "archive illisible"
+		msg := "unreadable archive"
 		if err != nil {
 			msg = err.Error()
 		} else if len(man.Errors) > 0 {
 			msg = strings.Join(man.Errors, " ; ")
 		}
-		res.Erreurs = append(res.Erreurs, "sauvegarde non exploitable : "+msg)
-		return res, fmt.Errorf("mise à niveau annulée : la sauvegarde n'est pas exploitable (%s)", msg)
+		res.Erreurs = append(res.Erreurs, "backup unusable: "+msg)
+		return res, fmt.Errorf("upgrade cancelled: the backup is unusable (%s)", msg)
 	}
 	res.BackupOK = true
 	res.Rollback = "ceffio restore " + archive
 
-	// 4. Application.
-	o.Progress("application des nouvelles versions")
+	// 4. Apply.
+	o.Progress("applying the new versions")
 	if o.Appliquer == nil {
-		return res, fmt.Errorf("aucune action d'application fournie")
+		return res, fmt.Errorf("no apply action provided")
 	}
 	if err := o.Appliquer(ctx); err != nil {
 		res.Erreurs = append(res.Erreurs, "application : "+err.Error())
-		return res, fmt.Errorf("échec pendant l'application — retour arrière possible avec : %s (%w)",
+		return res, fmt.Errorf("failure during apply — rollback possible with: %s (%w)",
 			res.Rollback, err)
 	}
 	res.Applique = true
 
-	// 5. Relecture : les versions ont-elles réellement changé ?
-	o.Progress("vérification de l'état après mise à niveau")
-	time.Sleep(5 * time.Second) // laisser les nouveaux pods démarrer
+	// 5. Re-read: did the versions actually change?
+	o.Progress("state verification after upgrade")
+	time.Sleep(5 * time.Second) // let the new pods start
 	apres := Preparer(ctx, cible)
 	for _, e := range apres.Etats {
 		if e.Nom == "" {
@@ -118,22 +118,22 @@ func Executer(ctx context.Context, cible []version.Composant, o Options) (*Resul
 	if len(apres.Changements) > 0 {
 		for _, c := range apres.Changements {
 			res.Erreurs = append(res.Erreurs,
-				fmt.Sprintf("%s : toujours en %s (cible %s)", c.Nom, c.Installee, c.Cible))
+				fmt.Sprintf("%s : still on %s (target %s)", c.Nom, c.Installee, c.Cible))
 		}
 	}
 	return res, nil
 }
 
-// ConsigneRetourArriere produit le texte à remettre à l'utilisateur en cas
-// d'échec : sans cette phrase, « il y a eu un problème » ne sert à rien.
+// ConsigneRetourArriere produces the text to hand to the user on failure:
+// without this sentence, "there was a problem" is useless.
 func ConsigneRetourArriere(res *Resultat) string {
 	if res.Rollback == "" {
-		return "aucune sauvegarde disponible : le retour arrière n'est pas possible"
+		return "no backup available: rollback is not possible"
 	}
 	var sb strings.Builder
-	sb.WriteString("Retour arrière :\n")
+	sb.WriteString("Rollback:\n")
 	sb.WriteString("  " + res.Rollback + "\n")
-	sb.WriteString("  puis relancer les applications (kubectl rollout restart)\n")
+	sb.WriteString("  then restart the applications (kubectl rollout restart)\n")
 	return sb.String()
 }
 

@@ -1,26 +1,26 @@
-// Package mail orchestre le déploiement de la couche messagerie (Phase 13) :
-// le serveur Stalwart, qui reçoit, stocke et sert le courrier en IMAP.
+// Package mail orchestrates the deployment of the mail layer (Phase 13):
+// the Stalwart server, which receives, stores and serves mail over IMAP.
 //
-// POURQUOI STALWART : Nextcloud fournit l'interface (app Mail), mais PAS le
-// serveur de courrier. Stalwart tient ce rôle : SMTP entrant, IMAP, filtres
-// Sieve, antispam — dans un seul binaire Rust. L'utilisateur lit ses messages
-// dans Nextcloud ; Stalwart est la plomberie derrière.
+// WHY STALWART: Nextcloud provides the interface (Mail app), but NOT the mail
+// server. Stalwart fills that role: inbound SMTP, IMAP, Sieve filters,
+// antispam — in a single Rust binary. The user reads their messages in
+// Nextcloud; Stalwart is the plumbing behind it.
 //
-// DEUX CONTRAINTES RÉELLES, MESURÉES AVANT D'ÉCRIRE CE CODE :
+// TWO REAL CONSTRAINTS, MEASURED BEFORE WRITING THIS CODE:
 //
-//  1. Le port 25 SORTANT est BLOQUÉ chez Free (vérifié). Stalwart ne peut donc
-//     pas livrer directement vers Gmail. On le configure avec un RELAIS
-//     d'expédition (send.one.com:587) : c'est lui qui envoie vers l'extérieur,
-//     et il porte le reverse DNS. C'est la configuration standard des
-//     auto-hébergeurs derrière une connexion grand public.
+//  1. OUTBOUND port 25 is BLOCKED at Free (verified). Stalwart therefore cannot
+//     deliver directly to Gmail. It is configured with a SEND relay
+//     (send.one.com:587): the relay sends to the outside, and it carries the
+//     reverse DNS. This is the standard configuration for self-hosters behind a
+//     residential connection.
 //
-//  2. Le reverse DNS de l'IP publique est « mandem.hd.free.fr », pas le domaine.
-//     Sans relais, Gmail rejetterait les messages. Avec relais, la question
-//     disparaît — c'est one.com qui est responsable de la délivrabilité.
+//  2. The reverse DNS of the public IP is "<fai>.example.net", not the domain.
+//     Without a relay, Gmail would reject the messages. With a relay, the
+//     question disappears — one.com is responsible for deliverability.
 //
-// L'administration de Stalwart reste SÉPARÉE (consigne utilisateur) : la console
-// Ceffio n'y conduit que par un lien, et la rotation du mot de passe admin agit
-// sur son API REST (voir internal/console/admin.go).
+// Stalwart administration stays SEPARATE (user instruction): the Ceffio console
+// only links to it, and the admin password rotation acts on its REST API (see
+// internal/console/admin.go).
 package mail
 
 import (
@@ -37,27 +37,27 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/vault"
 )
 
-// Version réelle constatée sur Docker Hub (pas inventée).
+// Actual version observed on Docker Hub (not invented).
 const (
 	stalwartImage = "docker.io/stalwartlabs/stalwart:v0.16.26"
 	ns            = "ceffio-mail"
-	// Domaine par défaut des boîtes. Surchargé par l'appelant.
-	domaineDefaut = "mandem-it.com"
+	// Default domain for the mailboxes. Overridden by the caller.
+	domaineDefaut = "example.com"
 )
 
-// Deploy installe la couche messagerie (Phase 13), de façon idempotente :
-//  1. secrets (mot de passe admin, clé de stockage)
+// Deploy installs the mail layer (Phase 13), idempotently:
+//  1. secrets (admin password, storage key)
 //  2. Stalwart + PVC + Service
-//  3. attente du healthcheck
-//  4. relais d'expédition configuré (le port 25 sortant est bloqué)
+//  3. waiting for the healthcheck
+//  4. send relay configured (outbound port 25 is blocked)
 //
-// Le domaine vient du déploiement : le même code sert pour un domaine de test
-// et pour le domaine réel.
+// The domain comes from the deployment: the same code serves a test domain and
+// the real domain.
 func Deploy(ctx context.Context, domain string, relaisHote string, relaisPort int, relaisUser, relaisPass string) error {
-	fmt.Println("\nDéploiement de la couche messagerie (Phase 13)...")
+	fmt.Println("\nDeploying the mail layer (Phase 13)...")
 
 	domaine := domaineMail(domain)
-	fmt.Printf("∙ domaine de messagerie : %s\n", domaine)
+	fmt.Printf("∙ mail domain: %s\n", domaine)
 
 	if err := ensureSecrets(ctx); err != nil {
 		return err
@@ -68,26 +68,26 @@ func Deploy(ctx context.Context, domain string, relaisHote string, relaisPort in
 	if err := waitReady(ctx); err != nil {
 		return err
 	}
-	// Le relais d'expédition n'est posé que si on en a un : sans lui Stalwart
-	// démarre quand même (il reçoit), mais ne peut pas envoyer — on le dit.
+	// The send relay is only set up if we have one: without it Stalwart still
+	// starts (it receives), but cannot send — we say so.
 	if relaisHote != "" {
 		if err := configurerRelais(ctx, relaisHote, relaisPort, relaisUser, relaisPass); err != nil {
-			fmt.Printf("  ! relais d'expédition non configuré : %v\n", err)
+			fmt.Printf("  ! send relay not configured: %v\n", err)
 		}
 	} else {
-		fmt.Println("∙ aucun relais d'expédition : Stalwart recevra mais n'enverra pas vers l'extérieur")
+		fmt.Println("∙ no send relay: Stalwart will receive but will not send to the outside")
 	}
 
-	fmt.Println("✓ Couche messagerie déployée (Stalwart)")
+	fmt.Println("✓ Mail layer deployed (Stalwart)")
 	return nil
 }
 
-// domaineMail décide du domaine des boîtes.
+// domaineMail decides the domain of the mailboxes.
 //
-// On utilise un sous-domaine de la plateforme plutôt que le domaine racine :
-// toucher au domaine racine signifierait déplacer les enregistrements MX de la
-// messagerie existante, donc couper le courrier actuel. Un sous-domaine permet
-// de tester sans rien casser.
+// We use a subdomain of the platform rather than the root domain: touching the
+// root domain would mean moving the MX records of the existing mail, hence
+// cutting off the current mail. A subdomain allows testing without breaking
+// anything.
 func domaineMail(domain string) string {
 	if d := os.Getenv("CEFFIO_MAIL_DOMAIN"); d != "" {
 		return d
@@ -95,45 +95,45 @@ func domaineMail(domain string) string {
 	if domain == "" {
 		return domaineDefaut
 	}
-	// mail.<domaine> : isolé du domaine racine, et déjà dans le certificat
-	// wildcard (aucun certificat supplémentaire à demander).
+	// mail.<domain>: isolated from the root domain, and already in the wildcard
+	// certificate (no extra certificate to request).
 	return "mail." + domain
 }
 
-// DomaineMessagerie expose l'hôte retenu pour l'interface de messagerie, afin
-// que l'installateur puisse s'y référer sans dupliquer la règle de choix.
+// DomaineMessagerie exposes the host chosen for the mail interface, so that the
+// installer can refer to it without duplicating the choice rule.
 //
-// ATTENTION : c'est un NOM DE MACHINE (« mail.<domaine> »), pas le domaine des
-// adresses de courrier — les deux sont distincts et le confondre place les MX
-// au mauvais endroit.
+// WARNING: this is a HOST NAME ("mail.<domain>"), not the domain of the mail
+// addresses — the two are distinct, and conflating them places the MX records
+// in the wrong place.
 func DomaineMessagerie(domain string) string { return domaineMail(domain) }
 
-// ensureSecrets garantit le secret d'administration de Stalwart.
+// ensureSecrets guarantees Stalwart's admin secret.
 //
-// TROIS SOURCES, DANS CET ORDRE : le COFFRE, puis le Secret Kubernetes, puis la
-// génération. C'est cet ordre qui permet de basculer sans interruption — une
-// valeur déjà vivante est REPRISE, jamais refabriquée. La régénérer rendrait les
-// données de Stalwart illisibles, puisque « storage » est la clé d'encryption de
-// son stockage interne.
+// THREE SOURCES, IN THIS ORDER: the VAULT, then the Kubernetes Secret, then
+// generation. This order is what allows switching without interruption — a
+// value that is already live is REUSED, never regenerated. Regenerating it
+// would make Stalwart's data unreadable, since "storage" is the encryption key
+// of its internal store.
 //
-// LE COFFRE PASSE EN PREMIER parce qu'il est la source de vérité quand il est là,
-// et parce que c'est ce qui rend une rotation possible : tourner un secret dans
-// le coffre, puis redéployer, suffit à le propager — sans toucher au cluster. Le
-// repli sur Kubernetes garde une installation sans OpenBao parfaitement
-// fonctionnelle, ce qui est la règle du module de secrets.
+// THE VAULT COMES FIRST because it is the source of truth when it is there, and
+// because that is what makes rotation possible: rotating a secret in the vault,
+// then redeploying, is enough to propagate it — without touching the cluster.
+// The Kubernetes fallback keeps an installation without OpenBao perfectly
+// functional, which is the rule of the secrets module.
 //
-// LA GÉNÉRATION NE SE DÉCLENCHE QUE SI LES DEUX SONT MUETS, et elle le dit : un
-// secret refabriqué à l'aveugle est la panne la plus coûteuse, parce qu'elle ne
-// se voit qu'au moment où le service ne comprend plus ses propres données.
+// GENERATION ONLY TRIGGERS WHEN BOTH ARE SILENT, and it says so: a secret
+// regenerated blindly is the most expensive outage, because it only shows up
+// when the service no longer understands its own data.
 func ensureSecrets(ctx context.Context) error {
 	coffre := secrets.DepuisEnvironnement()
 
-	// LE COFFRE EST LA SOURCE UNIQUE — il n'y a PLUS de copie dans Kubernetes.
+	// THE VAULT IS THE SINGLE SOURCE — there is NO copy in Kubernetes anymore.
 	//
-	// Une valeur qui vit à deux endroits finit par diverger, et la divergence se
-	// découvre au pire moment : quand un service redémarre sur la mauvaise
-	// version. Le pod lit le coffre par son agent ; il n'y a donc rien à
-	// recopier, et le repli sur un Secret Kubernetes n'a plus de raison d'être.
+	// A value living in two places ends up diverging, and divergence is
+	// discovered at the worst moment: when a service restarts on the wrong
+	// version. The pod reads the vault through its agent; so there is nothing to
+	// copy, and the Kubernetes Secret fallback has no reason to exist anymore.
 	donnees := map[string]string{"username": "admin"}
 	existant, err := secrets.LireEntreeCoffre(ctx, coffre, "stalwart", "admin")
 	switch {
@@ -142,17 +142,17 @@ func ensureSecrets(ctx context.Context) error {
 			donnees[k] = v
 		}
 	case secrets.EntreeAbsente(err):
-		// Première installation : la génération ci-dessous s'en charge.
+		// First install: the generation below takes care of it.
 	default:
-		// Un coffre configuré mais injoignable n'est PAS une raison de
-		// fabriquer des valeurs neuves : cela produirait un nouveau mot de
-		// passe pendant que le service tourne avec l'ancien.
-		return fmt.Errorf("coffre illisible pour stalwart/admin : %w", err)
+		// A configured but unreachable vault is NOT a reason to fabricate fresh
+		// values: that would produce a new password while the service runs with
+		// the old one.
+		return fmt.Errorf("vault unreadable for stalwart/admin: %w", err)
 	}
-	// LA GÉNÉRATION NE SE DÉCLENCHE QUE SI LE COFFRE EST MUET, et elle le dit :
-	// un secret refabriqué à l'aveugle est la panne la plus coûteuse, parce
-	// qu'elle ne se voit qu'au moment où le service ne comprend plus ses propres
-	// données — la clé de stockage de Stalwart en est l'exemple exact.
+	// GENERATION ONLY TRIGGERS WHEN THE VAULT IS SILENT, and it says so: a secret
+	// regenerated blindly is the most expensive outage, because it only shows up
+	// when the service no longer understands its own data — Stalwart's storage
+	// key is the exact example.
 	for _, a := range []struct {
 		cle      string
 		longueur int
@@ -168,16 +168,16 @@ func ensureSecrets(ctx context.Context) error {
 			return err
 		}
 		donnees[a.cle] = g
-		fmt.Printf("∙ %s de Stalwart généré (absent du coffre)\n", a.cle)
+		fmt.Printf("∙ Stalwart %s generated (absent from the vault)\n", a.cle)
 	}
 	if err := secrets.EcrireDansCoffre(ctx, coffre, "stalwart", "admin", donnees); err != nil {
 		return err
 	}
-	// Le Secret Kubernetes n'est plus créé. S'il traîne encore d'un déploiement
-	// antérieur, c'est une copie morte : le dire, plutôt que la laisser passer
-	// pour la source.
+	// The Kubernetes Secret is no longer created. If one still lingers from an
+	// earlier deployment, it is a dead copy: say so, rather than letting it pass
+	// for the source.
 	if secretExiste(ctx, "stalwart-admin") {
-		fmt.Println("  ! Secret Kubernetes « stalwart-admin » encore présent — copie morte, à retirer")
+		fmt.Println("  ! Kubernetes Secret \"stalwart-admin\" still present — dead copy, to be removed")
 	}
 	return nil
 }
@@ -185,14 +185,14 @@ func ensureSecrets(ctx context.Context) error {
 func applyWorkload(ctx context.Context, domaine string) error {
 	fmt.Println("∙ Stalwart " + stalwartImage)
 
-	// Le stockage : un PVC pour les boîtes et l'index. Sans lui, tout est perdu
-	// au redémarrage du pod.
-	// LES SECRETS SONT POSÉS PAR L'INJECTEUR D'OPENBAO. Ce bloc d'annotations
-	// remplace l'init-container, sa ConfigMap, son volume et ses montages.
+	// Storage: a PVC for the mailboxes and the index. Without it, everything is
+	// lost when the pod restarts.
+	// SECRETS ARE LAID DOWN BY THE OPENBAO INJECTOR. This annotation block
+	// replaces the init-container, its ConfigMap, its volume and its mounts.
 	annotations := vault.AnnotationsAgent(8, "stalwart", "kv/data/ceffio/stalwart/admin",
 		vault.GabaritExports("kv/data/ceffio/stalwart/admin",
 			[2]string{"STALWART_ADMIN_PASSWORD", vault.ChampCoffre("password")},
-			// Stalwart attend « utilisateur:motdepasse » dans UNE SEULE valeur.
+			// Stalwart expects "user:password" in a SINGLE value.
 			[2]string{"STALWART_RECOVERY_ADMIN", "admin:" + vault.ChampCoffre("password")},
 			[2]string{"STALWART_ENCRYPTION_KEY", vault.ChampCoffre("storage")},
 		))
@@ -215,11 +215,11 @@ metadata:
   name: stalwart-config
   namespace: %[1]s
 data:
-  # FORMAT RÉEL DE STALWART v0.16 : un JSON minimal qui ne dit QUE où vit la
-  # base. Tout le reste (domaines, comptes, TLS, règles SMTP) est stocké DANS
-  # cette base et s'administre par l'interface web ou le CLI — pas par ce
-  # fichier. Un TOML détaillé ici ferait échouer le démarrage :
-  # « Failed to parse data store settings: expected value at line 1 column 2 ».
+  # REAL FORMAT OF STALWART v0.16: a minimal JSON that says ONLY where the
+  # database lives. Everything else (domains, accounts, TLS, SMTP rules) is
+  # stored IN this database and is administered through the web interface or
+  # the CLI — not through this file. A detailed TOML here would fail at startup:
+  # "Failed to parse data store settings: expected value at line 1 column 2".
   config.json: |
     {"@type":"RocksDb","path":"/var/lib/stalwart"}
 ---
@@ -237,34 +237,34 @@ metadata:
   labels: {app: stalwart}
 spec:
   replicas: 1
-  strategy: {type: Recreate}   # un seul écrivain sur RocksDB
+  strategy: {type: Recreate}   # a single writer on RocksDB
   selector: {matchLabels: {app: stalwart}}
   template:
     metadata:
       labels: {app: stalwart}
-      # LES SECRETS SONT POSÉS PAR L'INJECTEUR D'OPENBAO, à partir de ce bloc.
-      # Il ajoute lui-même l'init-container qui les rend, avec le bon couple
-      # utilisateur/groupe et un volume EN MÉMOIRE. Mon init-container écrit à la
-      # main faisait cela en quarante lignes, permissions comprises — et c'est
-      # précisément là que je me suis trompé.
+      # SECRETS ARE LAID DOWN BY THE OPENBAO INJECTOR, from this block.
+      # It adds the init-container that renders them itself, with the right
+      # user/group pair and an IN-MEMORY volume. My hand-written init-container
+      # did this in forty lines, permissions included — and that is precisely
+      # where I went wrong.
       #
-      # AUCUN REPLI : le coffre est la source unique, et il n'existe plus de
-      # Secret Kubernetes pour ce composant. Un repli masquerait une panne du
-      # coffre au lieu de la montrer.
+      # NO FALLBACK: the vault is the single source, and there is no Kubernetes
+      # Secret left for this component. A fallback would mask a vault failure
+      # instead of showing it.
       annotations:
 %[4]s
     spec:
-      # C'EST CE ServiceAccount QUE LE RÔLE DU COFFRE DÉSIGNE, et c'est lui que
-      # l'agent présente pour s'authentifier.
+      # THIS ServiceAccount IS THE ONE THE VAULT ROLE DESIGNATES, and it is the
+      # one the agent presents to authenticate.
       serviceAccountName: stalwart
       containers:
       - name: stalwart
         image: %[3]s
-        # LE CONTENEUR PRINCIPAL CHARGE LE FICHIER RENDU, PUIS LANCE LE SERVICE.
-        # Le fichier est TOUJOURS là : l'agent s'arrête en erreur si un gabarit
-        # échoue (exit_on_retry_failure + error_on_missing_key), donc un fichier
-        # absent veut dire un pod qui ne démarre pas — visible — et non un
-        # service qui tourne avec des valeurs vides.
+        # THE MAIN CONTAINER SOURCES THE RENDERED FILE, THEN STARTS THE SERVICE.
+        # The file is ALWAYS there: the agent stops with an error if a template
+        # fails (exit_on_retry_failure + error_on_missing_key), so a missing file
+        # means a pod that does not start — visible — and not a service running
+        # with empty values.
         command: ["/bin/sh", "-c"]
         args:
         - |
@@ -273,10 +273,10 @@ spec:
           set +a
           exec /usr/local/bin/stalwart --config /etc/stalwart/config.json
         volumeMounts:
-        # Chemins de l'image officielle : /etc/stalwart (config) et
-        # /var/lib/stalwart (données). Monter ailleurs laissait les données
-        # DANS le conteneur — perdues au moindre redémarrage du pod.
-        # L'injecteur ajoute de lui-même le montage des secrets à /secrets.
+        # Paths from the official image: /etc/stalwart (config) and
+        # /var/lib/stalwart (data). Mounting elsewhere left the data INSIDE the
+        # container — lost on the slightest pod restart.
+        # The injector adds the secrets mount at /secrets itself.
         - {name: data, mountPath: /var/lib/stalwart}
         - {name: config, mountPath: /etc/stalwart}
         ports:
@@ -285,9 +285,9 @@ spec:
         - {name: imap,     containerPort: 143}
         - {name: imaps,    containerPort: 993}
         - {name: http,     containerPort: 8080}
-        # Sonde sur /healthz/live : c'est l'endpoint que le Dockerfile officiel
-        # de Stalwart déclare lui-même (STALWART_HEALTHCHECK_URL). Il répond
-        # sans authentification, contrairement à /api/account (401).
+        # Probe on /healthz/live: this is the endpoint that Stalwart's official
+        # Dockerfile declares itself (STALWART_HEALTHCHECK_URL). It answers
+        # without authentication, unlike /api/account (401).
         readinessProbe:
           httpGet: {path: /healthz/live, port: 8080}
           initialDelaySeconds: 15
@@ -316,17 +316,18 @@ spec:
   - {name: imaps,      port: 993, targetPort: 993}
   - {name: http,       port: 8080, targetPort: 8080}
 ---
-# L'interface d'administration est exposée par Ingress, comme les autres apps.
-# Sans cet objet, le domaine mail.<domaine> résout et le pare-feu route, mais
-# Traefik ne connaît pas le Host : il répond 404 et l'interface est injoignable.
+# The admin interface is exposed through Ingress, like the other apps.
+# Without this object, the mail.<domain> domain resolves and the firewall
+# routes, but Traefik does not know the Host: it answers 404 and the interface
+# is unreachable.
 #
-# Pas de bloc TLS ici : les autres Ingress de la plateforme n'en ont pas non
-# plus (le certificat est posé au niveau du cluster et du pare-feu). En ajouter
-# un seul créerait une incohérence, et un secretName inexistant ferait échouer
-# le routage.
+# No TLS block here: the other Ingresses of the platform do not have one either
+# (the certificate is laid down at the cluster and firewall level). Adding one
+# would create an inconsistency, and a nonexistent secretName would break the
+# routing.
 #
-# Seul le port d'ADMINISTRATION passe par l'Ingress. Le courrier (SMTP, IMAP)
-# reste en accès direct : on ne fait pas transiter du mail par un proxy HTTP.
+# Only the ADMINISTRATION port goes through the Ingress. Mail (SMTP, IMAP) stays
+# directly accessible: we do not push mail through an HTTP proxy.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -349,19 +350,19 @@ spec:
 	return apply(ctx, manifest)
 }
 
-// waitReady attend que Stalwart réponde sur son port d'administration.
+// waitReady waits until Stalwart answers on its admin port.
 //
-// On sonde l'API HTTP et non le SMTP : le port SMTP peut être ouvert avant que
-// le service soit prêt à accepter du courrier, et un test SMTP sur un serveur
-// sans domaine configuré échoue pour de mauvaises raisons.
+// We probe the HTTP API and not SMTP: the SMTP port can be open before the
+// service is ready to accept mail, and an SMTP test on a server without a
+// configured domain fails for the wrong reasons.
 func waitReady(ctx context.Context) error {
-	fmt.Println("∙ attente de Stalwart prêt...")
+	fmt.Println("∙ waiting for Stalwart to be ready...")
 	limite := time.Now().Add(4 * time.Minute)
 	for time.Now().Before(limite) {
 		out, _ := k8s.Command(ctx, "kubectl", "-n", ns, "get", "pods",
 			"-l", "app=stalwart", "-o", "jsonpath={.items[*].status.containerStatuses[*].ready}").Output()
 		if strings.TrimSpace(string(out)) == "true" {
-			fmt.Println("  ✓ Stalwart prêt")
+			fmt.Println("  ✓ Stalwart ready")
 			return nil
 		}
 		select {
@@ -370,63 +371,63 @@ func waitReady(ctx context.Context) error {
 		case <-time.After(5 * time.Second):
 		}
 	}
-	return fmt.Errorf("Stalwart n'est pas prêt après 4 minutes")
+	return fmt.Errorf("Stalwart is not ready after 4 minutes")
 }
 
-// configurerRelais déclare le relais d'expédition sortant.
+// configurerRelais declares the outbound send relay.
 //
-// POURQUOI C'EST NÉCESSAIRE ICI : le port 25 sortant est bloqué par le FAI
-// (vérifié sur la connexion Free). Sans relais, Stalwart reçoit le courrier
-// mais ne peut rien remettre vers l'extérieur — Gmail n'aurait jamais nos
-// messages. Le relais authentifié sur 587 contourne le blocage et endosse la
-// responsabilité du reverse DNS.
+// WHY THIS IS NECESSARY HERE: outbound port 25 is blocked by the ISP (verified
+// on the Free connection). Without a relay, Stalwart receives mail but cannot
+// deliver anything to the outside — Gmail would never get our messages. The
+// authenticated relay on 587 bypasses the block and takes on the reverse DNS
+// responsibility.
 //
-// DEUX CHOSES QUE LA DOC ÉTABLIT, ET QUE MON PREMIER ESSAI IGNORAIT :
+// TWO THINGS THE DOC ESTABLISHES, AND THAT MY FIRST ATTEMPT IGNORED:
 //
-//  1. L'authentification simple est « Authorization: Basic » — base64(user:secret).
-//     POST /api/auth existe, mais attend un flux OAuth complet (clientId,
-//     redirectUri, PKCE…) : l'appeler avec un simple corps JSON échoue en
-//     « JSON deserialization failed ».
+//  1. Simple authentication is "Authorization: Basic ***" — base64(user:secret).
+//     POST /api/auth exists, but expects a full OAuth flow (clientId,
+//     redirectUri, PKCE…): calling it with a simple JSON body fails with
+//     "JSON deserialization failed".
 //
-//  2. Le relais n'est PAS un réglage de l'API d'administration : c'est un objet
-//     de configuration, et toute la configuration passe par JMAP sur /jmap.
+//  2. The relay is NOT a setting of the admin API: it is a configuration
+//     object, and all configuration goes through JMAP on /jmap.
 //
-// On vérifie donc l'authentification, puis on interroge JMAP pour lire l'état
-// réel. On ne déclare le succès que si le serveur répond — pas parce que la
-// requête a été envoyée.
+// We therefore verify the authentication, then query JMAP to read the real
+// state. We only declare success if the server answers — not because the
+// request was sent.
 func configurerRelais(ctx context.Context, hote string, port int, utilisateur, motdepasse string) error {
-	fmt.Printf("∙ relais d'expédition : %s:%d\n", hote, port)
+	fmt.Printf("∙ send relay: %s:%d\n", hote, port)
 
-	// Authentification Basic : STALWART_RECOVERY_ADMIN contient DÉJÀ la forme
-	// « utilisateur:motdepasse » attendue par curl -u. C'est le secret qui est
-	// lu DANS le pod : il ne transite jamais par la ligne de commande, où il
-	// serait visible dans la table des processus.
+	// Basic authentication: STALWART_RECOVERY_ADMIN ALREADY contains the
+	// "user:password" form expected by curl -u. It is the secret that is read
+	// INSIDE the pod: it never travels through the command line, where it would
+	// be visible in the process table.
 	script := `curl -s -o /dev/null -w "%{http_code}" --max-time 10 -u "$STALWART_RECOVERY_ADMIN" http://localhost:8080/api/account`
 	out, err := k8s.Command(ctx, "kubectl", "-n", ns, "exec", "deploy/stalwart", "-c", "stalwart", "--",
 		"sh", "-c", script).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("appel à Stalwart : %w: %s", err, tronquer(string(out), 200))
+		return fmt.Errorf("call to Stalwart: %w: %s", err, tronquer(string(out), 200))
 	}
 	code := strings.TrimSpace(string(out))
 	if code != "200" {
-		return fmt.Errorf("authentification refusée (HTTP %s)", code)
+		return fmt.Errorf("authentication refused (HTTP %s)", code)
 	}
 
-	// L'état du relais se lit ensuite via JMAP. On liste les objets disponibles
-	// plutôt que d'écrire une forme devinée : si la clé change entre versions,
-	// on le verra dans la réponse au lieu de corrompre la configuration.
-	fmt.Println("      authentification vérifiée (HTTP 200)")
-	fmt.Println("      → le relais se déclare dans JMAP (/jmap) ; à finaliser via l'interface d'administration")
+	// The relay state is then read via JMAP. We list the available objects rather
+	// than writing a guessed shape: if the key changes between versions, we will
+	// see it in the response instead of corrupting the configuration.
+	fmt.Println("      authentication verified (HTTP 200)")
+	fmt.Println("      → the relay is declared in JMAP (/jmap); to be finalized through the admin interface")
 	return nil
 }
 
 // ---------------------------------------------------------------------------
-// Utilitaires locaux
+// Local utilities
 // ---------------------------------------------------------------------------
 
-// secretExiste sert à SIGNALER une copie morte, jamais à s'en servir : depuis que
-// le coffre est la source unique, un Secret Kubernetes du même nom n'est plus lu
-// par personne. Le détecter évite qu'on le prenne pour la source.
+// secretExiste is used to FLAG a dead copy, never to use it: since the vault
+// became the single source, a Kubernetes Secret of the same name is no longer
+// read by anyone. Detecting it prevents mistaking it for the source.
 func secretExiste(ctx context.Context, nom string) bool {
 	out, err := k8s.Command(ctx, "kubectl", "get", "secret", nom, "-n", ns).CombinedOutput()
 	return err == nil && strings.Contains(string(out), nom)
@@ -451,7 +452,7 @@ func apply(ctx context.Context, manifest string) error {
 	return nil
 }
 
-// genSecret produit un mot de passe aléatoire en hexadécimal.
+// genSecret produces a random password in hexadecimal.
 func genSecret(n int) (string, error) {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {

@@ -1,27 +1,27 @@
-// Package talk déploie Nextcloud Talk avec son High Performance Backend (HPB).
+// Package talk deploys Nextcloud Talk with its High Performance Backend (HPB).
 //
-// POURQUOI CE MODULE : Talk remplace à la fois le chat (ex-Synapse/Element) et
-// la visioconférence (ex-Jitsi). C'est une application Nextcloud — donc
-// l'authentification est native (celle de Nextcloud, elle-même branchée sur
-// Keycloak) et il n'y a plus aucun pont d'authentification à maintenir.
+// WHY THIS MODULE: Talk replaces both chat (ex-Synapse/Element) and
+// videoconferencing (ex-Jitsi). It is a Nextcloud application — so
+// authentication is native (Nextcloud's own, itself wired to Keycloak) and
+// there is no authentication bridge left to maintain.
 //
-// ARCHITECTURE — quatre services, tous dans le namespace ceffio-video :
+// ARCHITECTURE — four services, all in the ceffio-video namespace:
 //
-//	Talk          app Nextcloud (activée par « occ app:enable spreed »)
-//	signaling     coordination : qui est là, qui rejoint quoi (Go, léger)
-//	Janus         SFU : transporte le média WebRTC (c'est lui qui compte)
-//	NATS          messagerie entre instances de signaling (scalabilité)
-//	coturn        relais TURN : indispensable aux réseaux restrictifs
+//	Talk          Nextcloud app (enabled via "occ app:enable spreed")
+//	signaling     coordination: who is there, who joins what (Go, lightweight)
+//	Janus         SFU: carries the WebRTC media (it is the one that matters)
+//	NATS          messaging between signaling instances (scalability)
+//	coturn        TURN relay: indispensable for restrictive networks
 //
-// Correspondance avec l'ancienne pile Jitsi, pour qui la connaît :
+// Correspondence with the old Jitsi stack, for those who know it:
 //
 //	Interface        Jitsi Meet      → Talk
 //	Coordination     Prosody (XMPP)  → signaling + NATS
-//	Transport média  JVB (SFU)       → Janus
-//	coturn           intégré         → service séparé
+//	Media transport  JVB (SFU)       → Janus
+//	coturn           integrated      → separate service
 //
-// ISOLATION : Ceffio et AgenTorch ne partagent AUCUNE ressource réseau — ni
-// plage média, ni port TURN, ni secret. Voir docs/plan-talk-hpb.md §4bis.
+// ISOLATION: these two suites share NO network resource — no media range, no
+// TURN port, no secret. See docs/plan-talk-hpb.md §4bis.
 package talk
 
 import (
@@ -38,61 +38,61 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/vault"
 )
 
-// Versions épinglées. Rien ne suit `latest` : un composant qui suit un tag
-// mouvant ne peut être ni audité ni mis à niveau de façon reproductible.
+// Pinned versions. Nothing follows `latest`: a component that follows a moving
+// tag can be neither audited nor upgraded reproducibly.
 const (
 	ns = "ceffio-video"
 
-	// Images du HPB.
+	// HPB images.
 	signalingImage = "docker.io/strukturag/nextcloud-spreed-signaling:2.1.1"
 	janusImage     = "ghcr.io/ceffio-suite/janus-gateway:1.4.0-1"
 	natsImage      = "docker.io/library/nats:2.15"
 	coturnImage    = "docker.io/coturn/coturn:4.18"
 
-	// Serveur STUN chargé de découvrir l'adresse publique que Janus doit
-	// annoncer, quand elle n'est pas fournie au déploiement.
+	// STUN server in charge of discovering the public address Janus must
+	// announce, when it is not provided at deploy time.
 	//
-	// PUBLIC, impérativement : un serveur du réseau local (coturn, par exemple)
-	// voit la requête arriver depuis l'intérieur et répond l'adresse PRIVÉE —
-	// mesuré : « Our public address is 192.168.1.48 ». La détection « réussit »
-	// alors en annonçant une adresse injoignable depuis Internet.
+	// PUBLIC, imperatively: a local-network server (coturn, for example)
+	// sees the request arrive from the inside and answers with the PRIVATE
+	// address — measured: "Our public address is <cluster-ip>". The
+	// detection then "succeeds" by announcing an address unreachable from
+	// the Internet.
 	//
-	// L'entrypoint de l'image résout ce nom en IPv4 avant de l'écrire dans la
-	// configuration : laissé en nom d'hôte, Janus le résout en IPv6 sur une
-	// machine double-pile et n'annonce qu'une adresse IPv6.
+	// The image's entrypoint resolves this name to IPv4 before writing it
+	// into the configuration: left as a hostname, Janus resolves it to IPv6
+	// on a dual-stack machine and only announces an IPv6 address.
 	stunPublic = "stun.l.google.com"
 	stunPort   = 19302
 
-	// Réseau — ports DÉDIÉS à Ceffio, sans chevauchement avec AgenTorch
-	// (qui occupe 50000-60000, 30000-40000 et 3478).
+	// Network — ports DEDICATED to Ceffio, with no overlap with the other RTC
+	// suites on the network (which occupy 50000-60000, 30000-40000 and 3478).
 	plageMediaDebut = 20000
-	plageMediaFin   = 20100 // 100 ports : largement suffisant pour une PME
-	portTurn        = 3479  // 3478 = AgenTorch, ne pas y toucher
+	plageMediaFin   = 20100 // 100 ports: plenty for an SMB
+	portTurn        = 3479  // 3478 = other RTC suite, do not touch it
 	portTurnTLS     = 5349
-	portSignaling   = 8081 // HTTP interne du signaling server
-	portJanusAPI    = 8088 // API HTTP de Janus (utilisée par le signaling)
-	portJanusWS     = 8188 // transport WebSocket de Janus
+	portSignaling   = 8081 // internal HTTP of the signaling server
+	portJanusAPI    = 8088 // Janus HTTP API (used by the signaling)
+	portJanusWS     = 8188 // Janus WebSocket transport
 )
 
-// Deploy installe Talk + HPB, de façon idempotente.
+// Deploy installs Talk + HPB, idempotently.
 //
-// AUCUNE ADRESSE PUBLIQUE N'EST DEMANDÉE, et c'est délibéré : elle est
-// nécessaire à trois endroits (les candidats ICE de Janus, ceux du relais
-// coturn, et l'adresse TURN que le signaling remet aux navigateurs), mais
-// aucun n'a besoin qu'on la lui fournisse.
+// NO PUBLIC ADDRESS IS ASKED FOR, and this is deliberate: it is needed in
+// three places (Janus's ICE candidates, the coturn relay's, and the TURN
+// address the signaling hands to browsers), but none of them needs it to be
+// provided.
 //
-//   - Janus et coturn la découvrent eux-mêmes au démarrage, par STUN, avec le
-//     client présent dans leurs images respectives ;
-//   - le signaling annonce un NOM public (talk.<domaine>), qui survit à un
-//     changement d'adresse là où une valeur figée cesserait de fonctionner
-//     sans rien dire.
+//   - Janus and coturn discover it themselves at startup, via STUN, with the
+//     client present in their respective images;
+//   - the signaling announces a public NAME (talk.<domain>), which survives
+//     an address change where a frozen value would stop working silently.
 //
-// Un paramètre à connaître AVANT de déployer était une dépendance inutile, et
-// une valeur en dur dans l'installation est une panne différée.
+// A parameter to know BEFORE deploying was a useless dependency, and a
+// hardcoded value in the installation is a deferred outage.
 func Deploy(ctx context.Context) error {
-	fmt.Println("\nDéploiement de Talk + High Performance Backend (Phase 10)...")
+	fmt.Println("\nDeploying Talk + High Performance Backend (Phase 10)...")
 
-	// 1. Secrets d'abord : les Deployments les référencent.
+	// 1. Secrets first: the Deployments reference them.
 	if err := ensureSecrets(ctx); err != nil {
 		return err
 	}
@@ -102,7 +102,7 @@ func Deploy(ctx context.Context) error {
 	if err := deployNATS(ctx); err != nil {
 		return err
 	}
-	// coturn AVANT Janus : Janus le référence comme serveur STUN/TURN.
+	// coturn BEFORE Janus: Janus references it as its STUN/TURN server.
 	if err := deployCoturn(ctx); err != nil {
 		return err
 	}
@@ -115,12 +115,12 @@ func Deploy(ctx context.Context) error {
 	if err := deploySignaling(ctx); err != nil {
 		return err
 	}
-	// 2. Raccorder Nextcloud au HPB (via occ, jamais à la main).
+	// 2. Wire Nextcloud to the HPB (via occ, never by hand).
 	if err := brancherNextcloud(ctx); err != nil {
 		return err
 	}
 
-	fmt.Println("✓ Talk + HPB déployés (messagerie et visioconférence dans Nextcloud)")
+	fmt.Println("✓ Talk + HPB deployed (messaging and videoconferencing in Nextcloud)")
 	return nil
 }
 
@@ -128,13 +128,14 @@ func Deploy(ctx context.Context) error {
 // Secrets
 // ---------------------------------------------------------------------------
 
-// ensureSecrets garantit les secrets du HPB DANS LE COFFRE, ET NULLE PART AILLEURS.
+// ensureSecrets guarantees the HPB secrets IN THE VAULT, AND NOWHERE ELSE.
 //
-// Ils ne sont JAMAIS dans les manifests ni dans Git. Depuis que le coffre est la
-// source unique, ils ne sont plus non plus dans un Secret Kubernetes : les deux
-// charges qui les consomment — coturn et le signaling — les lisent par leur agent
-// au démarrage. Une valeur recopiée à deux endroits finit par diverger, et la
-// divergence se paie au moment où le service ne comprend plus ses propres données.
+// They are NEVER in the manifests nor in Git. Since the vault became the
+// single source, they are no longer in a Kubernetes Secret either: the two
+// workloads that consume them — coturn and the signaling — read them through
+// their agent at startup. A value copied to two places ends up diverging, and
+// the divergence is paid at the moment the service no longer understands its
+// own data.
 func ensureSecrets(ctx context.Context) error {
 	coffre := secrets.DepuisEnvironnement()
 
@@ -144,12 +145,12 @@ func ensureSecrets(ctx context.Context) error {
 	case err == nil:
 		donnees = existant
 	case secrets.EntreeAbsente(err):
-		// Première installation : la génération ci-dessous s'en charge.
+		// First install: the generation below takes care of it.
 	default:
-		// Un coffre injoignable n'est pas une raison de fabriquer des valeurs
-		// neuves : les clients raccordés continueraient avec les anciennes, et
-		// plus rien ne se comprendrait.
-		return fmt.Errorf("coffre illisible pour talk/signaling : %w", err)
+		// An unreachable vault is not a reason to fabricate new values: the
+		// connected clients would keep using the old ones, and nothing would
+		// understand anything anymore.
+		return fmt.Errorf("vault unreadable for talk/signaling: %w", err)
 	}
 
 	for _, a := range []struct {
@@ -169,22 +170,23 @@ func ensureSecrets(ctx context.Context) error {
 			return err
 		}
 		donnees[a.cle] = g
-		fmt.Printf("∙ secret Talk « %s » généré (absent du coffre)\n", a.cle)
+		fmt.Printf("∙ Talk secret %q generated (absent from the vault)\n", a.cle)
 	}
 	return secrets.EcrireDansCoffre(ctx, coffre, "talk", "signaling", donnees)
 }
 
 // ---------------------------------------------------------------------------
-// Agent du coffre
+// Vault agent
 // ---------------------------------------------------------------------------
 
-// deployAgent pose ce qui est commun aux deux charges qui lisent le coffre : le
-// ServiceAccount que le coffre valide, et la configuration de l'agent.
+// deployServiceAccount lays down what is common to the two workloads that read
+// the vault: the ServiceAccount the vault validates, and the agent's
+// configuration.
 //
-// POURQUOI UNE SEULE CONFIGURATION POUR DEUX CHARGES : coturn et le signaling
-// lisent la MÊME entrée du coffre, donc leurs gabarits sont identiques. Un
-// fichier dupliqué finirait par diverger de l'autre — et la divergence, ici,
-// ferait que le signaling et Nextcloud ne partageraient plus le même secret.
+// WHY A SINGLE CONFIGURATION FOR TWO WORKLOADS: coturn and the signaling read
+// the SAME vault entry, so their templates are identical. A duplicated file
+// would end up diverging from the other — and the divergence, here, would
+// make the signaling and Nextcloud no longer share the same secret.
 func deployServiceAccount(ctx context.Context) error {
 	manifeste := fmt.Sprintf(`apiVersion: v1
 kind: ServiceAccount
@@ -200,7 +202,7 @@ metadata:
 // ---------------------------------------------------------------------------
 
 func deployNATS(ctx context.Context) error {
-	fmt.Println("∙ NATS " + natsImage + " (coordination du signaling)")
+	fmt.Println("∙ NATS " + natsImage + " (signaling coordination)")
 	manifeste := fmt.Sprintf(`apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -237,57 +239,56 @@ spec:
 // coturn
 // ---------------------------------------------------------------------------
 
-// deployCoturn déploie le relais TURN.
+// deployCoturn deploys the TURN relay.
 //
-// Il sert à DEUX choses :
-//  1. relais média pour les utilisateurs dont le réseau bloque l'UDP direct
-//     (4G d'entreprise, réseaux d'hôtel) — sans lui, ils n'ont aucun chemin ;
-//  2. serveur STUN pour Janus, qui peut alors découvrir seul son adresse
-//     publique (détection automatique, à activer).
+// It serves TWO things:
+//  1. media relay for users whose network blocks direct UDP (corporate 4G,
+//     hotel networks) — without it, they have no path;
+//  2. STUN server for Janus, which can then discover its public address on
+//     its own (automatic detection, to enable).
 //
-// Le secret d'authentification est partagé avec le signaling server, qui
-// génère les identifiants TURN temporaires pour les clients.
+// The authentication secret is shared with the signaling server, which
+// generates the temporary TURN credentials for the clients.
 func deployCoturn(ctx context.Context) error {
-	fmt.Println("∙ coturn " + coturnImage + " (relais TURN, port " + fmt.Sprint(portTurn) + ")")
+	fmt.Println("∙ coturn " + coturnImage + " (TURN relay, port " + fmt.Sprint(portTurn) + ")")
 
-	// L'ADRESSE PUBLIQUE EST DÉCOUVERTE AU DÉMARRAGE, JAMAIS FIGÉE.
+	// THE PUBLIC ADDRESS IS DISCOVERED AT STARTUP, NEVER FROZEN.
 	//
-	// coturn doit annoncer une adresse joignable depuis Internet dans ses
-	// candidats de relais (option --external-ip). Sans elle, il annonce la
-	// sienne, privée — mesuré : « UDP reflexive addr: 192.168.1.48 » — et un
-	// participant derrière un NAT restrictif reçoit une adresse qu'il ne peut
-	// pas joindre, exactement dans le cas où le relais sert à quelque chose.
+	// coturn must announce an address reachable from the Internet in its
+	// relay candidates (--external-ip option). Without it, it announces its
+	// own, private one — measured: "UDP reflexive addr: <cluster-ip>" — and
+	// a participant behind a restrictive NAT receives an address they cannot
+	// reach, exactly in the case where the relay is useful.
 	//
-	// Mais cette adresse ne doit PAS figurer dans l'installation : elle change
-	// (FAI, déménagement) et un déploiement qui la porte en dur cesse de
-	// fonctionner sans rien dire le jour où elle change. Aucune valeur
-	// d'infrastructure n'entre dans le dépôt.
+	// But this address must NOT be in the installation: it changes (ISP,
+	// move) and a deployment carrying it in hard stops working silently the
+	// day it changes. No infrastructure value enters the repository.
 	//
-	// coturn la découvre donc lui-même au démarrage, avec le client STUN présent
-	// dans son image, contre le même serveur que celui donné à Janus — une seule
-	// source de vérité pour toute la plateforme.
+	// coturn therefore discovers it itself at startup, with the STUN client
+	// present in its image, against the same server as the one given to
+	// Janus — a single source of truth for the whole platform.
 	//
-	// Si la détection échoue (UDP filtré), l'option est simplement omise : le
-	// relais ne sert plus qu'à l'intérieur du réseau, ce qui vaut mieux qu'une
-	// adresse inventée — et l'avertissement est explicite dans les journaux.
-	// Aucune substitution de commande ni d'accolade dans ce script : Kubernetes
-	// interprète $(...) et ${...} dans les arguments d'un conteneur, ce qui
-	// abîmerait le script. On n'utilise que des variables simples et une
-	// redirection vers un fichier temporaire.
+	// If the detection fails (filtered UDP), the option is simply omitted:
+	// the relay then only serves inside the network, which is better than an
+	// invented address — and the warning is explicit in the logs.
+	// No command substitution nor braces in this script: Kubernetes
+	// interprets $(...) and ${...} in a container's arguments, which would
+	// damage the script. We only use simple variables and a redirection to a
+	// temporary file.
 	script := fmt.Sprintf(`turnutils_stunclient -p %[1]d %[2]s 2>&1 \
     | sed -n 's/.*UDP reflexive addr: \([0-9.]*\):.*/\1/p' \
-    | head -1 > /tmp/adresse-publique.txt || true
+    | head -1 > /tmp/public-address.txt || true
 
-ADRESSE=""
-read ADRESSE < /tmp/adresse-publique.txt || true
-ARG_EXTERNE=""
-if [ -n "$ADRESSE" ]; then
-    ARG_EXTERNE="--external-ip=$ADRESSE"
-    echo "coturn: adresse publique detectee = $ADRESSE"
+ADDRESS=""
+read ADDRESS < /tmp/public-address.txt || true
+EXTERNAL_ARG=""
+if [ -n "$ADDRESS" ]; then
+    EXTERNAL_ARG="--external-ip=$ADDRESS"
+    echo "coturn: public address detected = $ADDRESS"
 else
-    echo "coturn: AVERTISSEMENT - adresse publique non detectee (STUN %[2]s:%[1]d injoignable)." >&2
-    echo "coturn: les candidats de relais porteront l'adresse privee ;" >&2
-    echo "coturn: le relais ne servira qu'a l'interieur du reseau." >&2
+    echo "coturn: WARNING - public address not detected (STUN %[2]s:%[1]d unreachable)." >&2
+    echo "coturn: relay candidates will carry the private address;" >&2
+    echo "coturn: the relay will only serve inside the network." >&2
 fi
 
 exec turnserver \
@@ -304,11 +305,11 @@ exec turnserver \
     --min-port=49152 \
     --max-port=49200 \
     --listening-port=%[4]d \
-    $ARG_EXTERNE
+    $EXTERNAL_ARG
 `, stunPort, stunPublic, "talk."+domaineDe(ctx), portTurn)
 
-	// LES SECRETS SONT POSÉS PAR L'INJECTEUR D'OPENBAO : coturn n'a besoin que du
-	// secret TURN, celui que Nextcloud détient aussi.
+	// THE SECRETS ARE SET BY THE OPENBAO INJECTOR: coturn only needs the TURN
+	// secret, the one Nextcloud also holds.
 	annCoturn := vault.AnnotationsAgent(8, "talk", "kv/data/ceffio/talk/signaling",
 		vault.GabaritExports("kv/data/ceffio/talk/signaling",
 			[2]string{"TURN_SECRET", vault.ChampCoffre("turn-secret")},
@@ -321,30 +322,30 @@ metadata:
   namespace: %[1]s
   labels: {app: coturn}
 spec:
-  # Recreate : même raison que Janus — pod en hostNetwork, donc ports de l'hôte
-  # occupés. Voir le commentaire détaillé sur le déploiement de Janus.
+  # Recreate: same reason as Janus — hostNetwork pod, hence the host's ports
+  # are occupied. See the detailed comment on the Janus deployment.
   strategy: {type: Recreate}
   replicas: 1
   selector: {matchLabels: {app: coturn}}
   template:
     metadata:
       labels: {app: coturn}
-      # LES SECRETS SONT POSÉS PAR L'INJECTEUR D'OPENBAO.
+      # THE SECRETS ARE SET BY THE OPENBAO INJECTOR.
       annotations:
 %[6]s
     spec:
-      # hostNetwork : même raison que Janus — la plage de relais TURN
-      # (49152-49200) ne peut pas s'exprimer en NodePort, qui n'accepte qu'un
-      # port unique. Le pod écoute donc directement sur l'IP de la VM.
+      # hostNetwork: same reason as Janus — the TURN relay range
+      # (49152-49200) cannot be expressed as a NodePort, which only accepts a
+      # single port. The pod therefore listens directly on the VM's IP.
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
-      # C'EST CE ServiceAccount QUE LE RÔLE DU COFFRE DÉSIGNE.
+      # IT IS THIS ServiceAccount THAT THE VAULT ROLE DESIGNATES.
       serviceAccountName: talk
       containers:
       - name: coturn
         image: %[2]s
-        # Enveloppe de démarrage : elle charge les secrets rendus par l'agent,
-        # découvre l'adresse publique, puis la transmet à coturn.
+        # Startup wrapper: it loads the secrets rendered by the agent,
+        # discovers the public address, then passes it on to coturn.
         command: ["/bin/sh", "-c"]
         args:
         - |
@@ -358,10 +359,10 @@ spec:
         - {name: turns, containerPort: %[5]d, protocol: TCP}
         resources: {limits: {memory: 1Gi, cpu: "1"}}
 ---
-# NodePort, PAS ClusterIP : ces ports doivent être joignables depuis Internet,
-# via les règles de redirection du pare-feu vers l'IP de la VM. Un ClusterIP
-# n'écoute que sur le réseau interne de k3s — les paquets arrivent à la VM et
-# personne ne les prend (symptôme : tout est « Running », rien ne passe).
+# NodePort, NOT ClusterIP: these ports must be reachable from the Internet,
+# via the firewall's redirection rules toward the VM's IP. A ClusterIP only
+# listens on k3s's internal network — the packets arrive at the VM and no one
+# takes them (symptom: everything is "Running", nothing goes through).
 apiVersion: v1
 kind: Service
 metadata:
@@ -381,34 +382,35 @@ spec:
 // Janus
 // ---------------------------------------------------------------------------
 
-// ensurePullSecret crée le secret d'authentification pour tirer l'image Janus
-// depuis GHCR.
+// ensurePullSecret creates the authentication secret to pull the Janus image
+// from GHCR.
 //
-// POURQUOI UN SECRET DE TIRAGE : l'image Janus est publiée sur GHCR (dépôt
-// privé). Kubernetes ne peut pas la tirer sans identifiants. On préfère un
-// secret de tirage à un passage de l'image en public : l'image ne regarde
-// personne, et le déployeur garde le contrôle de qui peut la récupérer.
+// WHY A PULL SECRET: the Janus image is published on GHCR (private
+// repository). Kubernetes cannot pull it without credentials. We prefer a
+// pull secret to making the image public: the image concerns no one, and the
+// deployer keeps control of who can fetch it.
 //
-// Le token est fourni par variable d'environnement au moment du déploiement
-// (GHCR_TOKEN) — il n'est JAMAIS écrit dans le code ni dans un manifeste.
+// The token is provided via an environment variable at deploy time
+// (GHCR_TOKEN) — it is NEVER written in the code nor in a manifest.
 func ensurePullSecret(ctx context.Context) error {
-	// L'EXISTENCE DU SECRET SE REGARDE AVANT LE JETON, pas après.
+	// THE SECRET'S EXISTENCE IS CHECKED BEFORE THE TOKEN, not after.
 	//
-	// Sinon toute ré-exécution sans la variable d'environnement échoue, alors que
-	// le secret est déjà en place et suffit — et l'échec coupe le déploiement à
-	// cet endroit : les composants suivants ne sont jamais appliqués, sans que
-	// rien ne le dise. C'est exactement ce qui est arrivé au signaling de Talk.
+	// Otherwise any re-run without the environment variable fails, while the
+	// secret is already in place and sufficient — and the failure cuts the
+	// deployment at this spot: the following components are never applied,
+	// without anything saying so. That is exactly what happened to Talk's
+	// signaling.
 	if secretExiste(ctx, "ghcr-pull") {
 		return nil
 	}
 	token := os.Getenv("GHCR_TOKEN")
 	if token == "" {
-		return fmt.Errorf("GHCR_TOKEN absent : l'image Janus est sur GHCR (privé) et " +
-			"le cluster doit pouvoir la tirer. Fournir un token avec read:packages")
+		return fmt.Errorf("GHCR_TOKEN missing: the Janus image is on GHCR (private) and " +
+			"the cluster must be able to pull it. Provide a token with read:packages")
 	}
-	fmt.Println("∙ secret de tirage GHCR créé")
+	fmt.Println("∙ GHCR pull secret created")
 
-	// Le fichier .dockerconfigjson attendu par Kubernetes.
+	// The .dockerconfigjson file Kubernetes expects.
 	auth := base64.StdEncoding.EncodeToString([]byte("ceffio-suite:" + token))
 	cfg := fmt.Sprintf(`{"auths":{"ghcr.io":{"auth":%q}}}`, auth)
 
@@ -425,29 +427,30 @@ data:
 	return appliquer(ctx, manifeste)
 }
 
-// deployJanus déploie le SFU.
+// deployJanus deploys the SFU.
 //
-// C'est le composant qui TRANSPORTE le média : chaque participant envoie son
-// flux une fois, Janus le redistribue à tous. Sans lui, Talk plafonne à ~4-6
-// participants (connexions directes entre navigateurs).
+// This is the component that CARRIES the media: each participant sends their
+// stream once, Janus redistributes it to everyone. Without it, Talk caps at
+// ~4-6 participants (direct connections between browsers).
 func deployJanus(ctx context.Context) error {
-	fmt.Printf("∙ Janus %s (SFU, média UDP %d-%d)\n", janusImage, plageMediaDebut, plageMediaFin)
+	fmt.Printf("∙ Janus %s (SFU, UDP media %d-%d)\n", janusImage, plageMediaDebut, plageMediaFin)
 
-	// L'ADRESSE PUBLIQUE EST DÉCOUVERTE PAR JANUS LUI-MÊME, AU DÉMARRAGE.
+	// THE PUBLIC ADDRESS IS DISCOVERED BY JANUS ITSELF, AT STARTUP.
 	//
-	// Janus doit annoncer aux navigateurs une adresse qu'ils peuvent joindre.
-	// Derrière un NAT ses interfaces sont privées : s'il les annonce telles
-	// quelles dans les candidats ICE, le média ne passe jamais depuis Internet.
+	// Janus must announce to the browsers an address they can reach. Behind a
+	// NAT its interfaces are private: if it announces them as-is in the ICE
+	// candidates, the media never gets through from the Internet.
 	//
-	// Elle n'est PAS fournie au déploiement : un paramètre à connaître avant de
-	// déployer est une dépendance, et une valeur en dur cesse de fonctionner
-	// sans rien dire le jour où le FAI change l'adresse. Janus interroge donc un
-	// serveur STUN PUBLIC au démarrage et annonce l'adresse qu'il en déduit.
+	// It is NOT provided at deploy time: a parameter to know before deploying
+	// is a dependency, and a hardcoded value stops working silently the day
+	// the ISP changes the address. Janus therefore queries a PUBLIC STUN
+	// server at startup and announces the address it deduces from it.
 	//
-	// Le serveur STUN DOIT être joignable depuis Internet. Pointé sur coturn,
-	// qui tourne sur le même réseau, il renvoie l'adresse PRIVÉE — mesuré :
-	// « Our public address is 192.168.1.48 ». La détection « réussit » alors en
-	// annonçant une adresse injoignable, ce qui est pire qu'un échec franc.
+	// The STUN server MUST be reachable from the Internet. Pointed at coturn,
+	// which runs on the same network, it returns the PRIVATE address —
+	// measured: "Our public address is <cluster-ip>". The detection then
+	// "succeeds" by announcing an unreachable address, which is worse than a
+	// clean failure.
 	manifeste := fmt.Sprintf(`apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -455,23 +458,23 @@ metadata:
   namespace: %[1]s
   labels: {app: janus}
 spec:
-  # Recreate, PAS RollingUpdate. Le pod est en hostNetwork : il occupe les
-  # ports de la VM (média 20000-20100, API 8088, WS 8188). Un déploiement
-  # progressif est alors IMPOSSIBLE — le nouveau pod ne peut pas démarrer tant
-  # que l'ancien tient ces ports, et l'ancien n'est retiré qu'une fois le
-  # nouveau prêt. Mesuré : « FailedScheduling: 1 node(s) didn't have free ports
-  # for the requested pod ports », déploiement bloqué indéfiniment.
+  # Recreate, NOT RollingUpdate. The pod is on hostNetwork: it occupies the
+  # VM's ports (media 20000-20100, API 8088, WS 8188). A progressive deploy
+  # is then IMPOSSIBLE — the new pod cannot start while the old one holds
+  # those ports, and the old one is only removed once the new one is ready.
+  # Measured: "FailedScheduling: 1 node(s) didn't have free ports for the
+  # requested pod ports", deployment blocked indefinitely.
   strategy: {type: Recreate}
   replicas: 1
   selector: {matchLabels: {app: janus}}
   template:
     metadata: {labels: {app: janus}}
     spec:
-      # hostNetwork : le pod sort directement sur l'IP de la VM, sans passer par
-      # kube-proxy. Indispensable pour le MÉDIA : un ServiceNodePort ne peut
-      # exposer qu'UN port, pas une plage de 101 ports. Le média WebRTC a besoin
-      # de toute la plage 20000-20100 ouverte de bout en bout, et le pare-feu
-      # redirige vers l'IP de la VM — donc le pod doit écouter sur cette IP.
+      # hostNetwork: the pod goes out directly on the VM's IP, without going
+      # through kube-proxy. Indispensable for the MEDIA: a NodePort Service
+      # can only expose ONE port, not a range of 101 ports. WebRTC media
+      # needs the whole 20000-20100 range open end to end, and the firewall
+      # redirects toward the VM's IP — so the pod must listen on that IP.
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
       imagePullSecrets:
@@ -481,9 +484,10 @@ spec:
         image: %[2]s
         env:
         - {name: JANUS_RTP_PORT_RANGE, value: "%[4]d-%[5]d"}
-        # Serveur STUN PUBLIC : source de l'adresse publique annoncée aux
-        # navigateurs. L'entrypoint le résout en IPv4 (un nom d'hôte résolu en
-        # IPv6 ferait annoncer une adresse IPv6, injoignable en IPv4).
+        # PUBLIC STUN server: source of the public address announced to the
+        # browsers. The entrypoint resolves it to IPv4 (a hostname resolved
+        # to IPv6 would make it announce an IPv6 address, unreachable in
+        # IPv4).
         - {name: JANUS_STUN_SERVER, value: %[7]q}
         - {name: JANUS_STUN_PORT, value: "%[8]d"}
         ports:
@@ -491,10 +495,10 @@ spec:
         - {name: ws, containerPort: 8188, protocol: TCP}
         resources: {limits: {memory: 2Gi, cpu: "2"}}
 ---
-# NodePort pour TOUTE la plage média : c'est le flux vidéo lui-même qui passe
-# par là. Le signaling indique aux navigateurs ces ports (via l'adresse
-# publique annoncée), qui doivent donc être ouverts de bout en bout — pare-feu
-# ET Kubernetes.
+# NodePort for the WHOLE media range: it is the video stream itself that goes
+# through here. The signaling tells the browsers about these ports (via the
+# announced public address), which must therefore be open end to end —
+# firewall AND Kubernetes.
 apiVersion: v1
 kind: Service
 metadata:
@@ -513,14 +517,14 @@ spec:
 // Signaling server
 // ---------------------------------------------------------------------------
 
-// turnURL construit la liste des serveurs TURN remise AUX NAVIGATEURS par le
-// serveur de signalisation.
+// turnURL builds the list of TURN servers handed TO THE BROWSERS by the
+// signaling server.
 //
-// L'adresse doit être joignable depuis Internet, sinon le relais est
-// inutilisable. On donne un NOM public plutôt qu'une adresse : il survit à un
-// changement d'adresse publique, et c'est le même que celui déclaré côté
-// Nextcloud. C'est le seul endroit où l'adresse publique apparaît, et elle y
-// apparaît sous forme de nom, jamais de valeur figée.
+// The address must be reachable from the Internet, otherwise the relay is
+// unusable. We give a public NAME rather than an address: it survives a
+// public-address change, and it is the same as the one declared on the
+// Nextcloud side. This is the only place where the public address appears,
+// and it appears there as a name, never as a frozen value.
 func turnURL(domaine string) string {
 	hote := "talk." + domaine
 	udp := fmt.Sprintf("turn:%s:%d?transport=udp", hote, portTurn)
@@ -528,90 +532,90 @@ func turnURL(domaine string) string {
 	return udp + "," + tcp
 }
 
-// deploySignaling déploie le serveur de signalisation.
+// deploySignaling deploys the signaling server.
 //
-// Rôle : dire aux participants qui est présent et où se connecter. Il ne
-// transporte AUCUN média — c'est un routeur de métadonnées, très léger. C'est
-// l'équivalent de Prosody dans la pile Jitsi, avec NATS pour la coordination.
+// Role: tell the participants who is present and where to connect. It carries
+// NO media — it is a metadata router, very lightweight. It is the equivalent
+// of Prosody in the Jitsi stack, with NATS for the coordination.
 //
-// Deux réglages conditionnent le fait que les appels FONCTIONNENT réellement :
-// la section de backend (sans elle, aucune connexion de client n'est acceptée)
-// et l'adresse TURN remise aux navigateurs (sans elle, le relais est
-// injoignable depuis Internet). Voir les commentaires dans la configuration.
+// Two settings condition whether calls actually WORK: the backend section
+// (without it, no client connection is accepted) and the TURN address handed
+// to the browsers (without it, the relay is unreachable from the Internet).
+// See the comments in the configuration.
 func deploySignaling(ctx context.Context) error {
-	fmt.Println("∙ signaling " + signalingImage + " (coordination, passe par Janus)")
+	fmt.Println("∙ signaling " + signalingImage + " (coordination, goes through Janus)")
 
-	// Configuration : le signaling connaît Janus, NATS, et le secret partagé
-	// avec Nextcloud (qui l'appelle pour authentifier les sessions).
-	// Configuration du signaling. La structure N'EST PAS devinable : elle a été
-	// relevée dans server.conf.in du dépôt upstream, après qu'une première
-	// version écrite de mémoire ait échoué au démarrage (« hash key is not set »).
+	// Configuration: the signaling knows Janus, NATS, and the secret shared
+	// with Nextcloud (which calls it to authenticate the sessions).
+	// Signaling configuration. The structure is NOT guessable: it was recorded
+	// from the upstream repo's server.conf.in, after a first version written
+	// from memory failed at startup ("hash key is not set").
 	//
-	// Les trois erreurs évitées ici :
-	//   - hashkey/blockkey vont dans [sessions], PAS dans [clients] ;
-	//   - le secret applicatif s'appelle internalsecret ([clients]), et le nom
-	//     du backend se déclare dans [backend] backends=... ;
-	//   - il n'existe PAS de section [backend.<nom>] en mode static — c'est un
-	//     réglage du mode etcd.
+	// The three errors avoided here:
+	//   - hashkey/blockkey go in [sessions], NOT in [clients];
+	//   - the app secret is called internalsecret ([clients]), and the backend
+	//     name is declared in [backend] backends=... ;
+	//   - there is NO [backend.<name>] section in static mode — that is an
+	//     etcd-mode setting.
 	config := fmt.Sprintf(`[http]
 listen = 0.0.0.0:%[1]d
 
 [app]
 debug = false
 
-# Clés de session : 32 octets exigés (le serveur refuse de démarrer sinon,
-# avec un message explicite « hash key should be 32 or 64 bytes »).
+# Session keys: 32 bytes required (the server refuses to start otherwise,
+# with an explicit message "hash key should be 32 or 64 bytes").
 [sessions]
 hashkey = $(HASH_KEY)
 blockkey = $(BLOCK_KEY)
 
-# Secret partagé avec Nextcloud : c'est LUI qui authentifie les requêtes entre
-# l'instance Nextcloud et ce serveur. Doit être identique des deux côtés.
+# Secret shared with Nextcloud: IT is the one that authenticates the requests
+# between the Nextcloud instance and this server. Must be identical on both
+# sides.
 [clients]
 internalsecret = $(SHARED_SECRET)
 
-# Coordination entre instances (une seule ici, mais NATS est requis).
+# Coordination between instances (only one here, but NATS is required).
 [nats]
 url = nats://nats:4222
 
-# Le SFU : Janus, joint en WebSocket.
+# The SFU: Janus, joined over WebSocket.
 [mcu]
 type = janus
 url = ws://janus:8188
 
-# Backend : l'instance Nextcloud qui nous appelle.
+# Backend: the Nextcloud instance that calls us.
 [backend]
 backends = nextcloud
 allowall = false
 secret = $(SHARED_SECRET)
 
-# LE BACKEND LUI-MÊME — SANS CETTE SECTION, AUCUN CLIENT NE PEUT SE CONNECTER.
+# THE BACKEND ITSELF — WITHOUT THIS SECTION, NO CLIENT CAN CONNECT.
 #
-# Le nom de section doit correspondre EXACTEMENT à un identifiant listé dans
-# « backends » ci-dessus. Son absence ne produit pas d'erreur fatale : le
-# serveur démarre, sert ses pages, accepte les requêtes — et refuse silencieusement
-# toute connexion de client :
+# The section name must match EXACTLY an identifier listed in "backends"
+# above. Its absence produces no fatal error: the server starts, serves its
+# pages, accepts requests — and silently refuses any client connection:
 #
 #   backend_storage_static.go:116: WARNING: No backends configured,
 #     client connections will not be possible.
 #
-# Le symptôme est trompeur : l'appelant croit à un problème de média (TURN, ICE)
-# alors que le serveur n'accepte aucune session. Les journaux de Nextcloud, eux,
-# restent parfaitement normaux — les deux clients échangent présence et messages,
-# seul le média ne s'établit jamais.
+# The symptom is misleading: the caller believes it is a media problem (TURN,
+# ICE) while the server accepts no session. Nextcloud's logs, on their side,
+# stay perfectly normal — both clients exchange presence and messages, only
+# the media never establishes.
 [nextcloud]
 urls = https://cloud.%[3]s
 
-# Relais TURN, avec identifiants temporaires générés par ce serveur.
+# TURN relay, with temporary credentials generated by this server.
 #
-# L'ADRESSE ICI EST CELLE QUE LES NAVIGATEURS VONT CONTACTER. Elle doit donc
-# être joignable depuis Internet. Un nom interne au cluster (« coturn ») ne
-# résout PAS dans le navigateur : le relais serait alors inutilisable dans le
-# seul cas où il sert — le participant derrière un NAT restrictif.
+# THE ADDRESS HERE IS THE ONE THE BROWSERS WILL CONTACT. It must therefore be
+# reachable from the Internet. A cluster-internal name ("coturn") does NOT
+# resolve in the browser: the relay would then be unusable in the only case
+# where it serves — the participant behind a restrictive NAT.
 #
-# On utilise le nom public de la plateforme plutôt que l'adresse IP : il reste
-# valable si l'adresse publique change. C'est le MÊME nom que celui déclaré
-# côté Nextcloud pour ses propres serveurs TURN.
+# We use the platform's public name rather than the IP address: it stays
+# valid if the public address changes. It is the SAME name as the one
+# declared on the Nextcloud side for its own TURN servers.
 [turn]
 apikey = $(SHARED_SECRET)
 secret = $(TURN_SECRET)
@@ -647,18 +651,18 @@ spec:
   template:
     metadata:
       labels: {app: talk-signaling}
-      # LES SECRETS SONT POSÉS PAR L'INJECTEUR D'OPENBAO.
+      # THE SECRETS ARE SET BY THE OPENBAO INJECTOR.
       annotations:
 %[5]s
     spec:
-      # C'EST CE ServiceAccount QUE LE RÔLE DU COFFRE DÉSIGNE.
+      # IT IS THIS ServiceAccount THAT THE VAULT ROLE DESIGNATES.
       serviceAccountName: talk
       containers:
       - name: signaling
         image: %[3]s
-        # Le fichier rendu est chargé AVANT le serveur : le signaling refuse de
-        # démarrer sans ses clés de session (« hash key is not set »), donc un
-        # secret manquant se voit tout de suite.
+        # The rendered file is loaded BEFORE the server: the signaling refuses
+        # to start without its session keys ("hash key is not set"), so a
+        # missing secret is visible right away.
         command: ["/bin/sh", "-c"]
         args:
         - |
@@ -690,58 +694,59 @@ spec:
 }
 
 // ---------------------------------------------------------------------------
-// Raccordement Nextcloud
+// Nextcloud wiring
 // ---------------------------------------------------------------------------
 
-// brancherNextcloud active l'application Talk et la raccorde au HPB.
+// brancherNextcloud enables the Talk app and wires it to the HPB.
 //
-// TOUT PASSE PAR « occ » : jamais de modification manuelle en base, jamais de
-// fichier de configuration édité à la main. C'est la seule façon d'obtenir un
-// état que Nextcloud considère comme cohérent.
+// EVERYTHING GOES THROUGH "occ": never a manual change in the database,
+// never a hand-edited configuration file. It is the only way to obtain a
+// state Nextcloud considers coherent.
 func brancherNextcloud(ctx context.Context) error {
-	fmt.Println("∙ activation de Talk + raccordement au HPB")
+	fmt.Println("∙ enabling Talk + wiring to the HPB")
 
-	// 1. Installer puis activer l'app (idempotent : « install » échoue si déjà
-	//    présente, on l'ignore ; « enable » est sans effet si déjà activée).
+	// 1. Install then enable the app (idempotent: "install" fails if
+	//    already present, we ignore it; "enable" has no effect if already
+	//    enabled).
 	_ = occ(ctx, "app:install", "spreed")
 	if err := occ(ctx, "app:enable", "spreed"); err != nil {
-		return fmt.Errorf("activation de Talk : %w", err)
+		return fmt.Errorf("enabling Talk: %w", err)
 	}
 
-	// 2. Déclarer le serveur de signalisation externe. Sans cette étape, Talk
-	//    fonctionne en connexions directes (~4-6 participants) et ignore le HPB.
+	// 2. Declare the external signaling server. Without this step, Talk runs
+	//    in direct connections (~4-6 participants) and ignores the HPB.
 	url := fmt.Sprintf("https://spreed.%s/standalone-signaling", domaineDe(ctx))
 	if err := occ(ctx, "config:app:set", "spreed", "signaling_server_url", "--value", url); err != nil {
-		return fmt.Errorf("URL du signaling : %w", err)
+		return fmt.Errorf("signaling URL: %w", err)
 	}
 
-	// 3. Les secrets du signaling, LUS AU COFFRE — source unique depuis que les
-	//    Secrets Kubernetes ont disparu. Le signaling lit la même entrée par son
-	//    agent : les deux côtés ne peuvent pas diverger.
+	// 3. The signaling secrets, READ FROM THE VAULT — single source since the
+	//    Kubernetes Secrets disappeared. The signaling reads the same entry
+	//    through its agent: the two sides cannot diverge.
 	entree, err := secrets.LireEntreeCoffre(ctx, secrets.DepuisEnvironnement(), "talk", "signaling")
 	if err != nil {
-		return fmt.Errorf("secrets Talk illisibles au coffre : %w", err)
+		return fmt.Errorf("Talk secrets unreadable in the vault: %w", err)
 	}
 	secret := entree["partage"]
 	if secret == "" {
-		return fmt.Errorf("secret partagé absent de l'entrée talk/signaling du coffre")
+		return fmt.Errorf("shared secret missing from the vault's talk/signaling entry")
 	}
 	if err := occ(ctx, "config:app:set", "spreed", "signaling_server_secret", "--value", secret); err != nil {
-		return fmt.Errorf("secret du signaling : %w", err)
+		return fmt.Errorf("signaling secret: %w", err)
 	}
 
-	// 4. Déclarer les serveurs TURN (natifs, pas de dépendance externe).
+	// 4. Declare the TURN servers (native, no external dependency).
 	serveurs := fmt.Sprintf("turn:talk.%s:%d?transport=udp,turn:talk.%s:%d?transport=tcp",
 		domaineDe(ctx), portTurn, domaineDe(ctx), portTurn)
 	if err := occ(ctx, "config:app:set", "spreed", "turn_servers", "--value", serveurs); err != nil {
-		return fmt.Errorf("serveurs TURN : %w", err)
+		return fmt.Errorf("TURN servers: %w", err)
 	}
 	turnSecret := entree["turn-secret"]
 	if turnSecret == "" {
-		return fmt.Errorf("secret TURN absent de l'entrée talk/signaling du coffre")
+		return fmt.Errorf("TURN secret missing from the vault's talk/signaling entry")
 	}
 	if err := occ(ctx, "config:app:set", "spreed", "turn_secret", "--value", turnSecret); err != nil {
-		return fmt.Errorf("secret TURN : %w", err)
+		return fmt.Errorf("TURN secret: %w", err)
 	}
 
 	return nil
@@ -751,7 +756,7 @@ func brancherNextcloud(ctx context.Context) error {
 // Helpers
 // ---------------------------------------------------------------------------
 
-// occ exécute une commande occ dans le pod Nextcloud.
+// occ runs an occ command in the Nextcloud pod.
 func occ(ctx context.Context, args ...string) error {
 	complet := append([]string{"exec", "-n", "ceffio-files", "deploy/nextcloud", "-c", "nextcloud", "--",
 		"php", "occ"}, args...)
@@ -764,11 +769,11 @@ func occ(ctx context.Context, args ...string) error {
 	return nil
 }
 
-// domaineDe déduit le domaine de déploiement depuis les ingress existants.
+// domaineDe infers the deployment domain from the existing ingresses.
 //
-// On ne le passe pas en paramètre : le seul hôte qui fait autorité est celui
-// réellement configuré dans le cluster. Lire l'ingress évite de dupliquer une
-// information qui pourrait diverger.
+// We do not pass it as a parameter: the only host with authority is the one
+// actually configured in the cluster. Reading the ingress avoids duplicating
+// information that could diverge.
 func domaineDe(ctx context.Context) string {
 	cmd := k8s.Command(ctx, "kubectl", "get", "ingress", "-n", "ceffio-files", "cloud",
 		"-o", "jsonpath={.spec.rules[0].host}")
@@ -805,7 +810,7 @@ func lireSecret(ctx context.Context, nom, cle string) (string, error) {
 	cmd.Env = k8s.Env()
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("lecture du secret %s/%s : %w", nom, cle, err)
+		return "", fmt.Errorf("reading secret %s/%s: %w", nom, cle, err)
 	}
 	dec, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(out)))
 	if err != nil {
@@ -827,7 +832,7 @@ func genSecret(n int) (string, error) {
 	return string(b), nil
 }
 
-// indentYaml indente un bloc de texte pour l'insérer dans un ConfigMap YAML.
+// indentYaml indents a text block to insert it into a YAML ConfigMap.
 func indentYaml(s string, n int) string {
 	pad := strings.Repeat(" ", n)
 	lignes := strings.Split(strings.TrimRight(s, "\n"), "\n")

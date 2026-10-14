@@ -1,20 +1,21 @@
-// Package expos publie une installation Ceffio derriere un pare-feu OPNsense.
+// Package expos publishes a Ceffio installation behind an OPNsense firewall.
 //
-// POURQUOI ce package existe : deployer Ceffio ne suffit pas a le rendre
-// joignable. Dans l'infrastructure cible, le pare-feu (OPNsense) termine le TLS
-// public et route vers la VM ; sans les domaines declares cote OPNsense, le DNS
-// repond mais rien n'arrive au cluster. C'etait une etape manuelle — elle est
-// desormais dans le CLI, parce qu'un deploiement qui laisse une etape manuelle
-// n'est pas reproductible.
+// WHY this package exists: deploying Ceffio is not enough to make it
+// reachable. In the target infrastructure, the firewall (OPNsense) terminates
+// the public TLS and routes to the VM; without the domains declared on the
+// OPNsense side, DNS answers but nothing reaches the cluster. It used to be a
+// manual step — it is now in the CLI, because a deployment that leaves a
+// manual step is not reproducible.
 //
-// Sequence complete d'une publication :
-//  1. le DNS publique existe (cree par l'utilisateur : *.ceffio.mandem-it.com) ;
-//  2. le certificat wildcard existe cote OPNsense (cree par l'utilisateur) ;
-//  3. les domaines + handlers sont declares dans os-caddy  <- ce package ;
-//  4. les hotes publics sont ajoutes aux Ingress Traefik <- internal/ingress.
+// Complete sequence of a publication:
+//  1. the public DNS exists (created by the user: *.ceffio.example.com);
+//  2. the wildcard certificate exists on the OPNsense side (created by the
+//     user);
+//  3. the domains + handlers are declared in os-caddy  <- this package;
+//  4. the public hosts are added to the Traefik Ingresses <- internal/ingress.
 //
-// L'authentification se fait par cle API OPNsense, lue depuis un fichier
-// (jamais en dur, jamais dans Git).
+// Authentication uses an OPNsense API key, read from a file (never hardcoded,
+// never in Git).
 package expos
 
 import (
@@ -32,29 +33,29 @@ import (
 	"time"
 )
 
-// Config décrit comment joindre le pare-feu et quoi publier.
+// Config describes how to reach the firewall and what to publish.
 type Config struct {
-	HoteAPI     string // ex. opn.datalock.mandem-it.com
-	FichierCle  string // fichier contenant key= / secret=
-	Domaine     string // domaine de base public, ex. ceffio.mandem-it.com
-	IPInterne   string // cible : IP de la VM qui porte Traefik
-	PortInterne string // ex. "80" (le TLS est termine cote pare-feu)
-	// CertificatRef : refId du certificat wildcard cote OPNsense. Si vide, il
-	// est cherche automatiquement par ses SAN.
+	HoteAPI     string // e.g. firewall-api.example.com
+	FichierCle  string // file containing key= / secret=
+	Domaine     string // public base domain, e.g. ceffio.example.com
+	IPInterne   string // target: IP of the VM that carries Traefik
+	PortInterne string // e.g. "80" (TLS is terminated on the firewall side)
+	// CertificatRef: refId of the wildcard certificate on the OPNsense side.
+	// If empty, it is looked up automatically by its SANs.
 	CertificatRef string
-	SousDomaines  []string // ex. cloud, keycloak, office, admin
+	SousDomaines  []string // e.g. cloud, keycloak, office, admin
 }
 
-// Resultat rend compte de ce qui a été fait — et de ce qui existait déjà.
+// Resultat reports what was done — and what already existed.
 type Resultat struct {
 	Certificat   string   `json:"certificat"`
-	Creés        []string `json:"crees"`
+	Created      []string `json:"crees"`
 	Existants    []string `json:"existants"`
 	Applique     bool     `json:"applique"`
 	Avertissemts []string `json:"avertissements,omitempty"`
 }
 
-// client minimal pour l'API OPNsense.
+// Minimal client for the OPNsense API.
 type client struct {
 	hote string
 	auth string
@@ -70,12 +71,11 @@ func newClient(cfg Config) (*client, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Le fichier peut utiliser « key= » ou « key: », avec espaces eventuels :
-	// une extraction trop stricte retourne une chaine vide, et une cle vide ne
-	// produit pas d'erreur — juste des reponses vides, tres couteuses a
-	// diagnostiquer.
+	// The file may use "key=" or "key:", with optional spaces: an overly
+	// strict extraction returns an empty string, and an empty key produces no
+	// error — just empty responses, very expensive to diagnose.
 	if len(cle) < 20 || len(secret) < 20 {
-		return nil, fmt.Errorf("identifiants OPNsense mal lus dans %s (key=%d car., secret=%d car.)",
+		return nil, fmt.Errorf("OPNsense credentials misread in %s (key=%d chars, secret=%d chars)",
 			cfg.FichierCle, len(cle), len(secret))
 	}
 	return &client{
@@ -84,8 +84,8 @@ func newClient(cfg Config) (*client, error) {
 		http: &http.Client{
 			Timeout: 30 * time.Second,
 			Transport: &http.Transport{
-				// Le pare-feu sert un certificat auto-signe : on ne peut pas
-				// le valider sans embarquer sa CA.
+				// The firewall serves a self-signed certificate: we cannot
+				// validate it without embedding its CA.
 				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 			},
 		},
@@ -95,12 +95,12 @@ func newClient(cfg Config) (*client, error) {
 func lireCredential(fichier, nom string) (string, error) {
 	b, err := os.ReadFile(fichier)
 	if err != nil {
-		return "", fmt.Errorf("lecture de %s : %w", fichier, err)
+		return "", fmt.Errorf("reading %s: %w", fichier, err)
 	}
 	re := regexp.MustCompile(`(?im)^\s*` + nom + `\s*[:=]\s*(\S+)`)
 	m := re.FindStringSubmatch(string(b))
 	if m == nil {
-		return "", fmt.Errorf("champ %q absent de %s", nom, fichier)
+		return "", fmt.Errorf("field %q missing from %s", nom, fichier)
 	}
 	return strings.TrimSpace(m[1]), nil
 }
@@ -119,8 +119,8 @@ func (c *client) appel(ctx context.Context, chemin, methode string, corps any) (
 		return "", err
 	}
 	req.Header.Set("Authorization", "Basic "+c.auth)
-	// Content-Type UNIQUEMENT s'il y a un corps : sur un GET, ce pare-feu
-	// repond « Invalid JSON syntax » et l'erreur ressemble a une API morte.
+	// Content-Type ONLY if there is a body: on a GET, this firewall answers
+	// "Invalid JSON syntax" and the error looks like a dead API.
 	if corps != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -133,7 +133,7 @@ func (c *client) appel(ctx context.Context, chemin, methode string, corps any) (
 	return string(b), nil
 }
 
-// Publier declare les domaines et leurs handlers, puis applique.
+// Publier declares the domains and their handlers, then applies.
 func Publier(ctx context.Context, cfg Config, progress func(string)) (*Resultat, error) {
 	if progress == nil {
 		progress = func(string) {}
@@ -145,19 +145,19 @@ func Publier(ctx context.Context, cfg Config, progress func(string)) (*Resultat,
 		return res, err
 	}
 
-	// 1. Verifier que le pare-feu repond — sur un point qui a TOUJOURS du
-	//    contenu : une reponse vide sur tous les chemins signale un mauvais hote.
+	// 1. Verify that the firewall answers — on a point that ALWAYS has
+	//    content: an empty response on all paths signals a wrong host.
 	out, err := cli.appel(ctx, "core/firmware/status", "GET", nil)
 	if err != nil || len(out) < 10 {
-		return res, fmt.Errorf("pare-feu injoignable sur %s (%v)", cfg.HoteAPI, err)
+		return res, fmt.Errorf("firewall unreachable at %s (%v)", cfg.HoteAPI, err)
 	}
 
-	// 2. Trouver le certificat wildcard qui couvre le domaine.
+	// 2. Find the wildcard certificate covering the domain.
 	cert := cfg.CertificatRef
 	if cert == "" {
 		out, err := cli.appel(ctx, "acmeclient/certificates/search", "GET", nil)
 		if err != nil {
-			return res, fmt.Errorf("lecture des certificats : %w", err)
+			return res, fmt.Errorf("reading certificates: %w", err)
 		}
 		var d struct {
 			Rows []struct {
@@ -167,7 +167,7 @@ func Publier(ctx context.Context, cfg Config, progress func(string)) (*Resultat,
 			} `json:"rows"`
 		}
 		if json.Unmarshal([]byte(out), &d) != nil {
-			return res, fmt.Errorf("reponse de certificats illisible")
+			return res, fmt.Errorf("certificate response unreadable")
 		}
 		for _, r := range d.Rows {
 			if strings.Contains(r.AltNames, cfg.Domaine) {
@@ -177,13 +177,13 @@ func Publier(ctx context.Context, cfg Config, progress func(string)) (*Resultat,
 		}
 	}
 	if cert == "" {
-		return res, fmt.Errorf("aucun certificat couvrant %s cote pare-feu (creez-le d'abord)", cfg.Domaine)
+		return res, fmt.Errorf("no certificate covering %s on the firewall (create it first)", cfg.Domaine)
 	}
 	res.Certificat = cert
-	progress("certificat : " + cert)
+	progress("certificate: " + cert)
 
-	// 3. Lister les domaines deja declares, pour ne pas creer de doublon
-	//    (un doublon FromDomain cree une entree conflictuelle).
+	// 3. List the domains already declared, so as not to create a duplicate
+	//    (a duplicate FromDomain creates a conflicting entry).
 	out, _ = cli.appel(ctx, "caddy/reverse_proxy/search_reverse_proxy", "GET", nil)
 	existants := map[string]string{}
 	var dr struct {
@@ -197,9 +197,9 @@ func Publier(ctx context.Context, cfg Config, progress func(string)) (*Resultat,
 			existants[r.FromDomain] = r.UUID
 		}
 	}
-	progress(fmt.Sprintf("%d domaines déjà déclarés sur le pare-feu", len(existants)))
+	progress(fmt.Sprintf("%d domains already declared on the firewall", len(existants)))
 
-	// 4. Creer chaque domaine + son handler.
+	// 4. Create each domain + its handler.
 	for _, sub := range cfg.SousDomaines {
 		hote := sub + "." + cfg.Domaine
 		if _, ok := existants[hote]; ok {
@@ -214,13 +214,13 @@ func Publier(ctx context.Context, cfg Config, progress func(string)) (*Resultat,
 			},
 		})
 		if err != nil {
-			return res, fmt.Errorf("création du domaine %s : %w", hote, err)
+			return res, fmt.Errorf("creating domain %s: %w", hote, err)
 		}
 		var rd struct {
 			UUID string `json:"uuid"`
 		}
 		if json.Unmarshal([]byte(out), &rd) != nil || rd.UUID == "" {
-			return res, fmt.Errorf("création du domaine %s refusée : %s", hote, tronque(out))
+			return res, fmt.Errorf("domain %s creation refused: %s", hote, tronque(out))
 		}
 
 		out, err = cli.appel(ctx, "caddy/reverse_proxy/add_handle", "POST", map[string]any{
@@ -228,31 +228,31 @@ func Publier(ctx context.Context, cfg Config, progress func(string)) (*Resultat,
 				"enabled": "1", "reverse": rd.UUID, "HandleType": "handle",
 				"HandleDirective": "reverse_proxy",
 				"ToDomain":        cfg.IPInterne, "ToPort": cfg.PortInterne,
-				// HttpTls "0" : la patte interne reste en HTTP, puisque le TLS
-				// public est termine par le pare-feu. Evite toute question de
-				// certificat auto-signe entre le pare-feu et la VM.
+				// HttpTls "0": the internal leg stays HTTP, since the public
+				// TLS is terminated by the firewall. Avoids any self-signed
+				// certificate question between the firewall and the VM.
 				"HttpTls": "0", "HttpTlsInsecureSkipVerify": "0",
 			},
 		})
 		if err != nil {
-			return res, fmt.Errorf("création du handler %s : %w", hote, err)
+			return res, fmt.Errorf("creating handler %s: %w", hote, err)
 		}
 		var rh struct {
 			UUID string `json:"uuid"`
 		}
 		if json.Unmarshal([]byte(out), &rh) != nil || rh.UUID == "" {
-			return res, fmt.Errorf("handler %s refusé : %s", hote, tronque(out))
+			return res, fmt.Errorf("handler %s refused: %s", hote, tronque(out))
 		}
 		progress("+ " + hote)
-		res.Creés = append(res.Creés, hote)
+		res.Created = append(res.Created, hote)
 	}
 
-	// 5. Appliquer — sans le Content-Type, comme pour tout POST sans corps.
+	// 5. Apply — without the Content-Type, as for every POST without a body.
 	if _, err := cli.appel(ctx, "caddy/service/reconfigure", "POST", nil); err != nil {
-		return res, fmt.Errorf("application de la configuration : %w", err)
+		return res, fmt.Errorf("applying configuration: %w", err)
 	}
 	res.Applique = true
-	progress("configuration appliquée")
+	progress("configuration applied")
 	return res, nil
 }
 

@@ -7,50 +7,49 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// newVaultCmd déploie le coffre de secrets SEUL.
+// newVaultCmd deploys the secrets vault ALONE.
 //
-// POURQUOI UNE COMMANDE SÉPARÉE, ET PAS SEULEMENT LE BLOC DE `install` : deux
-// raisons, toutes deux tirées de la réalité.
+// WHY A SEPARATE COMMAND, AND NOT JUST THE `install` BLOCK: two reasons, both
+// drawn from reality.
 //
-// D'abord, la chirurgie. `install` rejoue toute la pile. Sur une plateforme en
-// service, c'est disproportionné quand on ne veut que le coffre — et `install`
-// porte encore un défaut connu sur un cluster existant (il tente de recréer
-// `ceffio-dev` et échoue sur `update.k3s.io`). Déployer le coffre ne doit pas
-// dépendre de la remise en état du reste.
+// First, surgery. `install` replays the whole stack. On a platform in service,
+// that is disproportionate when we only want the vault — and `install` still
+// carries a known defect on an existing cluster (it attempts to recreate
+// `ceffio-dev` and fails on `update.k3s.io`). Deploying the vault must not
+// depend on the rest being repaired first.
 //
-// Ensuite, l'exploitation courante : un coffre qu'on ne peut pas redéployer seul
-// est un coffre qu'on n'ose pas toucher. Après une mise à niveau d'OpenBao, un
-// changement de configuration ou une rotation de la clé de descellement, c'est
-// cette commande qu'on veut avoir sous la main.
+// Then, day-to-day operations: a vault that cannot be redeployed alone is a
+// vault we do not dare touch. After an OpenBao upgrade, a configuration change
+// or a rotation of the unseal key, this is the command we want at hand.
 //
-// ELLE EST IDEMPOTENTE, comme le reste : la relancer ne détruit rien, ne
-// régénère aucune clé, et ne réinitialise pas un coffre déjà initialisé. La
-// réinitialiser rendrait les secrets existants illisibles.
+// IT IS IDEMPOTENT, like the rest: running it again destroys nothing,
+// regenerates no key, and does not reinitialize an already initialized vault.
+// Reinitializing it would make the existing secrets unreadable.
 func newVaultCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "vault",
-		Short: "Déployer le coffre de secrets (OpenBao)",
-		Long: `Déploie le coffre de secrets OpenBao de la suite, et le prépare à l'emploi.
+		Short: "Deploy the secrets vault (OpenBao)",
+		Long: `Deploys the suite's OpenBao secrets vault, and readies it for use.
 
-Le déploiement est idempotent et se fait dans cet ordre :
+The deployment is idempotent and happens in this order:
 
-  1. le namespace et la clé de descellement (32 octets, le « secret-zéro ») ;
-  2. la configuration : stockage raft, sceau statique, journal d'audit déclaré ;
-  3. le StatefulSet, son volume et son service ;
-  4. l'initialisation, seulement si le coffre ne l'est pas déjà ;
-  5. le moteur KV versionné, au chemin « kv » ;
-  6. une politique d'administration, un jeton dérivé, et la RÉVOCATION du jeton
-     racine — un jeton maître qui survit à la mise en place est un défaut ;
-  7. une vérification de bout en bout : écrire, relire, et prouver que le coffre
-     REFUSE un chemin hors du périmètre de la politique.
+  1. the namespace and the unseal key (32 bytes, the "zero-secret");
+  2. the configuration: raft storage, static seal, declared audit journal;
+  3. the StatefulSet, its volume and its service;
+  4. the initialization, only if the vault is not already initialized;
+  5. the versioned KV engine, at path "kv";
+  6. an administration policy, a derived token, and the REVOCATION of the root
+     token — a master token that survives the setup is a defect;
+  7. an end-to-end check: write, re-read, and prove that the vault REFUSES a
+     path outside the policy's perimeter.
 
-Ce que cette commande ne fait PAS, et qu'il faut savoir : elle ne bascule aucun
-secret existant vers le coffre. Les Secrets Kubernetes restent en place, et les
-composants continuent de les lire. C'est un déploiement, pas une migration.
+What this command does NOT do, and which must be known: it does not move any
+existing secret to the vault. The Kubernetes Secrets stay in place, and the
+components keep reading them. It is a deployment, not a migration.
 
-La clé de descellement vit dans un Secret Kubernetes, sur la même machine que le
-coffre : qui obtient la machine obtient le coffre. C'est le compromis du
-descellement automatique, assumé et écrit ici plutôt que découvert plus tard.`,
+The unseal key lives in a Kubernetes Secret, on the same machine as the vault:
+whoever gets the machine gets the vault. That is the compromise of automatic
+unsealing, accepted and written down here rather than discovered later.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			domaine, _ := cmd.Flags().GetString("domain")
@@ -58,25 +57,25 @@ descellement automatique, assumé et écrit ici plutôt que découvert plus tard
 
 			fmt.Println()
 			if !res.Pret {
-				// Sortie en erreur, mais sans drame : c'est un constat, pas un
-				// échec du déploiement de la suite. Les secrets restent dans
-				// Kubernetes et tout continue de fonctionner.
-				return fmt.Errorf("le coffre n'est pas en service — les secrets restent dans Kubernetes")
+				// Error exit, but without drama: it is a statement of fact,
+				// not a failure of the suite's deployment. The secrets stay in
+				// Kubernetes and everything keeps working.
+				return fmt.Errorf("the vault is not in service — secrets stay in Kubernetes")
 			}
 
-			fmt.Println("✓ Coffre de secrets en service")
-			fmt.Printf("  adresse : %s\n", res.Adresse)
-			fmt.Println("  jeton   : rangé dans le Secret openbao-token (non affiché)")
+			fmt.Println("✓ Secrets vault in service")
+			fmt.Printf("  address: %s\n", res.Adresse)
+			fmt.Println("  token   : stored in the openbao-token Secret (not shown)")
 			fmt.Println()
-			fmt.Println("Pour que les composants s'en servent, exporter :")
+			fmt.Println("For the components to use it, export:")
 			fmt.Printf("  BAO_ADDR=%s\n", res.Adresse)
-			fmt.Println("  BAO_TOKEN=<lu depuis le Secret openbao-token>")
+			fmt.Println("  BAO_TOKEN=<read from the openbao-token Secret>")
 			return nil
 		},
 	}
-	// MÊME DÉFAUT QUE `install`, ET POUR LA MÊME RAISON : le domaine de
-	// production est *.ceffio.mandem-it.com jusqu'à nouvel ordre. Surchargeable
-	// pour un autre environnement.
-	c.Flags().String("domain", "ceffio.mandem-it.com", "Domaine de base (ex. company.fr)")
+	// SAME DEFAULT AS `install`, AND FOR THE SAME REASON: the production
+	// domain is *.ceffio.example.com until further notice. Overridable for
+	// another environment.
+	c.Flags().String("domain", "ceffio.example.com", "Base domain (e.g. company.fr)")
 	return c
 }

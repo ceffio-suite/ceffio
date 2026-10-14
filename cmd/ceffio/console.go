@@ -21,29 +21,31 @@ func newConsoleCmd() *cobra.Command {
 	var deployer bool
 	cmd := &cobra.Command{
 		Use:   "console",
-		Short: "Console d'administration Ceffio (dashboard + utilisateurs SSO)",
+		Short: "Ceffio administration console (dashboard + SSO users)",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, args []string) error {
-			// LES SECRETS VIENNENT DU COFFRE, par le fichier que l'injecteur a rendu.
-			// L'image de la console ne contient aucun shell : elle ne peut donc pas
-			// « sourcer » ce fichier, elle le lit. Sans injection, le fichier est
-			// absent et rien n'est posé — c'est le comportement attendu hors cluster.
+			// THE SECRETS COME FROM THE VAULT, through the file the injector
+			// made available. The console image contains no shell: it
+			// therefore cannot "source" this file, it reads it. Without
+			// injection, the file is absent and nothing is set — that is the
+			// expected behavior outside the cluster.
 			if err := secrets.ChargerDepuisFichier("/secrets/env"); err != nil {
 				return err
 			}
 			if domain == "" {
-				return fmt.Errorf("--domain est requis")
+				return fmt.Errorf("--domain is required")
 			}
-			// DÉPLOIEMENT DANS LE CLUSTER : on s'arrête ici.
+			// DEPLOYMENT INTO THE CLUSTER: we stop here.
 			//
-			// Générer une clé n'aurait pas de sens dans ce cas — celle de la
-			// console vit dans un Secret, et c'est le déploiement qui la crée ou
-			// la réutilise. En fabriquer une ici, puis l'afficher, donnerait une
-			// clé qui n'ouvre rien : la panne la plus déroutante, puisqu'elle
-			// ressemble à un jeton valide.
+			// Generating a key would make no sense in this case — the
+			// console's lives in a Secret, and it is the deployment that
+			// creates or reuses it. Making one here, then printing it, would
+			// give a key that opens nothing: the most bewildering outage,
+			// since it looks like a valid token.
 			if deployer {
-				// Le coffre doit être résolu AVANT : la clé d'administration de la
-				// console s'y lit et s'y écrit, il n'y a plus de Secret Kubernetes.
+				// The vault must be resolved BEFORE: the console's
+				// administration key is read from and written to it, there is
+				// no Kubernetes Secret anymore.
 				resoudreCoffre(c)
 				return console.Deploy(c.Context(), domain)
 			}
@@ -55,7 +57,7 @@ func newConsoleCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				fmt.Println("Aucune clé fournie → clé générée :")
+				fmt.Println("No key provided → generated key:")
 				fmt.Println(k)
 				apiKey = k
 			}
@@ -63,15 +65,15 @@ func newConsoleCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			log.Printf("Console Ceffio démarrée sur %s (admin.<%s>)", addr, domain)
+			log.Printf("Ceffio console started on %s (admin.<%s>)", addr, domain)
 			return http.ListenAndServe(addr, srv.Handler())
 		},
 	}
-	cmd.Flags().StringVar(&domain, "domain", "", "Domaine public (ex. demo.local)")
-	cmd.Flags().StringVar(&addr, "addr", ":8088", "Adresse d'écoute")
-	cmd.Flags().StringVar(&apiKey, "key", "", "Jeton admin (sinon généré)")
+	cmd.Flags().StringVar(&domain, "domain", "", "Public domain (e.g. demo.local)")
+	cmd.Flags().StringVar(&addr, "addr", ":8088", "Listen address")
+	cmd.Flags().StringVar(&apiKey, "key", "", "Admin token (generated otherwise)")
 	cmd.Flags().BoolVar(&deployer, "deploy", false,
-		"Déployer la console dans le cluster (au lieu de la lancer sur cette machine)")
+		"Deploy the console into the cluster (instead of running it on this machine)")
 	return cmd
 }
 

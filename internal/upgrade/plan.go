@@ -1,15 +1,15 @@
-// Package upgrade met à niveau une installation Ceffio.
+// Package upgrade upgrades a Ceffio installation.
 //
-// Une mise à niveau n'est acceptable que si elle est réversible. Ce package
-// impose donc trois étapes avant toute modification :
+// An upgrade is only acceptable if it is reversible. This package therefore
+// imposes three steps before any modification:
 //
-//  1. un préflight — la cible est-elle saine, et qu'est-ce qui tourne
-//     réellement (comparé au registre de versions, pas à une supposition) ;
-//  2. une sauvegarde — obligatoire, et vérifiée : sans archive exploitable,
-//     aucun retour arrière n'est possible ;
-//  3. un plan — ce qui changerait, affiché avant d'agir.
+//  1. a preflight — is the target healthy, and what is actually running
+//     (compared against the version registry, not a guess);
+//  2. a backup — mandatory, and verified: without a usable archive, no
+//     rollback is possible;
+//  3. a plan — what would change, displayed before acting.
 //
-// Sans ces trois étapes, un `upgrade` est un pari.
+// Without these three steps, an `upgrade` is a gamble.
 package upgrade
 
 import (
@@ -24,16 +24,16 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/version"
 )
 
-// Etat décrit ce qui tourne, par composant.
+// Etat describes what is running, per component.
 type Etat struct {
 	Nom       string `json:"nom"`
 	Installee string `json:"installee"`
 	Cible     string `json:"cible"`
 	Ecart     bool   `json:"ecart"`
-	Depuis    string `json:"depuis,omitempty"` // image réellement en service
+	Depuis    string `json:"depuis,omitempty"` // image actually in service
 }
 
-// Plan est le résultat du préflight : ce qui changerait, et les blocages.
+// Plan is the result of the preflight: what would change, and the blockers.
 type Plan struct {
 	Etats       []Etat   `json:"etats"`
 	Changements []Etat   `json:"changements"`
@@ -41,63 +41,63 @@ type Plan struct {
 	Alertes     []string `json:"alertes"`
 	Pret        bool     `json:"pret"`
 	ClusterOK   bool     `json:"cluster_ok"`
-	NœudsPrets  int      `json:"noeuds_prets"`
-	NœudsTotal  int      `json:"noeuds_total"`
+	NoeudsPrets int      `json:"noeuds_prets"`
+	NoeudsTotal int      `json:"noeuds_total"`
 }
 
-// Preparer construit le plan de mise à niveau.
+// Preparer builds the upgrade plan.
 //
-// Il ne modifie RIEN : c'est un diagnostic. `upgrade` ne doit jamais toucher à
-// une installation avant d'avoir montré ce qu'il fera.
+// It modifies NOTHING: it is a diagnostic. `upgrade` must never touch an
+// installation before showing what it will do.
 func Preparer(ctx context.Context, cible []version.Composant) *Plan {
 	p := &Plan{Etats: []Etat{}, Changements: []Etat{}, Blocages: []string{}, Alertes: []string{}}
 
-	// 1. Le cluster répond-il, et est-il sain ? Monter une version sur un
-	//    cluster dégradé empêche de distinguer la panne d'origine de celle
-	//    qu'on vient d'introduire.
+	// 1. Does the cluster respond, and is it healthy? Upgrading a version on
+	//    a degraded cluster makes it impossible to tell the original outage
+	//    from the one we just introduced.
 	nodes, introuvables := imagesEnService(ctx)
-	p.NœudsTotal, p.NœudsPrets = noeuds(ctx)
-	if p.NœudsTotal == 0 {
-		p.Blocages = append(p.Blocages, "Cluster injoignable : impossible de préparer une mise à niveau.")
+	p.NoeudsTotal, p.NoeudsPrets = noeuds(ctx)
+	if p.NoeudsTotal == 0 {
+		p.Blocages = append(p.Blocages, "Cluster unreachable: cannot prepare an upgrade.")
 		return p
 	}
 	p.ClusterOK = true
-	if p.NœudsPrets < p.NœudsTotal {
+	if p.NoeudsPrets < p.NoeudsTotal {
 		p.Blocages = append(p.Blocages,
-			fmt.Sprintf("Nœuds non prêts (%d/%d) : corriger l'état du cluster avant de mettre à niveau.",
-				p.NœudsPrets, p.NœudsTotal))
+			fmt.Sprintf("Nodes not ready (%d/%d): fix the cluster state before upgrading.",
+				p.NoeudsPrets, p.NoeudsTotal))
 	}
 
-	// 2. Pods en difficulté : une mise à niveau sur une base instable ne permet
-	//    pas d'attribuer une panne à sa cause.
+	// 2. Pods in trouble: an upgrade on an unstable base does not allow
+	//    attributing an outage to its cause.
 	if noms := podsEnDifficulte(ctx); len(noms) > 0 {
 		p.Blocages = append(p.Blocages,
-			fmt.Sprintf("%d pod(s) en difficulté : %s — stabiliser d'abord.",
+			fmt.Sprintf("%d pod(s) in trouble: %s — stabilize first.",
 				len(noms), strings.Join(noms, ", ")))
 	}
 
-	// 3. Cohérence du registre : une image sans tag pinné interdit toute
-	//    comparaison de versions (on ne saurait pas ce qu'on installe).
+	// 3. Registry consistency: an image without a pinned tag forbids any
+	//    version comparison (we would not know what we are installing).
 	for _, pb := range version.VerifierCoherence() {
 		p.Blocages = append(p.Blocages, pb)
 	}
 
-	// 4. Comparaison composant par composant : ce qui tourne vs la cible.
+	// 4. Component-by-component comparison: what is running vs the target.
 	for _, c := range cible {
 		e := Etat{Nom: c.Nom, Cible: c.Version}
 		if img, ok := nodes[c.Nom]; ok {
 			e.Installee = version.TagDe(img)
 			e.Depuis = img
 		}
-		// Un composant absent n'est pas un écart : c'est une couche non
-		// installée (visio sans --video). Le signaler sans bloquer — mais le
-		// signaler TOUJOURS : un composant qu'on ne sait pas lire ne doit pas
-		// passer pour conforme (c'était le défaut de la première version, qui
-		// déclarait « aucun écart » alors qu'une image différente tournait).
+		// A missing component is not a drift: it is an uninstalled layer
+		// (video without --video). Report it without blocking — but ALWAYS
+		// report it: a component we cannot read must not pass as compliant
+		// (that was the flaw of the first version, which reported "no
+		// drift" while a different image was running).
 		if e.Installee == "" {
-			raison := "non déployé sur cette installation"
+			raison := "not deployed on this installation"
 			if _, vu := introuvables[c.Nom]; vu {
-				raison = "image non identifiable sur cette installation"
+				raison = "image not identifiable on this installation"
 			}
 			p.Alertes = append(p.Alertes, fmt.Sprintf("%s : %s", c.Nom, raison))
 		} else if e.Installee != e.Cible {
@@ -112,21 +112,20 @@ func Preparer(ctx context.Context, cible []version.Composant) *Plan {
 	return p
 }
 
-// imagesEnService lit, pour chaque composant connu, l'image réellement utilisée
-// par les pods en cours. On interroge l'API Kubernetes plutôt que de relire les
-// fichiers du dépôt : c'est la seule façon de voir une dérive entre ce que le
-// code déclare et ce qui tourne.
-// imagesEnService lit l'inventaire RÉEL des images en service.
+// imagesEnService reads, for each known component, the image actually used
+// by the running pods. We query the Kubernetes API rather than re-reading
+// the repository files: that is the only way to see drift between what the
+// code declares and what is running.
+// imagesEnService reads the REAL inventory of images in service.
 //
-// Première version, et pourquoi elle était fausse : elle cherchait, pour chaque
-// composant, un pod dont l'image contenait un fragment prédéfini (« redis: »,
-// « keycloak », …). Deux défauts : le fragment était deviné, et l'absence de
-// correspondance était ignorée en silence — la comparaison sautait le composant
-// et `upgrade` déclarait « aucun écart » alors qu'une image différente tournait.
+// First version, and why it was wrong: for each component, it looked for a
+// pod whose image contained a predefined fragment ("redis:", "keycloak", …).
+// Two flaws: the fragment was guessed, and a missing match was silently
+// ignored — the comparison skipped the component and `upgrade` reported "no
+// drift" while a different image was running.
 //
-// Désormais : on lit TOUTES les images des pods ceffio-*, et on les fait
-// correspondre par nom. Ce qui n'est pas trouvé est signalé comme tel, au lieu
-// de passer pour conforme.
+// Now: we read ALL the images of the ceffio-* pods, and match them by name.
+// What is not found is reported as such, instead of passing as compliant.
 func imagesEnService(ctx context.Context) (map[string]versionImage, map[string]versionImage) {
 	trouvees := map[string]versionImage{}
 
@@ -151,8 +150,9 @@ func imagesEnService(ctx context.Context) (map[string]versionImage, map[string]v
 		return trouvees, nil
 	}
 
-	// On collecte toutes les images des namespaces ceffio-* (et des opérateurs).
-	toutes := map[string]string{} // nom de conteneur -> image
+	// We collect all the images from the ceffio-* namespaces (and the
+	// operators).
+	toutes := map[string]string{} // container name -> image
 	for _, p := range doc.Items {
 		ns := p.Metadata.Namespace
 		if !strings.HasPrefix(ns, "ceffio-") && ns != "cnpg-system" && ns != "cert-manager" {
@@ -160,14 +160,14 @@ func imagesEnService(ctx context.Context) (map[string]versionImage, map[string]v
 		}
 		for _, c := range p.Spec.Containers {
 			toutes[c.Name] = c.Image
-			// On indexe aussi par image, pour les correspondances par sous-chaîne.
+			// We also index by image, for substring matching.
 			toutes["img:"+c.Image] = c.Image
 		}
 	}
 
-	// Correspondance nom de composant -> fragments d'image acceptables.
-	// Plusieurs fragments par composant : le nom du conteneur varie selon la
-	// façon dont l'application est empaquetée.
+	// Component name -> acceptable image fragments.
+	// Several fragments per component: the container name varies with how
+	// the application is packaged.
 	regles := map[string][]string{
 		"keycloak":       {"keycloak"},
 		"nextcloud":      {"nextcloud"},
@@ -199,7 +199,7 @@ func imagesEnService(ctx context.Context) (map[string]versionImage, map[string]v
 	return trouvees, inconnues
 }
 
-// versionImage est un alias de chaîne, pour la lisibilité des signatures.
+// versionImage is a string alias, for signature readability.
 type versionImage = string
 
 func noeuds(ctx context.Context) (total, prets int) {
@@ -253,7 +253,7 @@ func podsEnDifficulte(ctx context.Context) []string {
 		if !strings.HasPrefix(p.Metadata.Namespace, "ceffio-") {
 			continue
 		}
-		// Un job terminé n'est pas une difficulté.
+		// A finished job is not trouble.
 		if p.Status.Phase == "Succeeded" {
 			continue
 		}

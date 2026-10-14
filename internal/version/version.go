@@ -1,17 +1,17 @@
-// Package version recense les versions d'images et de charts déployées par
-// Ceffio. C'est la source unique de vérité pour :
+// Package version records the image and chart versions deployed by Ceffio.
+// It is the single source of truth for:
 //
-//   - « qu'est-ce que cette installation fait tourner, exactement ? » (status) ;
-//   - « qu'est-ce qui changerait si je montais de version ? » (upgrade).
+//   - "what exactly is this installation running?" (status);
+//   - "what would change if I upgraded?" (upgrade).
 //
-// Avant ce registre, chaque module portait ses constantes d'image dans son coin
-// (files.nextcloudImage, identity.keycloakImage…). Cela suffisait pour déployer,
-// mais rendait impossible toute comparaison : une commande de mise à niveau n'a
-// rien à comparer si elle doit lire neuf fichiers.
+// Before this registry, each module carried its image constants in its own
+// corner (files.nextcloudImage, identity.keycloakImage…). It was enough to
+// deploy, but made any comparison impossible: an upgrade command has nothing
+// to compare if it must read nine files.
 //
-// Règle : les versions sont PINÉES et jamais `latest`. Un composant qui suit
-// `latest` ne peut pas être mis à niveau de façon reproductible — on ne sait ni
-// ce qui tourne avant, ni ce qui tournera après.
+// Rule: versions are PINNED and never `latest`. A component following
+// `latest` cannot be upgraded reproducibly — we know neither what runs
+// before, nor what will run after.
 package version
 
 import (
@@ -20,67 +20,67 @@ import (
 	"strings"
 )
 
-// Composant décrit un élément déployé et sa version épinglée.
+// Composant describes a deployed element and its pinned version.
 type Composant struct {
-	Nom     string `json:"nom"`     // nom lisible (keycloak, nextcloud…)
-	Image   string `json:"image"`   // référence complète, tag inclus
-	Module  string `json:"module"`  // package Go qui le déploie
-	Role    string `json:"role"`    // à quoi il sert, en une ligne
-	Version string `json:"version"` // tag extrait, pour comparaison
+	Nom     string `json:"nom"`     // readable name (keycloak, nextcloud…)
+	Image   string `json:"image"`   // full reference, tag included
+	Module  string `json:"module"`  // Go package that deploys it
+	Role    string `json:"role"`    // what it is for, in one line
+	Version string `json:"version"` // extracted tag, for comparison
 }
 
-// Registry est l'inventaire par défaut, aligné sur le code de déploiement.
-// Toute modification d'une image dans un module DOIT être répercutée ici : la
-// fonction VerifierCoherence() le contrôle et le test le vérifie.
+// Registry is the default inventory, aligned with the deployment code.
+// Any change of an image in a module MUST be reflected here: the
+// VerifierCoherence() function checks it and the test verifies it.
 var Registry = []Composant{
 	{
 		Nom: "keycloak", Image: "quay.io/keycloak/keycloak:26.7.3",
-		Module: "internal/identity", Role: "identité, SSO OIDC",
+		Module: "internal/identity", Role: "identity, OIDC SSO",
 	},
 	{
 		Nom: "nextcloud", Image: "docker.io/library/nextcloud:34.0.3",
-		Module: "internal/files", Role: "fichiers et documents",
+		Module: "internal/files", Role: "files and documents",
 	},
 	{
 		Nom: "talk-signaling", Image: "docker.io/strukturag/nextcloud-spreed-signaling:2.1.1",
-		Module: "internal/talk", Role: "Talk : coordination des sessions",
+		Module: "internal/talk", Role: "Talk: session coordination",
 	},
 	{
 		Nom: "janus", Image: "ghcr.io/ceffio-suite/janus-gateway:1.3.0-1",
-		Module: "internal/talk", Role: "Talk : SFU, transport du média",
+		Module: "internal/talk", Role: "Talk: SFU, media transport",
 	},
 	{
 		Nom: "coturn", Image: "docker.io/coturn/coturn:4.18",
-		Module: "internal/talk", Role: "Talk : relais TURN/STUN",
+		Module: "internal/talk", Role: "Talk: TURN/STUN relay",
 	},
 	{
 		Nom: "nats", Image: "docker.io/library/nats:2.15",
-		Module: "internal/talk", Role: "Talk : messagerie du signaling",
+		Module: "internal/talk", Role: "Talk: signaling messaging",
 	},
 	{
 		Nom: "openbao", Image: "docker.io/openbao/openbao:2.7.1",
-		Module: "internal/vault", Role: "coffre de secrets : centralisation, rotation, audit",
+		Module: "internal/vault", Role: "secrets vault: centralization, rotation, audit",
 	},
 	{
 		Nom: "onlyoffice", Image: "docker.io/onlyoffice/documentserver:9.4.0.1",
-		Module: "internal/office", Role: "édition de documents",
+		Module: "internal/office", Role: "document editing",
 	},
 	{
 		Nom: "redis", Image: "redis:7.4.11",
-		Module: "internal/data", Role: "cache et état partagé",
+		Module: "internal/data", Role: "cache and shared state",
 	},
 	{
 		Nom: "stalwart", Image: "docker.io/stalwartlabs/stalwart:v0.16.26",
-		Module: "internal/mail", Role: "messagerie : SMTP entrant, IMAP, filtres",
+		Module: "internal/mail", Role: "mail: inbound SMTP, IMAP, filters",
 	},
 }
 
-// Charts Helm utilisés pour la plateforme (opérateurs).
+// Helm charts used by the platform (operators).
 var Charts = []Composant{
 	{Nom: "cloudnative-pg", Image: "cloudnative-pg:0.29.0", Module: "internal/data",
-		Role: "opérateur PostgreSQL", Version: "0.29.0"},
+		Role: "PostgreSQL operator", Version: "0.29.0"},
 	{Nom: "cert-manager", Image: "cert-manager:v1.21.1", Module: "internal/platform",
-		Role: "gestion des certificats TLS", Version: "v1.21.1"},
+		Role: "TLS certificate management", Version: "v1.21.1"},
 }
 
 func init() {
@@ -89,26 +89,26 @@ func init() {
 	}
 }
 
-// TagDe expose l'extraction de tag (utilisée aussi par `upgrade` pour comparer
-// ce qui tourne avec la cible).
+// TagDe exposes tag extraction (also used by `upgrade` to compare
+// what runs with the target).
 func TagDe(image string) string { return tagDe(image) }
 
-// tagDe extrait le tag d'une référence d'image.
-// « docker.io/library/nextcloud:34.0.3 » → « 34.0.3 ».
-// Renvoie "" si l'image n'a pas de tag (donc implicite : latest).
+// tagDe extracts the tag from an image reference.
+// "docker.io/library/nextcloud:34.0.3" → "34.0.3".
+// Returns "" if the image has no tag (thus implicit: latest).
 func tagDe(image string) string {
 	i := strings.LastIndex(image, ":")
 	if i < 0 {
 		return ""
 	}
 	tag := image[i+1:]
-	if strings.Contains(tag, "/") { // le ':' appartient au registre (host:port)
+	if strings.Contains(tag, "/") { // the ':' belongs to the registry (host:port)
 		return ""
 	}
 	return tag
 }
 
-// ParNom retrouve un composant.
+// ParNom finds a component.
 func ParNom(nom string) (Composant, bool) {
 	for _, c := range Registry {
 		if c.Nom == nom {
@@ -118,16 +118,17 @@ func ParNom(nom string) (Composant, bool) {
 	return Composant{}, false
 }
 
-// ImageDe rend la référence d'image d'un composant du registre.
+// ImageDe returns the image reference of a registry component.
 //
-// POURQUOI CE POINT D'ENTRÉE UNIQUE : plusieurs modules ont besoin de l'image du
-// COFFRE — pas pour le déployer, mais pour y exécuter un client dont la version
-// doit correspondre EXACTEMENT à celle du serveur. Deux références écrites à deux
-// endroits divergent à la première mise à jour, et la divergence se manifeste par
-// un échec d'authentification, pas par un message qui dit quoi corriger.
+// WHY THIS SINGLE ENTRY POINT: several modules need the VAULT image — not to
+// deploy it, but to run a client there whose version must EXACTLY match the
+// server's. Two references written in two places diverge at the first update,
+// and the divergence shows up as an authentication failure, not as a message
+// saying what to fix.
 //
-// Rend une chaîne vide si le composant est inconnu : l'appelant décide quoi en
-// faire, plutôt que de recevoir une référence inventée qui échouerait plus tard.
+// Returns an empty string if the component is unknown: the caller decides
+// what to do with it, rather than receiving an invented reference that would
+// fail later.
 func ImageDe(nom string) string {
 	if c, ok := ParNom(nom); ok {
 		return c.Image
@@ -135,7 +136,7 @@ func ImageDe(nom string) string {
 	return ""
 }
 
-// Noms renvoie les noms de composants, triés (pour l'affichage et les tests).
+// Noms returns the component names, sorted (for display and tests).
 func Noms() []string {
 	out := make([]string, 0, len(Registry))
 	for _, c := range Registry {
@@ -145,40 +146,40 @@ func Noms() []string {
 	return out
 }
 
-// VerifierCoherence contrôle qu'aucune image ne suit `latest` ni un tag
-// implicite : sans tag figé, une mise à niveau n'est pas reproductible.
+// VerifierCoherence checks that no image follows `latest` nor an implicit
+// tag: without a pinned tag, an upgrade is not reproducible.
 func VerifierCoherence() []string {
 	var problemes []string
 	for _, c := range Registry {
 		if c.Version == "" {
 			problemes = append(problemes,
-				fmt.Sprintf("%s : image sans tag explicite (%s) — version non reproductible", c.Nom, c.Image))
+				fmt.Sprintf("%s: image without an explicit tag (%s) — non-reproducible version", c.Nom, c.Image))
 			continue
 		}
 		if c.Version == "latest" || c.Version == "stable" {
 			problemes = append(problemes,
-				fmt.Sprintf("%s : tag %q flottant — pinné requis en production", c.Nom, c.Version))
+				fmt.Sprintf("%s: floating tag %q — pinned required in production", c.Nom, c.Version))
 		}
 	}
 	return problemes
 }
 
-// Comparer indique, pour chaque composant, la version installée et celle du
-// registre. Utilisé par `upgrade` pour montrer ce qui changerait.
+// Comparer indicates, for each component, the installed version and the one
+// from the registry. Used by `upgrade` to show what would change.
 type Ecart struct {
 	Nom       string
 	Installee string
 	Cible     string
 }
 
-// VerifierImagesInstallees extrait les versions réellement en service depuis les
-// images des pods. C'est ce qui rend `upgrade` honnête : il ne compare pas deux
-// listes de fichiers, il compare ce qui TOURNE avec ce que le code déploierait.
+// ExtraireImages extracts the versions actually in service from the pod
+// images. This is what makes `upgrade` honest: it does not compare two file
+// lists, it compares what RUNS with what the code would deploy.
 func ExtraireImages(podsJSON string) map[string]string {
 	out := map[string]string{}
-	// Analyse volontairement tolérante : on cherche les paires image/version
-	// sans dépendre d'un décodage JSON complet, car la fonction est aussi
-	// utilisée sur des sorties partielles.
+	// Deliberately tolerant parsing: we look for image/version pairs without
+	// depending on a full JSON decoding, because the function is also used on
+	// partial outputs.
 	for _, ligne := range strings.Split(podsJSON, "\n") {
 		ligne = strings.TrimSpace(ligne)
 		if ligne == "" {

@@ -1,9 +1,9 @@
-// Package sso orchestre l'authentification unique (SSO) via Keycloak sur les
-// applications de la suite : création idempotente des clients OIDC (Nextcloud,
-// Synapse) dans le realm ceffio et stockage de leurs secrets en Kubernetes.
+// Package sso orchestrates single sign-on (SSO) via Keycloak for the suite's
+// applications: idempotent creation of the OIDC clients (Nextcloud, Synapse) in
+// the ceffio realm and storage of their secrets in Kubernetes.
 //
-// Secrets générés au runtime, jamais en Git. Réutilisables à volonté
-// (idempotence : si le secret k8s existe, on ne touche à rien).
+// Secrets generated at runtime, never in Git. Freely reusable
+// (idempotence: if the k8s secret exists, nothing is touched).
 package sso
 
 import (
@@ -33,15 +33,15 @@ type client struct {
 	redirects string
 }
 
-// clientsOIDC construit la liste des clients avec le domaine COURANT.
+// clientsOIDC builds the client list with the CURRENT domain.
 //
-// Une redirect_uri doit être joignable par le NAVIGATEUR : les adresses
-// internes du cluster (svc.cluster.local) et les anciens domaines de démo
-// (demo.local) n'ont rien à y faire. Elles traînaient pourtant ici, figées —
-// un vestige de l'installation d'origine.
+// A redirect_uri must be reachable by the BROWSER: cluster-internal addresses
+// (svc.cluster.local) and the old demo domains (demo.local) have no business
+// being there. Yet they were lingering here, hardcoded — a leftover from the
+// original installation.
 //
-// Chaque application reçoit son adresse publique, plus localhost pour le
-// développement local.
+// Each application gets its public address, plus localhost for local
+// development.
 func clientsOIDC(domain string) []client {
 	return []client{
 		{
@@ -50,31 +50,30 @@ func clientsOIDC(domain string) []client {
 			redirects: fmt.Sprintf("https://cloud.%s/apps/user_oidc/code,http://localhost/*", domain),
 		},
 		{
-			// LE COFFRE A UN CLIENT À LUI, et deux adresses de retour : celle de
-			// l'interface web, et celle de la ligne de commande. Ce ne sont pas
-			// les mêmes chemins — la ligne de commande ouvre un petit serveur
-			// local (8250) pour recevoir la réponse, puisqu'elle n'est pas un
-			// navigateur.
+			// THE VAULT HAS A CLIENT OF ITS OWN, and two return addresses: the one for
+			// the web interface, and the one for the command line. They are not the
+			// same paths — the command line opens a small local server (8250) to
+			// receive the response, since it is not a browser.
 			app: "openbao",
 			id:  "openbao",
 			redirects: fmt.Sprintf(
 				"https://bao.%s/ui/vault/auth/oidc/oidc/callback,https://bao.%s/vault/auth/oidc/oidc/callback,http://localhost:8250/oidc/callback",
 				domain, domain),
 		},
-		// NB : pas de client « jitsi » — Jitsi est en accès libre (SSO retiré
-		// le 2026-10-09, voir internal/media/sans_sso.go). Les installations
-		// existantes le voient supprimé par SupprimerClientOIDC.
+		// NB: no "jitsi" client — Jitsi is in free access (SSO removed on
+		// 2026-10-09, see internal/media/sans_sso.go). Existing installations
+		// see it removed by SupprimerClientOIDC.
 	}
 }
 
-// EnsureOIDCClients garantit l'existence des clients OIDC Keycloak (nextcloud,
-// synapse) avec un secret généré stocké en secret Kubernetes. Idempotent et
-// auto-réparant : recrée un client absent (en réutilisant le secret stocké),
-// et (re)pose le secret si manquant.
+// EnsureOIDCClients guarantees the existence of the Keycloak OIDC clients
+// (nextcloud, synapse) with a generated secret stored as a Kubernetes secret.
+// Idempotent and self-healing: recreates a missing client (reusing the stored
+// secret), and (re)lays down the secret if it is missing.
 func EnsureOIDCClients(ctx context.Context, domain string) error {
-	fmt.Println("Déploiement du SSO Keycloak (Phase 8)...")
+	fmt.Println("Deploying the Keycloak SSO (Phase 8)...")
 	if domain == "" {
-		return fmt.Errorf("domaine requis pour construire les redirect_uri OIDC")
+		return fmt.Errorf("domain required to build the OIDC redirect_uri")
 	}
 	for _, c := range clientsOIDC(domain) {
 		existant := secretExists(ctx, c.app+"-oidc")
@@ -82,43 +81,43 @@ func EnsureOIDCClients(ctx context.Context, domain string) error {
 			return err
 		}
 		if !existant {
-			fmt.Printf("∙ client OIDC %s créé (secret → %s-oidc)\n", c.id, c.app)
+			fmt.Printf("∙ OIDC client %s created (secret → %s-oidc)\n", c.id, c.app)
 		} else {
-			fmt.Printf("∙ client OIDC %s réconcilié (secret → %s-oidc)\n", c.id, c.app)
+			fmt.Printf("∙ OIDC client %s reconciled (secret → %s-oidc)\n", c.id, c.app)
 		}
 	}
-	fmt.Println("✓ Clients OIDC Keycloak prêts")
+	fmt.Println("✓ Keycloak OIDC clients ready")
 	return nil
 }
 
-// assurerUnClient crée le client s'il manque, (re)pose son secret dans Keycloak,
-// et range le tout dans un Secret Kubernetes.
+// assurerUnClient creates the client if missing, (re)sets its secret in
+// Keycloak, and stores the whole thing in a Kubernetes Secret.
 //
-// FACTORISÉ PARCE QU'IL SERT DEUX FOIS : à l'installation complète, et au
-// déploiement du coffre seul. Recopier ces quatre étapes aurait suffi à ce que
-// les deux chemins divergent à la première correction.
+// FACTORED BECAUSE IT SERVES TWICE: for the full installation, and for the
+// standalone vault deployment. Copying these four steps would have been enough
+// for the two paths to diverge at the first fix.
 func assurerUnClient(ctx context.Context, c client) error {
 	uuid, err := ensureClient(ctx, c.id, c.redirects)
 	if err != nil {
-		return fmt.Errorf("client OIDC %s: %w", c.id, err)
+		return fmt.Errorf("OIDC client %s: %w", c.id, err)
 	}
-	// Réutilise le secret existant (les apps pointent dessus), sinon génère.
+	// Reuses the existing secret (the apps point at it), otherwise generates one.
 	//
-	// LA VALEUR EST REPRISE DU COFFRE, ET ELLE NE CHANGE PAS : ce secret est connu de
-	// Keycloak ET de l'application qui s'y connecte. En régénérer un casserait
-	// l'authentification entre les deux, et le symptôme serait un échec de connexion
-	// parfaitement muet sur la cause.
+	// THE VALUE IS TAKEN FROM THE VAULT, AND IT DOES NOT CHANGE: this secret is
+	// known to Keycloak AND to the application connecting to it. Regenerating one
+	// would break authentication between the two, and the symptom would be a
+	// connection failure perfectly silent about the cause.
 	//
-	// L'ORDRE DES SOURCES COMPTE, et il n'est pas arbitraire : le coffre d'abord,
-	// puis KEYCLOAK LUI-MÊME — c'est lui qui fait autorité sur le secret de son
-	// propre client, et le relire là évite d'en inventer un nouveau alors que
-	// l'application se connecte encore avec l'ancien. Générer n'est que le dernier
-	// recours, quand ni le coffre ni Keycloak ne savent.
+	// THE ORDER OF SOURCES MATTERS, and it is not arbitrary: the vault first,
+	// then KEYCLOAK ITSELF — it is the authority on its own client's secret, and
+	// re-reading it there avoids inventing a new one while the application still
+	// connects with the old one. Generating is only the last resort, when neither
+	// the vault nor Keycloak knows.
 	secretVal, ok := lireClientOIDC(ctx, c.app)
 	if !ok {
 		if depuisKeycloak, errKC := lireSecretClientKeycloak(ctx, uuid); errKC == nil && depuisKeycloak != "" {
 			secretVal, ok = depuisKeycloak, true
-			fmt.Printf("∙ client OIDC %s : secret repris depuis Keycloak (absent du coffre)\n", c.id)
+			fmt.Printf("∙ OIDC client %s: secret taken back from Keycloak (absent from the vault)\n", c.id)
 		}
 	}
 	if !ok {
@@ -128,12 +127,12 @@ func assurerUnClient(ctx context.Context, c client) error {
 		}
 	}
 	if err := setClientSecret(ctx, uuid, secretVal); err != nil {
-		return fmt.Errorf("secret client %s: %w", c.id, err)
+		return fmt.Errorf("client secret %s: %w", c.id, err)
 	}
 	return ecrireClientOIDC(ctx, c.app, c.id, secretVal)
 }
 
-// lireClientOIDC lit le client OIDC dans le COFFRE.
+// lireClientOIDC reads the OIDC client from the VAULT.
 func lireClientOIDC(ctx context.Context, app string) (string, bool) {
 	entree, err := secrets.LireEntreeCoffre(ctx, secrets.DepuisEnvironnement(), app, "oidc")
 	if err != nil {
@@ -143,12 +142,12 @@ func lireClientOIDC(ctx context.Context, app string) (string, bool) {
 	return v, v != ""
 }
 
-// lireSecretClientKeycloak relit le secret d'un client AUPRÈS DE KEYCLOAK.
+// lireSecretClientKeycloak re-reads a client's secret FROM KEYCLOAK.
 //
-// POURQUOI CETTE SOURCE EXISTE : le coffre peut être en retard sur Keycloak — il est
-// une copie de référence, pas le registre d'authentification. Quand les deux ont
-// divergé, c'est Keycloak qui dit juste, puisque c'est avec lui que les applications
-// s'authentifient.
+// WHY THIS SOURCE EXISTS: the vault may lag behind Keycloak — it is a reference
+// copy, not the authentication registry. When the two have diverged, Keycloak
+// is the one that is right, since it is the one the applications authenticate
+// against.
 func lireSecretClientKeycloak(ctx context.Context, uuid string) (string, error) {
 	out, err := runKcadm(ctx, "get", "clients/"+uuid+"/client-secret")
 	if err != nil {
@@ -158,31 +157,31 @@ func lireSecretClientKeycloak(ctx context.Context, uuid string) (string, error) 
 		Value string `json:"value"`
 	}
 	if err := json.Unmarshal([]byte(out), &reponse); err != nil {
-		return "", fmt.Errorf("réponse de Keycloak illisible : %w", err)
+		return "", fmt.Errorf("unreadable Keycloak response: %w", err)
 	}
 	return reponse.Value, nil
 }
 
-// ecrireClientOIDC range le client OIDC au coffre, à l'emplacement du composant.
+// ecrireClientOIDC stores the OIDC client in the vault, at the component's location.
 func ecrireClientOIDC(ctx context.Context, app, id, secret string) error {
 	return secrets.EcrireDansCoffre(ctx, secrets.DepuisEnvironnement(), app, "oidc",
 		map[string]string{"client-id": id, "client-secret": secret})
 }
 
-// AssurerClientCoffre garantit le client OIDC du coffre, et lui seul.
+// AssurerClientCoffre guarantees the vault's OIDC client, and it alone.
 //
-// EXPORTÉE PARCE QUE LE COFFRE EN A BESOIN À SON PROPRE DÉPLOIEMENT : `ceffio
-// vault` doit pouvoir être relancé seul, sans rejouer toute la pile — c'est même
-// sa raison d'être. La connaissance de Keycloak reste dans ce paquet ; le module
-// du coffre demande le client et lit le Secret qui en résulte, plutôt que de
-// parler à Keycloak lui-même.
+// EXPORTED BECAUSE THE VAULT NEEDS IT AT ITS OWN DEPLOYMENT: `ceffio vault` must
+// be re-runnable on its own, without replaying the whole stack — that is even
+// its raison d'être. Knowledge of Keycloak stays in this package; the vault
+// module asks for the client and reads the resulting Secret, rather than
+// talking to Keycloak itself.
 func AssurerClientCoffre(ctx context.Context, domain string) error {
 	for _, c := range clientsOIDC(domain) {
 		if c.id == "openbao" {
 			return assurerUnClient(ctx, c)
 		}
 	}
-	return fmt.Errorf("client OIDC « openbao » absent de la liste : le coffre ne peut pas s'authentifier")
+	return fmt.Errorf("OIDC client \"openbao\" absent from the list: the vault cannot authenticate")
 }
 
 func ensureClient(ctx context.Context, clientID, redirects string) (string, error) {
@@ -201,7 +200,7 @@ func ensureClient(ctx context.Context, clientID, redirects string) (string, erro
 	}
 	id := parseID(out)
 	if id == "" {
-		return "", fmt.Errorf("création client %s sans id: %s", clientID, out)
+		return "", fmt.Errorf("client creation %s without id: %s", clientID, out)
 	}
 	return id, nil
 }
@@ -236,29 +235,30 @@ func parseID(out string) string {
 	return re.FindString(out)
 }
 
-// runKcadm exécute kcadm.sh dans le pod Keycloak et renvoie la sortie combinée.
+// runKcadm runs kcadm.sh in the Keycloak pod and returns the combined output.
 //
-// LES IDENTIFIANTS D'ADMINISTRATION VIENNENT DU COFFRE, plus de l'environnement du
-// pod. La migration de Keycloak vers l'injecteur d'OpenBao a retiré KC_BOOTSTRAP_ADMIN_*
-// du déploiement : ils ne vivent plus que dans le fichier rendu, que seule la commande
-// de démarrage source. TOUT CE QUI S'EXÉCUTE ENSUITE dans le conteneur ne les voit
-// donc plus — kcadm compris. La connexion partait avec un utilisateur VIDE et
-// répondait « Invalid user credentials », un message qui ne dit rien de la cause.
+// ADMIN CREDENTIALS COME FROM THE VAULT, not from the pod environment. The
+// Keycloak migration to the OpenBao injector removed KC_BOOTSTRAP_ADMIN_* from
+// the deployment: they now live only in the rendered file, which only the
+// startup command sources. EVERYTHING RUNNING AFTERWARDS in the container no
+// longer sees them — kcadm included. The connection went out with an EMPTY user
+// and answered "Invalid user credentials", a message that says nothing about
+// the cause.
 //
-// LE MOT DE PASSE PASSE PAR L'ENTRÉE STANDARD, jamais par la ligne de commande : un
-// argument se lit dans /proc/<pid>/cmdline, et inspecter un processus ne doit pas
-// suffire à révéler un secret.
+// THE PASSWORD TRAVELS THROUGH STANDARD INPUT, never through the command line: an
+// argument is readable in /proc/<pid>/cmdline, and inspecting a process must not
+// be enough to reveal a secret.
 func runKcadm(ctx context.Context, args ...string) (string, error) {
 	entree, err := secrets.LireEntreeCoffre(ctx, secrets.DepuisEnvironnement(), "keycloak", "admin")
 	if err != nil {
-		return "", fmt.Errorf("identifiants d'administration Keycloak illisibles au coffre : %w", err)
+		return "", fmt.Errorf("Keycloak admin credentials unreadable in the vault: %w", err)
 	}
 	utilisateur, motdepasse := entree["username"], entree["password"]
 	if utilisateur == "" || motdepasse == "" {
-		return "", fmt.Errorf("entrée keycloak/admin incomplète au coffre (username et password requis)")
+		return "", fmt.Errorf("incomplete keycloak/admin vault entry (username and password required)")
 	}
-	// Injecte -r <realm> après le verbe : les clients OIDC vivent dans le realm
-	// applicatif (ceffio), PAS master (realm admin de config credentials).
+	// Injects -r <realm> after the verb: OIDC clients live in the application
+	// realm (ceffio), NOT master (the admin realm of config credentials).
 	quoted := make([]string, 0, len(args)+3)
 	for i, a := range args {
 		quoted = append(quoted, "'"+strings.ReplaceAll(a, "'", `'\''`)+"'")
@@ -276,11 +276,11 @@ func runKcadm(ctx context.Context, args ...string) (string, error) {
 	cmd.Stdin = strings.NewReader(motdepasse + "\n")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		// L'ERREUR DOIT PORTER CE QUE LA COMMANDE A DIT. Un « exit status 1 » seul
-		// ne dit rien : kcadm écrit la cause dans sa sortie, et la jeter oblige à
-		// reproduire la commande à la main pour la lire — ce qui a coûté une heure.
+		// THE ERROR MUST CARRY WHAT THE COMMAND SAID. A bare "exit status 1" says
+		// nothing: kcadm writes the cause in its output, and discarding it forces
+		// reproducing the command by hand to read it — which cost an hour.
 		return strings.TrimSpace(string(out)),
-			fmt.Errorf("kcadm %s : %w — %s", args[0], err, strings.TrimSpace(string(out)))
+			fmt.Errorf("kcadm %s: %w — %s", args[0], err, strings.TrimSpace(string(out)))
 	}
 	return strings.TrimSpace(string(out)), nil
 }
@@ -322,26 +322,26 @@ func genSecret(n int) (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// SupprimerClientOIDC supprime un client OIDC du realm applicatif et son
-// secret Kubernetes associé. Idempotent : un client ou un secret absent
-// n'est pas une erreur.
+// SupprimerClientOIDC deletes an OIDC client from the application realm and its
+// associated Kubernetes secret. Idempotent: a missing client or secret is not
+// an error.
 //
-// Utilisé par le retrait du SSO Jitsi : le client « jitsi » servait à
-// l'adaptateur OIDC, supprimé avec lui.
+// Used by the Jitsi SSO removal: the "jitsi" client served the OIDC adapter,
+// removed along with it.
 func SupprimerClientOIDC(ctx context.Context, clientID string) error {
 	uuid, err := clientUUID(ctx, clientID)
 	if err != nil {
-		// clientUUID échoue aussi quand le client n'existe pas : dans ce cas
-		// il n'y a rien à supprimer.
+		// clientUUID also fails when the client does not exist: in that case
+		// there is nothing to delete.
 		return nil
 	}
 	if uuid != "" {
 		if out, err := runKcadm(ctx, "delete", "clients/"+uuid); err != nil {
-			return fmt.Errorf("suppression client %s: %w: %s", clientID, err, out)
+			return fmt.Errorf("client removal %s: %w: %s", clientID, err, out)
 		}
 	}
-	// PLUS DE SECRET KUBERNETES À RETIRER : le client vit au coffre, à
-	// kv/ceffio/<composant>/oidc. Rien à effacer ici — et surtout pas le coffre,
-	// qui doit survivre à la suppression d'un client qu'on recréera peut-être.
+	// NO MORE KUBERNETES SECRET TO REMOVE: the client lives in the vault, at
+	// kv/ceffio/<component>/oidc. Nothing to erase here — and above all not the
+	// vault, which must survive the deletion of a client we may recreate.
 	return nil
 }

@@ -1,0 +1,57 @@
+name: Bug report
+description: Something deployed with Ceffio does not behave as documented
+title: "[bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to report this. Please redact any real
+        domain, IP address or secret before submitting — issues are public and
+        indexed by search engines within hours.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Exact output, not a paraphrase.
+      placeholder: Paste the command output here.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The command(s) you ran.
+      placeholder: ceffio <command> ...
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: What you already checked
+      description: The output of `ceffio doctor` belongs here — it exists to answer this.
+  - type: input
+    id: version
+    attributes:
+      label: Ceffio version
+      description: The release tag you installed, or `ceffio --version`.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Linux distribution and kernel, Kubernetes/K3s version, NAT/firewall topology.
+  - type: checkboxes
+    id: redacted
+    attributes:
+      label: Confirmation
+      options:
+        - label: I have redacted real domains, IPs and secrets from this report.
+          required: true

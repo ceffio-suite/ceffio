@@ -11,27 +11,27 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// newFilesCmd déploie la couche fichiers (Nextcloud) SEULE.
+// newFilesCmd deploys the files layer (Nextcloud) ALONE.
 //
-// AVEC --domain, la commande VA JUSQU'AU RACCORDEMENT SSO. Sans ce drapeau, elle
-// s'arrête au déploiement — ce qui laissait sans recours quand seul le SSO était
-// cassé : la fonction de raccordement n'était appelée que par l'installation
-// complète, jamais par la commande du composant concerné.
+// WITH --domain, the command GOES ALL THE WAY TO THE SSO HOOKUP. Without this
+// flag, it stops at the deployment — which left no recourse when only the SSO
+// was broken: the hookup function was only called by the full installation,
+// never by the command of the concerned component.
 func newFilesCmd() *cobra.Command {
 	var domain string
 	cmd := &cobra.Command{
 		Use:   "files",
-		Short: "Déployer la couche fichiers (Nextcloud) seule",
-		Long: `Déploie Nextcloud et son stockage.
+		Short: "Deploy the files layer (Nextcloud) alone",
+		Long: `Deploys Nextcloud and its storage.
 
-SES IDENTIFIANTS VIENNENT DU COFFRE, ET DE NULLE PART AILLEURS : ceux de la base, et
-ceux du compte d'administration. Le pod ne fait que lire un fichier que l'injecteur
-compose à partir de plusieurs entrées — la base et l'administration sont deux comptes
-distincts, et le conteneur n'a pas à connaître cette répartition.
+ITS CREDENTIALS COME FROM THE VAULT, AND FROM NOWHERE ELSE: the database's, and
+the administration account's. The pod only reads a file that the injector
+composes from several entries — the database and the administration are two
+distinct accounts, and the container does not need to know this split.
 
-AVEC --domain, raccorde aussi Nextcloud au SSO Keycloak (app user_oidc + fournisseur).
-La commande RELIT ensuite ce qui a été enregistré et échoue si le fournisseur n'a pas
-ses identifiants : un fournisseur vide laisse une page de connexion en 404.`,
+WITH --domain, also hooks Nextcloud to the Keycloak SSO (user_oidc app + provider).
+The command then RE-READS what was recorded and fails if the provider lacks its
+credentials: an empty provider leaves a login page at 404.`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(c *cobra.Command, args []string) error {
@@ -46,19 +46,19 @@ ses identifiants : un fournisseur vide laisse une page de connexion en 404.`,
 		},
 	}
 	cmd.Flags().StringVar(&domain, "domain", "",
-		"Raccorder aussi le SSO (ex. ceffio.mandem-it.com) ; sans ce drapeau, déploiement seul")
+		"Also hook up the SSO (e.g. ceffio.example.com); without this flag, deployment only")
 	return cmd
 }
 
-// newIdentityCmd déploie la couche identité (Keycloak) SEULE.
+// newIdentityCmd deploys the identity layer (Keycloak) ALONE.
 func newIdentityCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "identity",
-		Short: "Déployer la couche identité (Keycloak) seule",
-		Long: `Déploie Keycloak, qui porte l'authentification de toute la suite.
+		Short: "Deploy the identity layer (Keycloak) alone",
+		Long: `Deploys Keycloak, which carries the authentication of the whole suite.
 
-Mêmes règles que pour les fichiers : les identifiants de base et le compte
-d'administration viennent du coffre, et le pod les lit par l'injecteur.`,
+Same rules as for files: the database credentials and the administration
+account come from the vault, and the pod reads them through the injector.`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(c *cobra.Command, args []string) error {
@@ -68,23 +68,23 @@ d'administration viennent du coffre, et le pod les lit par l'injecteur.`,
 	}
 }
 
-// resoudreCoffre place l'accès au coffre dans l'environnement, avant toute lecture.
+// resoudreCoffre puts vault access into the environment, before any read.
 //
-// Sans cette résolution, les modules échoueraient à lire comme à écrire, et le
-// message d'erreur parlerait de coffre injoignable sans dire pourquoi.
+// Without this resolution, the modules would fail at both reading and writing,
+// and the error message would speak of an unreachable vault without saying why.
 func resoudreCoffre(c *cobra.Command) {
 	client, err := k8sapi.Nouveau()
 	if err != nil {
-		fmt.Printf("  ∙ client Kubernetes indisponible (%v)\n", err)
+		fmt.Printf("  ∙ Kubernetes client unavailable (%v)\n", err)
 		return
 	}
 	adresse, jeton, err := vault.Acces(c.Context(), client)
 	if err != nil {
-		fmt.Printf("  ∙ coffre non résolu (%v) — la commande va échouer : c'est voulu\n", err)
+		fmt.Printf("  ∙ vault unresolved (%v) — the command is going to fail: that is intended\n", err)
 		return
 	}
 	os.Setenv("BAO_ADDR", adresse)
 	os.Setenv("BAO_TOKEN", jeton)
 	os.Setenv("BAO_MOTEUR", "kv")
-	fmt.Printf("  ∙ coffre : %s (source unique des secrets)\n", adresse)
+	fmt.Printf("  ∙ vault: %s (single source of secrets)\n", adresse)
 }

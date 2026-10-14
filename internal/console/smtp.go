@@ -1,21 +1,21 @@
-// Package console — configuration du SMTP de la plateforme.
+// Package console — SMTP configuration of the platform.
 //
-// POURQUOI DANS LA CONSOLE ET PAS DANS LE CODE :
-// Le SMTP est un réglage d'EXPLOITATION, pas de déploiement. Chaque organisation
-// a son serveur mail, ses identifiants, son expéditeur. Le figer dans `ceffio
-// install` obligerait à redéployer pour changer une adresse, et mettrait un mot
-// de passe dans le code. Sa place est donc dans l'interface, où l'administrateur
-// le configure, le TESTE et le sauvegarde.
+// WHY IN THE CONSOLE AND NOT IN THE CODE:
+// SMTP is an OPERATIONS setting, not a deployment one. Each organization has
+// its mail server, its credentials, its sender. Freezing it in `ceffio
+// install` would force a redeployment to change an address, and would put a
+// password in the code. Its place is therefore in the interface, where the
+// administrator configures, TESTS and saves it.
 //
-// Ce que le SMTP sert : les mails que Nextcloud envoie LUI-MÊME — invitation à
-// un partage, réinitialisation de mot de passe, notifications. Ce n'est PAS le
-// compte de l'app Mail, qui lit les boîtes de l'utilisateur (IMAP/SMTP de ses
-// propres comptes). Les deux sont indépendants.
+// What SMTP serves: the mails Nextcloud sends ITSELF — share invitations,
+// password reset, notifications. It is NOT the Mail app account, which reads
+// the user's mailboxes (IMAP/SMTP of their own accounts). The two are
+// independent.
 //
-// LE TEST AVANT SAUVEGARDE est le point clé : une configuration SMTP non testée
-// ne vaut rien. Le test ouvre un vrai dialogue avec le serveur (connexion,
-// STARTTLS, authentification, envoi) et rapporte ce qui a échoué, étape par
-// étape. On ne se contente pas d'un « erreur » : on dit OÙ ça casse.
+// THE TEST BEFORE SAVE is the key point: an untested SMTP configuration is
+// worthless. The test opens a real dialogue with the server (connection,
+// STARTTLS, authentication, send) and reports what failed, step by step. We
+// do not settle for a bare "error": we say WHERE it breaks.
 package console
 
 import (
@@ -40,25 +40,25 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/secrets"
 )
 
-// SmtpConfig est la configuration SMTP telle que l'interface la manipule.
+// SmtpConfig is the SMTP configuration as the interface manipulates it.
 //
-// Le mot de passe n'est JAMAIS renvoyé au navigateur : on dit seulement s'il est
-// défini (`MotDePasseDefini`). Une valeur de secret ne doit pas voyager vers une
-// page web, même pour l'afficher.
+// The password is NEVER sent back to the browser: we only say whether it is
+// set (`MotDePasseDefini`). A secret value must not travel to a web page, not
+// even to display it.
 type SmtpConfig struct {
 	Hote             string `json:"hote"`
 	Port             int    `json:"port"`
-	Securite         string `json:"securite"` // "tls" (STARTTLS), "ssl", "aucune"
+	Securite         string `json:"securite"` // "tls" (STARTTLS), "ssl", "aucune" (none)
 	Utilisateur      string `json:"utilisateur"`
 	MotDePasseDefini bool   `json:"mot_de_passe_defini"`
 	Expediteur       string `json:"expediteur"`
 	NomExpediteur    string `json:"nom_expediteur,omitempty"`
 }
 
-// handleSmtp lit ou écrit la configuration SMTP.
+// handleSmtp reads or writes the SMTP configuration.
 //
-//	GET  /api/smtp   → la configuration actuelle (sans le mot de passe)
-//	POST /api/smtp   → enregistre (et pose le Secret si un mot de passe est fourni)
+//	GET  /api/smtp   → the current configuration (without the password)
+//	POST /api/smtp   → saves (and sets the Secret if a password is provided)
 func (s *Server) handleSmtp(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -80,11 +80,11 @@ func (s *Server) handleSmtp(w http.ResponseWriter, r *http.Request) {
 			NomExpediteur string `json:"nom_expediteur"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&entree); err != nil {
-			apiErr(w, 400, "JSON illisible : "+err.Error())
+			apiErr(w, 400, "unreadable JSON: "+err.Error())
 			return
 		}
 		if entree.Hote == "" || entree.Utilisateur == "" {
-			apiErr(w, 400, "le serveur et l'utilisateur sont requis")
+			apiErr(w, 400, "server and user are required")
 			return
 		}
 		if entree.Port == 0 {
@@ -93,13 +93,12 @@ func (s *Server) handleSmtp(w http.ResponseWriter, r *http.Request) {
 		if entree.Securite == "" {
 			entree.Securite = "tls"
 		}
-		// VÉRIFICATION AVANT SAUVEGARDE.
+		// VERIFICATION BEFORE SAVE.
 		//
-		// On teste la configuration SAISIE avant de l'enregistrer. Sans cela,
-		// une faute de frappe part en production et coupe l'envoi de mails de
-		// toute l'instance — l'utilisateur ne s'en aperçoit qu'après coup.
-		// Le test se fait avec le mot de passe saisi, ou celui déjà enregistré
-		// si le champ a été laissé vide.
+		// We test the ENTERED configuration before saving it. Without this, a
+		// typo goes to production and cuts mail sending for the whole instance
+		// — the user only notices afterwards. The test runs with the entered
+		// password, or the already saved one if the field was left empty.
 		mdpTest := entree.MotDePasse
 		if mdpTest == "" {
 			if mdp, err := s.motDePasseSmtp(r); err == nil {
@@ -113,13 +112,13 @@ func (s *Server) handleSmtp(w http.ResponseWriter, r *http.Request) {
 		etapes, errTest := testerSmtp(entree.Hote, entree.Port, entree.Securite,
 			entree.Utilisateur, mdpTest, entree.Expediteur, destinataire, 25*time.Second)
 		if errTest != nil {
-			// On N'ENREGISTRE PAS : on renvoie le detail pour que l'utilisateur
-			// corrige et reessaie, sans avoir rien casse.
+			// We do NOT SAVE: we return the detail so the user corrects and
+			// retries, without having broken anything.
 			writeJSON(w, 200, map[string]any{
 				"ok":      false,
 				"etapes":  etapes,
 				"erreur":  errTest.Error(),
-				"message": "configuration NON enregistrée : le test a échoué",
+				"message": "configuration NOT saved: the test failed",
 			})
 			return
 		}
@@ -133,24 +132,24 @@ func (s *Server) handleSmtp(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{
 			"ok":      true,
 			"etapes":  etapes,
-			"message": "Test réussi, configuration enregistrée",
+			"message": "Test passed, configuration saved",
 		})
 
 	default:
-		apiErr(w, 405, "méthode non autorisée")
+		apiErr(w, 405, "method not allowed")
 	}
 }
 
-// handleSmtpTester teste la configuration SANS l'enregistrer.
+// handleSmtpTester tests the configuration WITHOUT saving it.
 //
 // POST /api/smtp/tester
 //
-// C'est le point important : on teste ce qui est SAISI, pas ce qui est déjà
-// enregistré — sinon l'utilisateur ajuste, teste, se trompe, et découvre le
-// problème après avoir sauvegardé.
+// This is the important point: we test what is ENTERED, not what is already
+// saved — otherwise the user adjusts, tests, gets it wrong, and discovers the
+// problem after saving.
 func (s *Server) handleSmtpTester(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		apiErr(w, 405, "méthode non autorisée")
+		apiErr(w, 405, "method not allowed")
 		return
 	}
 
@@ -168,22 +167,22 @@ func (s *Server) handleSmtpTester(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Si aucun mot de passe n'est fourni, on reprend celui déjà enregistré :
-	// l'utilisateur qui teste une config existante ne doit pas le ressaisir.
+	// If no password is provided, we take the already saved one:
+	// the user testing an existing config should not retype it.
 	if entree.MotDePasse == "" {
 		mdp, err := s.motDePasseSmtp(r)
 		if err != nil {
-			// Ne pas masquer l'erreur : sans ce message, l'utilisateur voit
-			// « identifiants refusés » alors que le mot de passe n'a jamais pu
-			// être relu — deux problèmes très différents.
-			log.Printf("smtp: relecture du mot de passe enregistré impossible : %v", err)
+			// Do not mask the error: without this message, the user sees
+			// "credentials refused" while the password could never be read
+			// back — two very different problems.
+			log.Printf("smtp: cannot re-read the saved password: %v", err)
 		} else {
 			entree.MotDePasse = mdp
 		}
 	}
 	if entree.Destinataire == "" {
-		// Par défaut : l'expéditeur lui-même. Un test qui part et revient à
-		// soi-même prouve la chaîne complète sans dépendre d'une autre boîte.
+		// By default: the sender itself. A test that leaves and comes back to
+		// oneself proves the full chain without depending on another mailbox.
 		entree.Destinataire = entree.Expediteur
 	}
 
@@ -198,30 +197,30 @@ func (s *Server) handleSmtpTester(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
-// Lecture / écriture de la configuration
+// Reading / writing the configuration
 // ---------------------------------------------------------------------------
 
 func (s *Server) lireSmtp(r *http.Request) (*SmtpConfig, error) {
-	// On lit la configuration via occ : c'est la source de vérité, et cela évite
-	// de dupliquer la logique de lecture d'un fichier PHP.
+	// We read the configuration via occ: it is the source of truth, and it
+	// avoids duplicating the logic of reading a PHP file.
 	sortie, err := s.occSortie(r.Context(), "config:list", "system")
 	if err != nil {
-		return nil, fmt.Errorf("lecture de la configuration : %w", err)
+		return nil, fmt.Errorf("reading the configuration: %w", err)
 	}
-	// occ config:list system rend {"system": {...}} — le niveau "config" n'existe
-	// PAS. Lire le mauvais niveau donne une map vide, donc tous les champs
-	// apparaissent vides alors que la configuration est bien posée.
+	// occ config:list system returns {"system": {...}} — the "config" level
+	// does NOT exist. Reading the wrong level gives an empty map, so all the
+	// fields appear empty while the configuration is actually set.
 	var corps struct {
 		System map[string]any `json:"system"`
 	}
 	if err := json.Unmarshal([]byte(sortie), &corps); err != nil {
-		return nil, fmt.Errorf("réponse illisible : %w", err)
+		return nil, fmt.Errorf("unreadable response: %w", err)
 	}
 	sys := corps.System
 
-	// Pour les champs MASQUÉS par occ (les mail_smtp* contiennent le nom
-	// d'utilisateur, traité comme sensible), on interroge chaque clé
-	// individuellement — config:system:get rend la valeur réelle.
+	// For the fields MASKED by occ (the mail_smtp* contain the username,
+	// treated as sensitive), we query each key individually —
+	// config:system:get returns the real value.
 	lire := func(cle string) string {
 		v, err := s.occSortie(r.Context(), "config:system:get", cle)
 		if err != nil {
@@ -242,7 +241,7 @@ func (s *Server) lireSmtp(r *http.Request) (*SmtpConfig, error) {
 		Expediteur:    premier(lire("mail_from_address"), chaine(sys["mail_from_address"])),
 		NomExpediteur: premier(lire("mail_domain"), chaine(sys["mail_domain"])),
 	}
-	// On ne renvoie JAMAIS le mot de passe : seulement s'il existe.
+	// We NEVER send back the password: only whether it exists.
 	cfg.MotDePasseDefini = chaine(sys["mail_smtppassword"]) != "" ||
 		lire("mail_smtppassword") != ""
 	if cfg.Securite == "" {
@@ -254,9 +253,9 @@ func (s *Server) lireSmtp(r *http.Request) (*SmtpConfig, error) {
 func (s *Server) ecrireSmtp(r *http.Request, hote string, port int, securite,
 	utilisateur, motdepasse, expediteur, nomExpediteur string) error {
 
-	// 1. Configuration Nextcloud. Le mot de passe passe par occ, qui l'écrit
-	//    dans config.php — c'est ainsi que Nextcloud fonctionne, et il n'y a pas
-	//    d'autre voie qui soit supportée.
+	// 1. Nextcloud configuration. The password goes through occ, which writes
+	//    it in config.php — that is how Nextcloud works, and there is no other
+	//    supported path.
 	reglages := [][]string{
 		{"mail_smtpmode", "smtp"},
 		{"mail_smtphost", hote},
@@ -278,28 +277,29 @@ func (s *Server) ecrireSmtp(r *http.Request, hote string, port int, securite,
 
 	for _, r2 := range reglages {
 		if _, err := s.occSortie(r.Context(), "config:system:set", r2[0], "--value", r2[1]); err != nil {
-			return fmt.Errorf("réglage « %s » : %w", r2[0], err)
+			return fmt.Errorf("setting \"%s\": %w", r2[0], err)
 		}
 	}
 
-	// 2. Copie dans un Secret Kubernetes : config.php est sur le volume
-	//    persistant, et un mot de passe qui n'existe qu'à un seul endroit est un
-	//    mot de passe qu'on perd à la prochaine réinstallation.
+	// 2. Copy into a Kubernetes Secret: config.php is on the persistent
+	//    volume, and a password that only exists in one place is a password
+	//    lost at the next reinstall.
 	if motdepasse != "" {
 		if err := s.ecrireSecretSmtp(r, utilisateur, motdepasse); err != nil {
-			// Non bloquant : la configuration Nextcloud est déjà posée et
-			// fonctionnelle. On le signale sans faire échouer l'enregistrement.
-			fmt.Printf("  (secret non mis à jour : %v)\n", err)
+			// Non-blocking: the Nextcloud configuration is already set and
+			// functional. We flag it without failing the save.
+			fmt.Printf("  (secret not updated: %v)\n", err)
 		}
 	}
 	return nil
 }
 
-// ecrireSecretSmtp range les identifiants du relais DANS LE COFFRE.
+// ecrireSecretSmtp stores the relay credentials IN THE VAULT.
 //
-// PLUS AUCUN SECRET KUBERNETES : le relais SMTP est un réglage d'application, pas une
-// ressource du cluster. Nextcloud reçoit déjà sa configuration via occ ; garder une
-// copie dans Kubernetes aurait seulement créé une seconde source à faire diverger.
+// NO MORE KUBERNETES SECRET: the SMTP relay is an application setting, not a
+// cluster resource. Nextcloud already receives its configuration via occ;
+// keeping a copy in Kubernetes would only have created a second source to let
+// diverge.
 func (s *Server) ecrireSecretSmtp(r *http.Request, utilisateur, motdepasse string) error {
 	return secrets.EcrireDansCoffre(r.Context(), secrets.DepuisEnvironnement(), "smtp", "relais",
 		map[string]string{"username": utilisateur, "password": motdepasse})
@@ -307,11 +307,11 @@ func (s *Server) ecrireSecretSmtp(r *http.Request, utilisateur, motdepasse strin
 
 func (s *Server) motDePasseSmtp(r *http.Request) (string, error) {
 	if s.kube == nil {
-		return "", fmt.Errorf("client Kubernetes indisponible")
+		return "", fmt.Errorf("Kubernetes client unavailable")
 	}
-	// LE MOT DE PASSE EST LU AU COFFRE, comme tout le reste de la suite. Le repli
-	// vers le Secret Kubernetes a disparu avec lui : laisser les deux sources
-	// revenait à garantir qu'elles divergent un jour.
+	// THE PASSWORD IS READ FROM THE VAULT, like everything else in the suite.
+	// The fallback to the Kubernetes Secret disappeared with it: keeping both
+	// sources meant guaranteeing they would diverge one day.
 	entree, err := secrets.LireEntreeCoffre(r.Context(), secrets.DepuisEnvironnement(), "smtp", "relais")
 	if err != nil {
 		return "", err
@@ -319,30 +319,31 @@ func (s *Server) motDePasseSmtp(r *http.Request) (string, error) {
 	return entree["password"], nil
 }
 
-// occSortie exécute occ dans le pod Nextcloud.
+// occSortie runs occ in the Nextcloud pod.
 //
-// POURQUOI occ ICI ET PAS L'API OCS : l'API OCS expose les applications et les
-// utilisateurs, mais PAS les réglages système (mail_smtp*). Pour ceux-là, occ
-// est la seule voie supportée, et il doit tourner dans le pod.
+// WHY occ HERE AND NOT THE OCS API: the OCS API exposes applications and
+// users, but NOT the system settings (mail_smtp*). For those, occ is the only
+// supported path, and it must run in the pod.
 //
-// On passe par l'API Kubernetes (pods/exec) plutôt que par le binaire kubectl :
-// la console n'a pas besoin d'un kubectl, et le ServiceAccount porte déjà le
-// droit d'exécuter dans ceffio-files (acquis pour la gestion des applications).
+// We go through the Kubernetes API (pods/exec) rather than the kubectl
+// binary: the console does not need a kubectl, and the ServiceAccount already
+// carries the right to exec in ceffio-files (acquired for application
+// management).
 func (s *Server) occSortie(ctx context.Context, args ...string) (string, error) {
 	if s.kube == nil {
-		return "", fmt.Errorf("client Kubernetes indisponible")
+		return "", fmt.Errorf("Kubernetes client unavailable")
 	}
 	complet := append([]string{"php", "occ"}, args...)
 	pod, err := s.podNextcloud(ctx)
 	if err != nil {
 		return "", err
 	}
-	// Exec n'est pas dans le client Kubernetes standard : il vit dans le paquet
-	// remotecommand, qui construit la requête de streaming. C'est le seul chemin
-	// supporté pour exécuter une commande dans un pod depuis du code Go.
+	// Exec is not in the standard Kubernetes client: it lives in the
+	// remotecommand package, which builds the streaming request. It is the
+	// only supported path to run a command in a pod from Go code.
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
-		return "", fmt.Errorf("configuration du cluster illisible : %w", err)
+		return "", fmt.Errorf("cluster configuration unreadable: %w", err)
 	}
 	req := s.kube.CoreV1().RESTClient().Post().
 		Resource("pods").
@@ -358,7 +359,7 @@ func (s *Server) occSortie(ctx context.Context, args ...string) (string, error) 
 
 	executeur, err := remotecommand.NewSPDYExecutor(cfg, "POST", req.URL())
 	if err != nil {
-		return "", fmt.Errorf("exécuteur indisponible : %w", err)
+		return "", fmt.Errorf("executor unavailable: %w", err)
 	}
 	var sortie, errs strings.Builder
 	if err := executeur.StreamWithContext(ctx, remotecommand.StreamOptions{
@@ -370,7 +371,7 @@ func (s *Server) occSortie(ctx context.Context, args ...string) (string, error) 
 	return sortie.String(), nil
 }
 
-// podNextcloud rend le nom du pod Nextcloud en service.
+// podNextcloud returns the name of the Nextcloud pod in service.
 func (s *Server) podNextcloud(ctx context.Context) (string, error) {
 	pods, err := s.kube.CoreV1().Pods("ceffio-files").List(ctx, metav1.ListOptions{
 		LabelSelector: "app=nextcloud",
@@ -383,18 +384,18 @@ func (s *Server) podNextcloud(ctx context.Context) (string, error) {
 			return p.Name, nil
 		}
 	}
-	return "", fmt.Errorf("aucun pod Nextcloud en service")
+	return "", fmt.Errorf("no Nextcloud pod in service")
 }
 
 // ---------------------------------------------------------------------------
-// Le test : un vrai dialogue SMTP, étape par étape
+// The test: a real SMTP dialogue, step by step
 // ---------------------------------------------------------------------------
 
-// testerSmtp ouvre une vraie session SMTP et rapporte CHAQUE étape.
+// testerSmtp opens a real SMTP session and reports EACH step.
 //
-// On ne se contente pas de « ça marche / ça ne marche pas » : on dit où ça
-// casse. Un mot de passe refusé et un serveur injoignable demandent des
-// corrections opposées, et le message d'erreur brut ne les distingue pas.
+// We do not settle for "it works / it doesn't": we say where it breaks. A
+// refused password and an unreachable server demand opposite corrections, and
+// the raw error message does not distinguish them.
 func testerSmtp(hote string, port int, securite, utilisateur, motdepasse,
 	expediteur, destinataire string, timeout time.Duration) ([]string, error) {
 
@@ -402,27 +403,28 @@ func testerSmtp(hote string, port int, securite, utilisateur, motdepasse,
 	journal := func(f string, a ...any) { etapes = append(etapes, fmt.Sprintf(f, a...)) }
 
 	adresse := net.JoinHostPort(hote, fmt.Sprint(port))
-	journal("Connexion à %s…", adresse)
+	journal("Connecting to %s…", adresse)
 
 	conn, err := net.DialTimeout("tcp", adresse, timeout)
 	if err != nil {
-		journal("ÉCHEC : serveur injoignable")
-		return etapes, fmt.Errorf("connexion à %s impossible : %w", adresse, err)
+		journal("FAILED: server unreachable")
+		return etapes, fmt.Errorf("cannot connect to %s: %w", adresse, err)
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(timeout))
-	journal("Connecté")
+	journal("Connected")
 
 	br := bufio.NewReader(conn)
-	// Lire UNE ligne ne suffit pas : les réponses SMTP sont multi-lignes, avec
-	// "250-" pour les lignes intermédiaires et "250 " (espace) pour la dernière.
-	// Lire une seule ligne attrape « 250-PIPELINING » et croit la réponse finie —
-	// ce qui produit un faux échec sur un serveur parfaitement correct.
+	// Reading ONE line is not enough: SMTP responses are multi-line, with
+	// "250-" for the intermediate lines and "250 " (space) for the last one.
+	// Reading a single line catches "250-PIPELINING" and believes the response
+	// is finished — which produces a false failure on a perfectly correct
+	// server.
 	//
-	// Le reader est passé EN PARAMÈTRE, pas capturé : après STARTTLS on remplace
-	// le reader par celui de la connexion chiffrée, et une closure qui aurait
-	// capturé l'ancien continuerait de lire les octets non chiffrés — elle
-	// verrait du bruit TLS et conclurait à un échec.
+	// The reader is passed AS A PARAMETER, not captured: after STARTTLS we
+	// replace the reader with the one of the encrypted connection, and a
+	// closure that had captured the old one would keep reading the unencrypted
+	// bytes — it would see TLS noise and conclude to a failure.
 	lireDepuis := func(rd *bufio.Reader) string {
 		var dernier string
 		for {
@@ -431,19 +433,19 @@ func testerSmtp(hote string, port int, securite, utilisateur, motdepasse,
 				return strings.TrimSpace(dernier)
 			}
 			dernier = ligne
-			// Une ligne dont le 4e caractère est un espace termine la réponse.
+			// A line whose 4th character is a space ends the response.
 			if len(ligne) < 4 || ligne[3] == ' ' {
 				return strings.TrimSpace(ligne)
 			}
 		}
 	}
 	lire := func() string { return lireDepuis(br) }
-	// envoyer trace la commande ET la réponse : sans cela, on ne peut pas
-	// diagnostiquer un dialogue SMTP — le résumé masque ce que le serveur dit.
+	// envoyer traces the command AND the response: without this, an SMTP
+	// dialogue cannot be diagnosed — the summary masks what the server says.
 	//
-	// Elle utilise `lire`, qui relit le reader COURANT : après STARTTLS le reader
-	// change, et une closure qui aurait capturé l'ancien lirait les octets non
-	// chiffrés.
+	// It uses `lire`, which re-reads the CURRENT reader: after STARTTLS the
+	// reader changes, and a closure that had captured the old one would read
+	// the unencrypted bytes.
 	envoyer := func(cmd string) string {
 		fmt.Fprintf(conn, "%s\r\n", cmd)
 		rep := lire()
@@ -452,108 +454,108 @@ func testerSmtp(hote string, port int, securite, utilisateur, motdepasse,
 		return rep
 	}
 
-	// 1. bannière
-	journal("Serveur : %s", tronquer(lire(), 80))
+	// 1. banner
+	journal("Server: %s", tronquer(lire(), 80))
 
 	// 2. EHLO
 	if rep := envoyer("EHLO ceffio.local"); !strings.HasPrefix(rep, "250") {
-		return etapes, fmt.Errorf("le serveur a refusé EHLO : %s", rep)
+		return etapes, fmt.Errorf("server rejected EHLO: %s", rep)
 	}
 
-	// 3. STARTTLS si demandé
+	// 3. STARTTLS if requested
 	if securite == "tls" {
 		fmt.Fprintf(conn, "STARTTLS\r\n")
 		rep := lire()
 		if !strings.HasPrefix(rep, "220") {
-			journal("ÉCHEC STARTTLS : %s", tronquer(rep, 80))
-			return etapes, fmt.Errorf("STARTTLS refusé : %s", rep)
+			journal("STARTTLS FAILED: %s", tronquer(rep, 80))
+			return etapes, fmt.Errorf("STARTTLS refused: %s", rep)
 		}
 		tlsConn := tls.Client(conn, &tls.Config{ServerName: hote})
 		if err := tlsConn.Handshake(); err != nil {
-			journal("ÉCHEC TLS : %s", err)
-			return etapes, fmt.Errorf("poignée de main TLS refusée : %w", err)
+			journal("TLS FAILED: %s", err)
+			return etapes, fmt.Errorf("TLS handshake refused: %w", err)
 		}
 		conn = tlsConn
 		br = bufio.NewReader(conn)
-		// `lire` lit maintenant depuis LE NOUVEAU reader : c'est le point qui
-		// faisait échouer le test — l'ancien reader lisait du TLS brut.
+		// `lire` now reads from THE NEW reader: this is the point that made the
+		// test fail — the old reader was reading raw TLS.
 		lire = func() string { return lireDepuis(br) }
-		journal("TLS établi (%s)", versionTLS(tlsConn.ConnectionState().Version))
-		// Il faut refaire EHLO après STARTTLS : le serveur remet la session à zéro.
+		journal("TLS established (%s)", versionTLS(tlsConn.ConnectionState().Version))
+		// EHLO must be sent again after STARTTLS: the server resets the session.
 		fmt.Fprintf(conn, "EHLO ceffio.local\r\n")
 		lire()
 	}
 
-	// 4. authentification
+	// 4. authentication
 	//
-	// AUTH PLAIN d'abord : c'est le mécanisme que ce type de serveur accepte
-	// directement, et le dialogue le plus court (un seul bloc
-	// « \0utilisateur\0motdepasse »). AUTH LOGIN en repli.
+	// AUTH PLAIN first: it is the mechanism this kind of server accepts
+	// directly, and the shortest dialogue (a single "\0user\0password"
+	// block). AUTH LOGIN as fallback.
 	//
-	// Un échec d'authentification laisse la session dans un état où le serveur
-	// ne répond plus normalement : on NE réessaie donc PAS sur la même
-	// connexion — c'est ce qui produisait des « 501 Syntax » en cascade.
+	// An authentication failure leaves the session in a state where the server
+	// no longer answers normally: we therefore do NOT retry on the same
+	// connection — that is what produced cascading "501 Syntax".
 	bloc := "\x00" + utilisateur + "\x00" + motdepasse
 	if rep := envoyer("AUTH PLAIN " + base64.StdEncoding.EncodeToString([]byte(bloc))); strings.HasPrefix(rep, "235") {
-		journal("Authentification acceptée (PLAIN)")
+		journal("Authentication accepted (PLAIN)")
 	} else {
-		journal("AUTH PLAIN refusé : %s", tronquer(rep, 80))
-		// Repli LOGIN, sur la même session : si le serveur l'accepte encore.
+		journal("AUTH PLAIN refused: %s", tronquer(rep, 80))
+		// LOGIN fallback, on the same session: if the server still accepts it.
 		if rep2 := envoyer("AUTH LOGIN"); strings.HasPrefix(rep2, "334") {
 			envoyer(base64.StdEncoding.EncodeToString([]byte(utilisateur)))
 			if rep3 := envoyer(base64.StdEncoding.EncodeToString([]byte(motdepasse))); strings.HasPrefix(rep3, "235") {
-				journal("Authentification acceptée (LOGIN)")
+				journal("Authentication accepted (LOGIN)")
 			} else {
-				journal("ÉCHEC AUTHENTIFICATION : %s", tronquer(rep3, 80))
-				return etapes, fmt.Errorf("identifiants refusés : %s", rep3)
+				journal("AUTHENTICATION FAILED: %s", tronquer(rep3, 80))
+				return etapes, fmt.Errorf("credentials rejected: %s", rep3)
 			}
 		} else {
-			journal("ÉCHEC AUTHENTIFICATION : %s", tronquer(rep, 80))
-			return etapes, fmt.Errorf("identifiants refusés : %s", rep)
+			journal("AUTHENTICATION FAILED: %s", tronquer(rep, 80))
+			return etapes, fmt.Errorf("credentials rejected: %s", rep)
 		}
 	}
 
-	// 5. envoi
+	// 5. send
 	fmt.Fprintf(conn, "MAIL FROM:<%s>\r\n", expediteur)
 	if rep := lire(); !strings.HasPrefix(rep, "250") {
-		journal("ÉCHEC expéditeur : %s", tronquer(rep, 80))
-		return etapes, fmt.Errorf("expéditeur refusé : %s", rep)
+		journal("sender FAILED: %s", tronquer(rep, 80))
+		return etapes, fmt.Errorf("sender rejected: %s", rep)
 	}
-	journal("Expéditeur accepté : %s", expediteur)
+	journal("Sender accepted: %s", expediteur)
 
 	fmt.Fprintf(conn, "RCPT TO:<%s>\r\n", destinataire)
 	if rep := lire(); !strings.HasPrefix(rep, "250") {
-		journal("ÉCHEC destinataire : %s", tronquer(rep, 80))
-		return etapes, fmt.Errorf("destinataire refusé : %s", rep)
+		journal("recipient FAILED: %s", tronquer(rep, 80))
+		return etapes, fmt.Errorf("recipient rejected: %s", rep)
 	}
-	journal("Destinataire accepté : %s", destinataire)
+	journal("Recipient accepted: %s", destinataire)
 
 	fmt.Fprintf(conn, "DATA\r\n")
 	if rep := lire(); !strings.HasPrefix(rep, "354") {
-		journal("ÉCHEC DATA : %s", tronquer(rep, 80))
-		return etapes, fmt.Errorf("le serveur refuse le corps du message : %s", rep)
+		journal("DATA FAILED: %s", tronquer(rep, 80))
+		return etapes, fmt.Errorf("server refuses the message body: %s", rep)
 	}
 	corps := "Subject: Test SMTP Ceffio\r\n" +
 		"From: " + expediteur + "\r\n" +
 		"To: " + destinataire + "\r\n" +
 		"\r\n" +
-		"Test de configuration SMTP depuis la console Ceffio.\r\n" +
-		"Si vous lisez ce message, l'envoi est correctement configuré.\r\n" +
+		"SMTP configuration test from the Ceffio console.\r\n" +
+		"If you are reading this message, mail delivery is correctly configured.\r\n" +
 		".\r\n"
 	fmt.Fprint(conn, corps)
 	if rep := lire(); !strings.HasPrefix(rep, "250") {
-		journal("ÉCHEC envoi : %s", tronquer(rep, 80))
-		return etapes, fmt.Errorf("le serveur a refusé le message : %s", rep)
+		journal("send FAILED: %s", tronquer(rep, 80))
+		return etapes, fmt.Errorf("server rejected the message: %s", rep)
 	}
-	journal("Message accepté par le serveur")
+	journal("Message accepted by the server")
 
 	fmt.Fprintf(conn, "QUIT\r\n")
-	journal("Terminé avec succès")
+	journal("Completed successfully")
 	return etapes, nil
 }
 
-// versionTLS rend la version TLS en texte. Un uint16 formaté avec %s affiche
-// « %!s(uint16=772) », ce qui ne dit rien à personne.
+// versionTLS returns the TLS version as text. A uint16 formatted with %s shows
+// "%!s(uint16=772)", which says nothing to anyone.
 func versionTLS(v uint16) string {
 	switch v {
 	case tls.VersionTLS13:
@@ -565,7 +567,7 @@ func versionTLS(v uint16) string {
 	case tls.VersionTLS10:
 		return "TLS 1.0"
 	}
-	return fmt.Sprintf("version inconnue (%d)", v)
+	return fmt.Sprintf("unknown version (%d)", v)
 }
 
 func tronquer(s string, n int) string {
@@ -576,8 +578,8 @@ func tronquer(s string, n int) string {
 	return s
 }
 
-// premier rend la première valeur non vide — sert à préférer la lecture par clé
-// (valeur réelle) au repli sur config:list (valeur parfois masquée).
+// premier returns the first non-empty value — used to prefer the per-key read
+// (real value) over the config:list fallback (sometimes masked value).
 func premier(valeurs ...string) string {
 	for _, v := range valeurs {
 		if v != "" {

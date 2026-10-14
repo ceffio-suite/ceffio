@@ -8,37 +8,38 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/k8sapi"
 )
 
-// Acces rend l'adresse et le jeton qui permettent d'utiliser le coffre depuis la
-// machine d'installation.
+// Acces returns the address and token that allow using the vault from the
+// installation machine.
 //
-// POURQUOI CETTE FONCTION EXISTE, ET POURQUOI ELLE EST INDISPENSABLE : le module
-// internal/secrets lit BAO_ADDR et BAO_TOKEN dans l'environnement — c'est ce qui
-// lui permet de viser n'importe quel coffre sans rien savoir de son installation.
-// Mais une commande lancée SEULE n'a personne pour les poser : `install` les pose
-// pour ses propres modules, dans son propre processus. Sans cette fonction, une
-// commande autonome se rabattrait SILENCIEUSEMENT sur les Secrets Kubernetes et
-// ne lirait jamais le coffre. C'est la pire des pannes : tout paraît fonctionner,
-// et la source de vérité n'est pas celle qu'on croit.
+// WHY THIS FUNCTION EXISTS, AND WHY IT IS INDISPENSABLE: the internal/secrets
+// module reads BAO_ADDR and BAO_TOKEN from the environment — that is what lets
+// it target any vault without knowing anything about its installation. But a
+// command launched ALONE has nobody to set them: `install` sets them for its
+// own modules, in its own process. Without this function, a standalone command
+// would SILENTLY fall back to Kubernetes Secrets and never read the vault. That
+// is the worst kind of failure: everything appears to work, and the source of
+// truth is not the one you think it is.
 //
-// L'ADRESSE EST CELLE DU NODEPORT, joignable depuis la machine. Le nom de service
-// interne ne résout pas depuis là — l'installation ne tourne pas dans le cluster.
+// THE ADDRESS IS THE NODEPORT ONE, reachable from the machine. The internal
+// service name does not resolve from there — the installation does not run
+// inside the cluster.
 func Acces(ctx context.Context, cli *k8sapi.Client) (string, string, error) {
 	port, err := cli.NodePortDuService(ctx, ns, service, "api")
 	if err != nil {
-		return "", "", fmt.Errorf("port externe du coffre illisible : %w", err)
+		return "", "", fmt.Errorf("cannot read the vault's external port: %w", err)
 	}
 	if port == 0 {
-		return "", "", fmt.Errorf("le service du coffre n'expose aucun port : le coffre n'est pas déployé")
+		return "", "", fmt.Errorf("the vault service exposes no port: the vault is not deployed")
 	}
-	// Le jeton vit dans un Secret Kubernetes, posé par le déploiement du coffre.
-	// Le recopier dans un fichier de configuration créerait une copie de plus à
-	// faire tourner.
+	// The token lives in a Kubernetes Secret, placed there by the vault's
+	// deployment. Copying it into a configuration file would create yet another
+	// copy to keep in sync.
 	jeton, err := cli.LireSecret(ctx, ns, "openbao-token", "token")
 	if err != nil {
-		return "", "", fmt.Errorf("jeton du coffre illisible : %w", err)
+		return "", "", fmt.Errorf("cannot read the vault token: %w", err)
 	}
 	if jeton == "" {
-		return "", "", fmt.Errorf("jeton du coffre absent (Secret openbao-token vide)")
+		return "", "", fmt.Errorf("vault token missing (Secret openbao-token is empty)")
 	}
 	noeud := os.Getenv("CEFFIO_NOEUD")
 	if noeud == "" {

@@ -24,22 +24,22 @@ const (
 	deployNS   = "ceffio-system"
 	deployName = "ceffio-admin"
 	imageName  = "localhost/ceffio-console"
-	// Bump OBLIGATOIRE à chaque changement de la page ou du code console :
-	// buildAndImportImage saute la reconstruction si le tag existe déjà dans
-	// containerd. Sans bump, l'ancienne image continue de servir.
+	// Bump MANDATORY on every change of the console page or code:
+	// buildAndImportImage skips the rebuild if the tag already exists in
+	// containerd. Without a bump, the old image keeps being served.
 	imageTag = "1.32.4"
 	imageRef = imageName + ":" + imageTag
 )
 
-// Deploy installe la console d'administration DANS le cluster (Phase 11) :
-//   - image OCI locale (binaire + page web embarquée) importée dans containerd
-//   - Deployment ceffio-admin + ServiceAccount + Role (lecture pods/ingress/certs)
-//   - Secret ceffio-console-key (clé admin persistée) + env KC_ADMIN
-//   - Service ClusterIP + Ingress admin.<domain> + certificat
+// Deploy installs the administration console IN the cluster (Phase 11):
+//   - local OCI image (binary + embedded web page) imported into containerd
+//   - ceffio-admin Deployment + ServiceAccount + Role (read pods/ingress/certs)
+//   - ceffio-console-key Secret (persisted admin key) + env KC_ADMIN
+//   - ClusterIP Service + admin.<domain> Ingress + certificate
 //
-// Remplace l'ancien modèle (systemd + Endpoints→nœud).
+// Replaces the old model (systemd + Endpoints→node).
 func Deploy(ctx context.Context, domain string) error {
-	fmt.Println("\nDéploiement de la console d'administration (Phase 11)...")
+	fmt.Println("\nDeploying the administration console (Phase 11)...")
 
 	if err := buildAndImportImage(ctx); err != nil {
 		return err
@@ -47,10 +47,10 @@ func Deploy(ctx context.Context, domain string) error {
 	if err := ensureConsoleKey(ctx); err != nil {
 		return err
 	}
-	// Les identifiants Keycloak sont lus DANS LE COFFRE par l'injecteur, comme
-	// tous les autres composants. La console est le SEUL service dont l'image ne
-	// contient pas de shell : elle ne peut pas « sourcer » /secrets/env, elle le
-	// lit elle-même au démarrage (secrets.ChargerDepuisFichier).
+	// The Keycloak credentials are read IN THE VAULT by the injector, like all
+	// other components. The console is the ONLY service whose image contains
+	// no shell: it cannot "source" /secrets/env, it reads it itself at startup
+	// (secrets.ChargerDepuisFichier).
 	if err := applyConsoleManifest(ctx, domain); err != nil {
 		return err
 	}
@@ -58,43 +58,43 @@ func Deploy(ctx context.Context, domain string) error {
 		return err
 	}
 
-	fmt.Println("✓ Console d'administration déployée (https://admin." + domain + ")")
+	fmt.Println("✓ Administration console deployed (https://admin." + domain + ")")
 	return nil
 }
 
-// buildAndImportImage construit l'image OCI de la console et l'importe dans
-// containerd k3s. Idempotent : saute si l'image est déjà présente.
+// buildAndImportImage builds the console OCI image and imports it into
+// containerd k3s. Idempotent: skips if the image is already present.
 //
-// Contraintes de conception (apprises en from-scratch) — la machine cible est un
-// serveur de PRODUCTION, pas un poste de dev :
-//   - pas de toolchain Go : on ne compile PAS sur place. On réutilise le binaire
-//     en cours d'exécution (os.Executable), qui est par construction un binaire
-//     Ceffio pour la bonne plateforme. Exiger `go` faisait échouer la Phase 11
-//     sur toute machine vierge (« exec: "go": executable file not found").
-//   - pas de démon Docker : l'image est assemblée directement en OCI (tar) puis
-//     importée dans le containerd de k3s via ctr. Exiger `docker build`/`save`
-//     est injustifiable sur un hôte K3s.
+// Design constraints (learned from scratch builds) — the target machine is a
+// PRODUCTION server, not a dev workstation:
+//   - no Go toolchain: we do NOT compile on site. We reuse the running binary
+//     (os.Executable), which is by construction a Ceffio binary for the right
+//     platform. Requiring `go` made Phase 11 fail on any fresh machine
+//     ("exec: \"go\": executable file not found").
+//   - no Docker daemon: the image is assembled directly as OCI (tar) then
+//     imported into the k3s containerd via ctr. Requiring `docker build`/`save`
+//     is unjustifiable on a K3s host.
 func buildAndImportImage(ctx context.Context) error {
 	if imagePresent(ctx) {
-		fmt.Println("∙ image console déjà présente (" + imageRef + ")")
+		fmt.Println("∙ console image already present (" + imageRef + ")")
 		return nil
 	}
-	fmt.Println("∙ construction + import de l'image console " + imageRef)
+	fmt.Println("∙ building + importing console image " + imageRef)
 
-	// 1. Binaire à embarquer : celui qui tourne (déjà un exécutable Ceffio).
+	// 1. Binary to embed: the running one (already a Ceffio executable).
 	self, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("binaire courant introuvable: %w", err)
+		return fmt.Errorf("current binary not found: %w", err)
 	}
 	if resolved, err := filepath.EvalSymlinks(self); err == nil {
 		self = resolved
 	}
 	if fi, err := os.Stat(self); err != nil || fi.Size() == 0 {
-		return fmt.Errorf("binaire courant illisible (%s): %v", self, err)
+		return fmt.Errorf("current binary unreadable (%s): %v", self, err)
 	}
 
-	// 2. Assemblage OCI minimal (Dockerfile FROM scratch équivalent), SANS Docker :
-	//    config + layer tar.gz contenant /usr/local/bin/ceffio et les CA.
+	// 2. Minimal OCI assembly (Dockerfile FROM scratch equivalent), WITHOUT Docker:
+	//    config + tar.gz layer containing /usr/local/bin/ceffio and the CAs.
 	tmp, err := os.MkdirTemp("", "ceffio-console-oci-*")
 	if err != nil {
 		return err
@@ -110,12 +110,12 @@ func buildAndImportImage(ctx context.Context) error {
 		return err
 	}
 
-	// 3. Import dans containerd k3s. Deux mécanismes, dans l'ordre :
-	//    a) `k3s ctr images import` (voie supportée : gère l'index OCI complet
-	//       et enregistre la référence dans le namespace k8s.io) ;
-	//    b) repli sur l'import brut containerd.
-	//    On passe par `k3s ctr` quand disponible : c'est le client aligné sur le
-	//    runtime du cluster, qui résout le namespace correctement.
+	// 3. Import into the k3s containerd. Two mechanisms, in order:
+	//    a) `k3s ctr images import` (supported path: handles the full OCI index
+	//       and records the reference in the k8s.io namespace);
+	//    b) fallback to the raw containerd import.
+	//    We go through `k3s ctr` when available: it is the client aligned with
+	//    the cluster runtime, which resolves the namespace correctly.
 	imp := k8s.Command(ctx, "sh", "-c", strings.Join([]string{
 		"(command -v k3s >/dev/null && sudo k3s ctr images import " + ociTar + ") ||",
 		"(command -v ctr >/dev/null && sudo ctr -n k8s.io -a /run/k3s/containerd/containerd.sock images import " + ociTar + ") ||",
@@ -124,28 +124,28 @@ func buildAndImportImage(ctx context.Context) error {
 	imp.Stdout = os.Stdout
 	imp.Stderr = os.Stderr
 	if err := imp.Run(); err != nil {
-		return fmt.Errorf("import containerd: %w", err)
+		return fmt.Errorf("containerd import: %w", err)
 	}
 
-	// 4. Vérification : l'image doit être VISIBLE par le CRI, sinon le pod
-	//    restera en ImagePullBackOff (le bug « resolver » historique).
+	// 4. Verification: the image must be VISIBLE to the CRI, otherwise the pod
+	//    would stay in ImagePullBackOff (the historical "resolver" bug).
 	if !imagePresent(ctx) {
-		return fmt.Errorf("image %s importée mais non résolue par le CRI — "+
-			"le pod resterait en ImagePullBackOff (référence non trouvée dans le namespace k8s.io)", imageRef)
+		return fmt.Errorf("image %s imported but not resolved by the CRI — "+
+			"the pod would stay in ImagePullBackOff (reference not found in the k8s.io namespace)", imageRef)
 	}
 	return nil
 }
 
-// buildLayerFromBinary crée la couche tar.gz minimale : le binaire + les CA.
-// Retourne (chemin de la couche compressée, diffID = sha256 du tar décompressé).
+// buildLayerFromBinary creates the minimal tar.gz layer: the binary + the CAs.
+// Returns (compressed layer path, diffID = sha256 of the uncompressed tar).
 //
-// Attention : pour une couche `tar+gzip`, `rootfs.diff_ids` doit contenir le
-// SHA256 du tar NON compressé (identifiant de la couche décompressée), tandis
-// que le manifest référence le digest du .tar.gz. Confondre les deux fait
-// échouer l'import containerd.
+// Caution: for a `tar+gzip` layer, `rootfs.diff_ids` must contain the SHA256
+// of the NON-compressed tar (identifier of the uncompressed layer), while the
+// manifest references the digest of the .tar.gz. Confusing the two makes the
+// containerd import fail.
 //
-// Le tar brut est monté en mémoire (binaire ~40 Mo : acceptable, et cela évite
-// une seconde passe de lecture), puis compressé vers le fichier final.
+// The raw tar is held in memory (~40 MB binary: acceptable, and it avoids a
+// second read pass), then compressed to the final file.
 func buildLayerFromBinary(tmp, bin string) (layerPath, diffID string, err error) {
 	var raw bytes.Buffer
 	tw := tar.NewWriter(&raw)
@@ -168,7 +168,7 @@ func buildLayerFromBinary(tmp, bin string) (layerPath, diffID string, err error)
 		return "", "", err
 	}
 
-	// diff_id = sha256 du tar décompressé.
+	// diff_id = sha256 of the uncompressed tar.
 	sum := sha256.Sum256(raw.Bytes())
 	diffID = hex.EncodeToString(sum[:])
 
@@ -191,7 +191,7 @@ func buildLayerFromBinary(tmp, bin string) (layerPath, diffID string, err error)
 func addFileToTar(tw *tar.Writer, src, name string) error {
 	data, err := os.ReadFile(src)
 	if err != nil {
-		return fmt.Errorf("lecture %s: %w", src, err)
+		return fmt.Errorf("read %s: %w", src, err)
 	}
 	if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o755, Size: int64(len(data))}); err != nil {
 		return err
@@ -200,10 +200,10 @@ func addFileToTar(tw *tar.Writer, src, name string) error {
 	return err
 }
 
-// buildOCIImage assemble un tar OCI (oci-layout + index) importable par ctr.
+// buildOCIImage assembles an OCI tar (oci-layout + index) importable by ctr.
 //
-// layerPath : la couche .tar.gz ; diffID : sha256 du tar DÉCOMPRESSÉ
-// (rootfs.diff_ids). Le manifest, lui, référence le digest du .tar.gz.
+// layerPath: the .tar.gz layer; diffID: sha256 of the UNCOMPRESSED tar
+// (rootfs.diff_ids). The manifest, for its part, references the digest of the .tar.gz.
 func buildOCIImage(tmp, layerPath, diffID string) (string, error) {
 	layerSHA, layerSize, err := fileSHA256(layerPath)
 	if err != nil {
@@ -295,7 +295,7 @@ func buildOCIImage(tmp, layerPath, diffID string) (string, error) {
 	if err := writeEntry("blobs/sha256/"+configSHA, configBytes); err != nil {
 		return "", err
 	}
-	// La couche est copiée telle quelle (streaming, pas de chargement en RAM).
+	// The layer is copied as-is (streaming, no RAM loading).
 	if err := addFileToTar(tw, layerPath, "blobs/sha256/"+layerSHA); err != nil {
 		return "", err
 	}
@@ -330,11 +330,11 @@ func imagePresent(ctx context.Context) bool {
 	return err == nil && strings.Contains(string(out), imageName)
 }
 
-// ensureConsoleKey garantit la clé d'administration DANS LE COFFRE, et nulle part ailleurs.
+// ensureConsoleKey guarantees the administration key IN THE VAULT, and nowhere else.
 //
-// ELLE EST REPRISE SI ELLE EXISTE : c'est elle qui authentifie les appels à l'API de
-// la console. En régénérer une couperait l'accès sans prévenir, et le symptôme
-// serait un 401 sur une clé qui « a l'air » valide.
+// IT IS REUSED IF IT EXISTS: it is what authenticates calls to the console
+// API. Regenerating it would cut access without warning, and the symptom
+// would be a 401 on a key that "looks" valid.
 func ensureConsoleKey(ctx context.Context) error {
 	coffre := secrets.DepuisEnvironnement()
 	entree := map[string]string{}
@@ -344,7 +344,7 @@ func ensureConsoleKey(ctx context.Context) error {
 		entree = actuelle
 	case secrets.EntreeAbsente(err):
 	default:
-		return fmt.Errorf("coffre illisible pour console/api : %w", err)
+		return fmt.Errorf("vault unreadable for console/api: %w", err)
 	}
 	if entree["key"] != "" {
 		return nil
@@ -354,25 +354,25 @@ func ensureConsoleKey(ctx context.Context) error {
 		return err
 	}
 	entree["key"] = key
-	fmt.Println("∙ clé d'administration de la console générée (absente du coffre)")
+	fmt.Println("∙ console administration key generated (missing from the vault)")
 	return secrets.EcrireDansCoffre(ctx, coffre, "console", "api", entree)
 }
 
-// applyConsoleManifest applique RBAC + Deployment + Service + Ingress.
-// NOTE sur les identifiants Keycloak : ils sont lus LOCALEMENT (secret copié
-// dans ce namespace avant ce manifeste). Un secretKeyRef ne peut pas traverser
-// les namespaces, et le secret vit dans ceffio-identity alors que la console
-// tourne dans ceffio-system — les variables restaient donc vides, et le
-// `optional: true` masquait l'echec : le pod démarrait puis répondait
-// « credentials absents » à chaque requête. On ne met PAS optional : un secret
-// absent doit faire échouer le pod, pas produire une console inutilisable.
+// applyConsoleManifest applies RBAC + Deployment + Service + Ingress.
+// NOTE on the Keycloak credentials: they are read LOCALLY (secret copied
+// into this namespace before this manifest). A secretKeyRef cannot cross
+// namespaces, and the secret lives in ceffio-identity while the console runs
+// in ceffio-system — so the variables stayed empty, and the `optional: true`
+// masked the failure: the pod started then answered "credentials missing" to
+// every request. We do NOT set optional: a missing secret must fail the pod,
+// not produce an unusable console.
 func applyConsoleManifest(ctx context.Context, domain string) error {
-	// LES SECRETS VIENNENT DU COFFRE, à travers le fichier que l'injecteur rend.
+	// THE SECRETS COME FROM THE VAULT, through the file the injector renders.
 	//
-	// TROIS SOURCES : la clé de la console, le compte d'administration Keycloak, et
-	// le compte de service Nextcloud. L'image de la console ne contient AUCUN shell :
-	// elle ne peut pas « sourcer » ce fichier comme les autres composants, elle le
-	// lit elle-même au démarrage, dans le même format.
+	// THREE SOURCES: the console key, the Keycloak administration account, and
+	// the Nextcloud service account. The console image contains NO shell: it
+	// cannot "source" this file like the other components, it reads it itself
+	// at startup, in the same format.
 	annotations := vault.AnnotationsAgent(8, "console", "kv/data/ceffio/console/api",
 		vault.GabaritMulti([]vault.Source{
 			{Chemin: "kv/data/ceffio/console/api", Paires: [][2]string{
@@ -422,20 +422,20 @@ roleRef:
   name: ceffio-admin
   apiGroup: rbac.authorization.k8s.io
 ---
-# Droit d exécuter occ dans le pod Nextcloud, LIMITÉ à ce namespace.
+# Right to run occ in the Nextcloud pod, LIMITED to this namespace.
 #
-# POURQUOI ICI ET PAS DANS LE ClusterRole : un ClusterRole s'applique à tous les
-# namespaces. On veut au contraire restreindre ce droit à ceffio-files et à lui
-# seul — la console peut exécuter dans Nextcloud, jamais ailleurs. C'est un
-# Role + RoleBinding locaux qui l'expriment.
+# WHY HERE AND NOT IN THE ClusterRole: a ClusterRole applies to every
+# namespace. On the contrary, we want to restrict this right to ceffio-files
+# and to it alone — the console can exec in Nextcloud, never elsewhere. A
+# local Role + RoleBinding express that.
 #
-# Ce droit sert aux reglages SYSTEME de Nextcloud (mail_smtp*, qui ne passent
-# pas par l'API OCS). La gestion des applications, elle, n en a pas besoin.
+# This right serves the SYSTEM settings of Nextcloud (mail_smtp*, which do not
+# go through the OCS API). Application management does not need it.
 #
-# Le droit sur les Secrets est limité à UN SEUL (resourceNames) : la console
-# relit le mot de passe SMTP pour tester une configuration sans le ressaisir,
-# mais ne peut PAS lire les autres Secrets du namespace (base de données,
-# clés de chiffrement…).
+# The right over Secrets is limited to ONE SINGLE one (resourceNames): the
+# console re-reads the SMTP password to test a configuration without retyping
+# it, but can NOT read the other Secrets of the namespace (database,
+# encryption keys…).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -484,10 +484,10 @@ spec:
         image: ` + imageRef + `
         imagePullPolicy: IfNotPresent
         args: ["console", "--domain", "` + domain + `", "--addr", ":8088"]
-        # PLUS AUCUNE VALEUR SECRÈTE ICI : elles arrivent par le fichier que
-        # l'injecteur rend, et que la console lit elle-même au démarrage — son
-        # image ne contient pas de shell, donc elle ne peut pas le « sourcer »
-        # comme les autres composants.
+        # NO SECRET VALUE HERE ANYMORE: they arrive through the file the
+        # injector renders, and which the console reads itself at startup — its
+        # image contains no shell, so it cannot "source" it
+        # like the other components.
         ports:
         - {name: http, containerPort: 8088}
         readinessProbe:
@@ -538,25 +538,25 @@ spec:
 }
 
 func waitConsoleReady(ctx context.Context) error {
-	fmt.Println("∙ attente du pod console Ready...")
+	fmt.Println("∙ waiting for console pod Ready...")
 	return k8s.Command(ctx, "kubectl", "rollout", "status", "deploy/ceffio-admin", "-n", deployNS, "--timeout=180s").Run()
 }
 
-// genSecret est réutilisé (même convention que les autres couches).
+// genSecret is reused (same convention as the other layers).
 func secretExists(ctx context.Context, name string) bool {
 	return k8s.Command(ctx, "kubectl", "get", "secret", name, "-n", deployNS).Run() == nil
 }
 
-// copierSecret recopie un secret d'un namespace a un autre.
+// copierSecret copies a secret from one namespace to another.
 //
-// Pourquoi ce detour : Kubernetes ne permet PAS a un secretKeyRef de traverser
-// les namespaces. Le secret keycloak-admin vit dans ceffio-identity, la console
-// tourne dans ceffio-system — la reference restait donc introuvable et les
-// variables d'environnement étaient vides, en silence (d'autant plus que la
-// reference portait `optional: true`).
+// Why this detour: Kubernetes does NOT allow a secretKeyRef to cross
+// namespaces. The keycloak-admin secret lives in ceffio-identity, the console
+// runs in ceffio-system — so the reference stayed unfindable and the
+// environment variables were empty, silently (all the more so since the
+// reference carried `optional: true`).
 //
-// La copie est idempotente : on lit la source et on (re)applique la copie.
-// Aucune valeur n'est affichee ni journalisee.
+// The copy is idempotent: we read the source and (re)apply the copy.
+// No value is displayed or logged.
 func copierSecret(ctx context.Context, nsSource, nom, nsCible string) error {
 	if nsSource == nsCible {
 		return nil
@@ -564,16 +564,16 @@ func copierSecret(ctx context.Context, nsSource, nom, nsCible string) error {
 	out, err := k8s.Command(ctx, "kubectl", "get", "secret", nom, "-n", nsSource,
 		"-o", "json").Output()
 	if err != nil {
-		return fmt.Errorf("lecture du secret %s/%s : %w", nsSource, nom, err)
+		return fmt.Errorf("reading secret %s/%s: %w", nsSource, nom, err)
 	}
 
 	var doc map[string]any
 	if err := json.Unmarshal(out, &doc); err != nil {
-		return fmt.Errorf("secret illisible : %w", err)
+		return fmt.Errorf("secret unreadable: %w", err)
 	}
-	// On nettoie les metadonnees propres a la source : les garder ferait porter
-	// a la copie l'uid, les timestamps et la resourceVersion d'origine, que
-	// l'API refuse a la creation.
+	// We clean the metadata specific to the source: keeping it would make the
+	// copy carry the uid, timestamps and resourceVersion of the original,
+	// which the API refuses at creation.
 	delete(doc, "metadata")
 	doc["metadata"] = map[string]any{
 		"name":      nom,
@@ -587,9 +587,9 @@ func copierSecret(ctx context.Context, nsSource, nom, nsCible string) error {
 	cmd := k8s.Command(ctx, "kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(string(b))
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("copie du secret vers %s : %w : %s", nsCible, err, oneLine(string(out)))
+		return fmt.Errorf("copying secret to %s: %w: %s", nsCible, err, oneLine(string(out)))
 	}
-	fmt.Printf("✓ Secret %s copié dans %s (les références ne traversent pas les namespaces)\n", nom, nsCible)
+	fmt.Printf("✓ Secret %s copied to %s (references do not cross namespaces)\n", nom, nsCible)
 	return nil
 }
 
