@@ -342,6 +342,16 @@ else
     echo "coturn: with several addresses and a NAT, clients may receive an unreachable one." >&2
 fi
 
+# TLS: WITHOUT --cert/--pkey/--tls-listening-port COTURN DOES NOT OPEN 5349.
+#
+# It does not fail — it logs a warning and simply does not bind the port, so
+# the manifest declares a listener that does not exist. The paths are the ones
+# the volume mounts above.
+#
+# THESE OPTIONS MUST SIT INSIDE THE CONTINUATION, with no comment between the
+# backslash and the next line: a '#' inside a line-continued command comments
+# out everything that follows, options included. That is exactly how the first
+# attempt silently dropped all three of them.
 exec turnserver \
     --realm=%[3]s \
     --use-auth-secret \
@@ -357,11 +367,6 @@ exec turnserver \
     --min-port=49152 \
     --max-port=49200 \
     --listening-port=%[4]d \
-    # TLS: WITHOUT THESE TWO OPTIONS COTURN DOES NOT OPEN 5349 AT ALL.
-    #
-    # It does not fail — it logs a warning and simply does not bind the port,
-    # so the manifest declares a listener that does not exist. The paths are
-    # the ones the volume mounts above.
     --cert=/etc/coturn/certs/tls.crt \
     --pkey=/etc/coturn/certs/tls.key \
     --tls-listening-port=%[5]d \
