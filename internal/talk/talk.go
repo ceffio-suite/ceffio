@@ -637,19 +637,39 @@ spec:
 // Signaling server
 // ---------------------------------------------------------------------------
 
-// turnURL builds the list of TURN servers handed TO THE BROWSERS by the
-// signaling server.
+// turnURL builds the list of ICE servers handed TO THE BROWSERS by the
+// signaling server and by Talk.
 //
 // The address must be reachable from the Internet, otherwise the relay is
 // unusable. We give a public NAME rather than an address: it survives a
 // public-address change, and it is the same as the one declared on the
 // Nextcloud side. This is the only place where the public address appears,
 // and it appears there as a name, never as a frozen value.
+//
+// STUN COMES FIRST, AND THAT IS NOT COSMETIC. A browser needs STUN to discover
+// its own public address before it can even consider a relay: without it, it
+// only gathers "host" candidates — its local addresses — which are useless
+// from another network.
+//
+// Measured from a 4G connection, before this line existed:
+//
+//	Janus     : "No candidates not gathered yet for stream??"
+//	            "Failed to add some remote candidates (added 0, expected 1)"
+//	coturn    : zero requests — the relay was never even attempted
+//	signaling : only 7 "typ host" candidates
+//
+// The call fails while everything looks configured, because the browsers have
+// no server to ask "what is my public address?".
+//
+// The same host serves both roles: coturn answers STUN on this port (verified
+// from outside the network with a Binding Request), so no extra service is
+// needed and no extra port has to be opened.
 func turnURL(domaine string) string {
 	hote := "talk." + domaine
+	stun := fmt.Sprintf("stun:%s:%d", hote, portTurn)
 	udp := fmt.Sprintf("turn:%s:%d?transport=udp", hote, portTurn)
 	tcp := fmt.Sprintf("turn:%s:%d?transport=tcp", hote, portTurn)
-	return udp + "," + tcp
+	return stun + "," + udp + "," + tcp
 }
 
 // deploySignaling deploys the signaling server.
@@ -931,10 +951,36 @@ func brancherNextcloud(ctx context.Context) error {
 	}
 
 	// 4. Declare the TURN servers (native, no external dependency).
-	serveurs := fmt.Sprintf("turn:talk.%s:%d?transport=udp,turn:talk.%s:%d?transport=tcp",
-		domaineDe(ctx), portTurn, domaineDe(ctx), portTurn)
+	//
+	// STUN AND TURN ARE DIFFERENT ROLES AND THE BROWSER NEEDS BOTH:
+	//
+	//   STUN  asks "what is my public address?" — it is what produces the
+	//         "srflx" candidates, without which a browser on another network
+	//         has nothing usable to offer the peer.
+	//   TURN  relays the media when no direct path exists.
+	//
+	// Measured from a 4G connection with TURN alone configured: Janus logged
+	// "No candidates not gathered yet" and "added 0, expected 1", coturn
+	// received ZERO requests, and the signaling only ever saw "typ host"
+	// candidates. The call could not connect while every setting looked right,
+	// because the browsers had no server to ask for their public address.
+	//
+	// The same host and port answer both, so nothing extra has to be opened:
+	// coturn replies to STUN on 3479, verified from outside the network.
+	serveurs := fmt.Sprintf(
+		"stun:talk.%[1]s:%[2]d,turn:talk.%[1]s:%[2]d?transport=udp,turn:talk.%[1]s:%[2]d?transport=tcp",
+		domaineDe(ctx), portTurn)
 	if err := occ(ctx, "config:app:set", "spreed", "turn_servers", "--value", serveurs); err != nil {
 		return fmt.Errorf("TURN servers: %w", err)
+	}
+
+	// Talk keeps the STUN servers in their OWN key, and it only reads it from
+	// there. Only filling turn_servers would leave stun_servers absent, which
+	// is the state measured above: TURN declared, and no srflx candidate ever
+	// gathered.
+	stunServeurs := fmt.Sprintf("talk.%s:%d", domaineDe(ctx), portTurn)
+	if err := occ(ctx, "config:app:set", "spreed", "stun_servers", "--value", stunServeurs); err != nil {
+		return fmt.Errorf("STUN servers: %w", err)
 	}
 	turnSecret := entree["turn-secret"]
 	if turnSecret == "" {
