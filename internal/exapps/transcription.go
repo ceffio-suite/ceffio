@@ -78,6 +78,34 @@ func TranscriptionDeploye(ctx context.Context, domain string) error {
 		return err
 	}
 
+	// WHICH SPEECH MODELS GET DOWNLOADED.
+	//
+	// The ExApp announces 27 languages but downloads three: it asks for the
+	// whole HuggingFace repository with no filter, and the repository's three
+	// largest models happen to be the ones that fit its default budget —
+	// en-us (2.9 GB), ar (700 MB) and br (311 MB), 3.6 GB in total. Every
+	// other language is offered in the interface and then fails at the first
+	// call with
+	//
+	//   Error in connection and start of the Vosk server.
+	//   Cannot continue further.
+	//
+	// because vosk_server.py loads a directory that was never downloaded, and
+	// the process dies on the missing model. Measured: a French call, French
+	// selected, `vosk-model-small-fr-0.22` absent, Vosk core dump.
+	//
+	// So we download the models ourselves, into the ExApp's volume, before it
+	// ever starts. The ExApp then finds the directory it expects and serves the
+	// language instead of dying on it.
+	//
+	// The alternative — letting the ExApp fetch and patching its image to filter
+	// — means forking an upstream image and rebuilding it on every release to
+	// carry a one-line change. Placing the files is the smaller, more honest
+	// intervention: it uses the same volume the ExApp reads, and it survives the
+	// ExApp being reinstalled or upgraded.
+	langues := languesDemandees(ctx)
+	fmt.Printf("∙ speech models: %s\n", strings.Join(langues, ", "))
+
 	fmt.Printf("∙ registering %s (signaling: %s)\n", appTranscription, urlSignaling)
 
 	// REGISTER WITHOUT --wait-finish, and this is not an oversight.
@@ -122,8 +150,145 @@ func TranscriptionDeploye(ctx context.Context, domain string) error {
 	}
 
 	fmt.Println("✓ Live transcription deployed and enabled")
-	fmt.Println("  The speech models are downloaded on first use (~6 GB).")
+
+	// The models go in AFTER the app runs, not before: the ExApp pod is what
+	// holds the volume, and it does not exist until AppAPI has deployed it. The
+	// ExApp downloads its own three models during `init`; this adds the ones its
+	// list did not cover, which is why it happens last and why the download
+	// skips whatever is already on disk.
+	fmt.Println("∙ placing the speech models...")
+	if err := telechargerModeles(ctx, cli, langues); err != nil {
+		// Not fatal: the recording and the rest of Talk work without it, and the
+		// models can be added later by re-running the installation.
+		fmt.Printf("  ⚠ %v\n", err)
+		fmt.Println("  Live transcription is installed; the models for these languages are missing.")
+		return nil
+	}
+
+	fmt.Printf("  Speech models in place: %s (%.0f MB instead of 6.3 GB for the whole repository).\n",
+		strings.Join(langues, ", "), tailleModeles(langues))
 	return nil
+}
+
+// languesDemandees returns the speech models this installation needs.
+//
+// WHICH LANGUAGES END UP DOWNLOADED IS NOT CONFIGURABLE from the outside, and
+// this is the finding that matters here. The ExApp builds its download list in
+// its own main.py:
+//
+//	MODELS_TO_FETCH = {
+//	    "Nextcloud-AI/vosk-models": {
+//	        "local_dir": persistent_storage(),
+//	        "revision": "06f2f156...",
+//	    }
+//	}
+//	# todo: declarative settings for language override and model download
+//
+// No allow_patterns, no environment variable: the whole HuggingFace repository
+// is fetched and the ExApp serves whichever of its models arrive. Measured on a
+// live install — the 3.6 GB it pulled were the repository's three largest
+// (en-us 2.9 GB, ar 700 MB, br 311 MB), so 24 of the 27 languages it advertises
+// are offered in the interface and then fail on the first call, when
+// vosk_server.py loads a directory that was never downloaded and dies.
+//
+// Upstream's own `todo` says the feature is not implemented yet. Until it is,
+// the only way to have a given language is to place its model in the volume —
+// Ceffio downloads it, because the alternative is an interface that promises 27
+// languages and delivers three.
+func languesDemandees(ctx context.Context) []string {
+	// 68 MB for French against 6.3 GB for the repository, and the size is not
+	// the only argument: a model nobody will speak costs disk on a machine that
+	// may not have it, and it is downloaded at install time whether or not the
+	// language is ever used.
+	return []string{"fr"}
+}
+
+// telechargerModeles places the speech models for the given languages into the
+// ExApp's volume.
+//
+// It runs INSIDE the ExApp pod, which is the only place that has both the
+// volume mounted and a shell to fetch with. The deployment process has neither:
+// it talks to the cluster through the API, and the ExApp's image is the one
+// holding the volume.
+//
+// IDEMPOTENT: a language whose directory already holds its model is left
+// alone. Re-running `install` therefore does not re-download 68 MB, and adding
+// a language later downloads only the difference — which is what makes the
+// list safe to grow.
+func telechargerModeles(ctx context.Context, cli *k8sapi.Client, langues []string) error {
+	const depot = "https://huggingface.co/Nextcloud-AI/vosk-models/resolve/main"
+
+	for _, l := range langues {
+		dossier, ok := modelesVosk[l]
+		if !ok {
+			return fmt.Errorf("no model known for language %q: the ExApp would serve a directory that does not exist", l)
+		}
+
+		// The model is complete when its acoustic model is there: every other
+		// file is useless without it, and its presence means an interrupted
+		// download did not leave a half-copied directory behind.
+		script := fmt.Sprintf(`
+set -e
+D="%s"
+T="%s/$D"
+if [ -f "$T/am/final.mdl" ]; then
+  echo "  %s already present"
+  exit 0
+fi
+mkdir -p "$T"
+for f in README am/final.mdl conf/mfcc.conf conf/model.conf \
+         graph/Gr.fst graph/HCLr.fst graph/disambig_tid.int \
+         graph/phones/word_boundary.int ivector/final.dubm ivector/final.ie \
+         ivector/final.mat ivector/global_cmvn.stats \
+         ivector/online_cmvn.conf ivector/splice.conf; do
+  mkdir -p "$T/$(dirname "$f")"
+  curl -sfL --retry 3 --max-time 300 "%s/$D/$f" -o "$T/$f"
+done
+echo "  %s downloaded"
+`, dossier, modeleRepertoire, l, depot, l)
+
+		if _, err := exappsExec(ctx, cli, script); err != nil {
+			return fmt.Errorf("downloading the %s model: %w", l, err)
+		}
+	}
+	return nil
+}
+
+// modeleRepertoire is the ExApp's persistent volume, where vosk_server.py looks
+// for its models. It is read from the ExApp rather than assumed: that path is
+// the contract between the two, and a wrong one downloads 68 MB nobody reads.
+const modeleRepertoire = "/nc_app_live_transcription_data"
+
+// tailleModeles returns the disk footprint of the given languages, in
+// megabytes. Indicative — measured from the repository's file listing — and
+// used only to show the order of magnitude, never to decide anything.
+func tailleModeles(langs []string) float64 {
+	// Sizes per language, from the HuggingFace file listing.
+	tailles := map[string]float64{
+		"fr": 68.5, "en": 2866, "de": 95.6, "es": 60.3, "it": 91.3,
+		"nl": 68.7, "pt": 53.6, "ar": 698.2, "br": 310.9,
+	}
+	var total float64
+	for _, l := range langs {
+		total += tailles[l]
+	}
+	return total
+}
+
+// modelesVosk maps a language code to its directory in the HuggingFace
+// repository, mirroring the ExApp's own models.py. The names are the contract
+// between the two: vosk_server.py joins persistent_storage() with exactly this
+// directory name, so a typo downloads a model that is never found.
+var modelesVosk = map[string]string{
+	"fr": "vosk-model-small-fr-0.22",
+	"en": "vosk-model-en-us-0.22",
+	"de": "vosk-model-small-de-0.15",
+	"es": "vosk-model-small-es-0.42",
+	"it": "vosk-model-small-it-0.22",
+	"nl": "vosk-model-small-nl-0.22",
+	"pt": "vosk-model-small-pt-0.3",
+	"ar": "vosk-model-ar-mgb2-0.4",
+	"br": "vosk-model-br-0.8",
 }
 
 // secretSignaling reads the internal secret of the signaling FROM NEXTCLOUD.
@@ -254,6 +419,22 @@ func attendreDisparition(ctx context.Context, cli *k8sapi.Client, pod string) er
 		time.Sleep(5 * time.Second)
 	}
 	return fmt.Errorf("the ExApp is still listed after 120s — check the ExApp namespace %s", nsExapps)
+}
+
+// exappsExec runs a shell command inside the ExApp pod, THROUGH THE KUBERNETES
+// API — same reasoning as occ below: the console's container is distroless and
+// has no kubectl to shell out to.
+//
+// The ExApp is the only place that holds the speech-model volume, so the shell
+// available is the one in ITS image (Debian here, with curl), not Nextcloud's.
+func exappsExec(ctx context.Context, cli *k8sapi.Client, script string) (string, error) {
+	pod, err := cli.PodDuDeploiement(ctx, nsExapps, "nc-app-"+appTranscription, "app="+appTranscription)
+	if err != nil {
+		return "", fmt.Errorf("no %s pod in %s: the model cannot be placed before the ExApp runs: %w",
+			appTranscription, nsExapps, err)
+	}
+	// The container name is the app id, which is how HaRP names it.
+	return cli.Executer(ctx, nsExapps, pod, appTranscription, "sh", "-c", script)
 }
 
 // occ runs an occ command inside the Nextcloud pod, THROUGH THE KUBERNETES API.

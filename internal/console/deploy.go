@@ -30,7 +30,7 @@ const (
 	// Bump MANDATORY on every change of the console page or code:
 	// buildAndImportImage skips the rebuild if the tag already exists in
 	// containerd. Without a bump, the old image keeps being served.
-	imageTag = "1.33.4"
+	imageTag = "1.33.5"
 	imageRef = imageName + ":" + imageTag
 )
 
