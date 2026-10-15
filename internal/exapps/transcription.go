@@ -9,12 +9,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ceffio-suite/ceffio/internal/k8s"
+	"github.com/ceffio-suite/ceffio/internal/k8sapi"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
 )
 
 // The app id, as Nextcloud knows it.
 const appTranscription = "live_transcription"
+
+// The namespace holding Nextcloud, and the label its Deployment carries.
+const (
+	nsNextcloud   = "ceffio-files"
+	etiqNextcloud = "nextcloud"
+)
 
 // TranscriptionDeploye installs the live transcription ExApp in Talk.
 //
@@ -35,7 +41,16 @@ const appTranscription = "live_transcription"
 func TranscriptionDeploye(ctx context.Context, domain string) error {
 	fmt.Println("\nDeploying live transcription (ExApp)...")
 
-	if err := verifierHarp(ctx); err != nil {
+	cli, err := k8sapi.Nouveau()
+	if err != nil {
+		return fmt.Errorf("Kubernetes client: %w", err)
+	}
+	pod, err := cli.PodDuDeploiement(ctx, nsNextcloud, "nextcloud", etiqNextcloud)
+	if err != nil {
+		return err
+	}
+
+	if err := verifierHarp(ctx, cli, pod); err != nil {
 		return err
 	}
 
@@ -59,18 +74,15 @@ func TranscriptionDeploye(ctx context.Context, domain string) error {
 	// --wait-finish so the call reports the real outcome: the ExApp is pulled
 	// and started by HaRP, and without it the command returns before anything
 	// has happened.
-	cmd := k8s.Command(ctx, "kubectl", "exec", "-n", "ceffio-files", "deploy/nextcloud",
-		"-c", "nextcloud", "--",
-		"php", "occ", "app_api:app:register", appTranscription,
+	sortie, err := occ(ctx, cli, pod,
+		"app_api:app:register", appTranscription,
 		"--env", "LT_HPB_URL="+urlSignaling,
 		"--env", "LT_INTERNAL_SECRET="+secretInterne,
 		"--wait-finish")
-	out, err := cmd.CombinedOutput()
-	brut := strings.TrimSpace(string(out))
 	if err != nil {
-		return fmt.Errorf("registering %s: %w: %s", appTranscription, err, brut)
+		return fmt.Errorf("registering %s: %w", appTranscription, err)
 	}
-	fmt.Println("  ✓ " + derniereLigneUtile(brut))
+	fmt.Println("  ✓ " + derniereLigneUtile(sortie))
 
 	fmt.Println("✓ Live transcription deployed")
 	fmt.Println("  The speech models are downloaded on first use (~6 GB).")
@@ -85,9 +97,8 @@ func TranscriptionDeploye(ctx context.Context, domain string) error {
 //  1. unregister from AppAPI — this is what tells HaRP to delete the ExApp
 //     Deployment, its Service and its PersistentVolumeClaim in
 //     nextcloud-exapps. Skipping it leaves a running workload nobody manages.
-//  2. disable and remove the app itself in Nextcloud, otherwise it stays
-//     listed and Talk keeps advertising a transcription capability that has
-//     no backend.
+//  2. disable the app itself in Nextcloud, otherwise it stays listed and Talk
+//     keeps advertising a transcription capability that has no backend.
 //  3. the downloaded language models live in the ExApp's volume. Removing the
 //     PVC (step 1) frees them; there is nothing else to clean by hand.
 //
@@ -96,11 +107,21 @@ func TranscriptionDeploye(ctx context.Context, domain string) error {
 func TranscriptionSupprime(ctx context.Context) error {
 	fmt.Println("\nRemoving live transcription (ExApp)...")
 
-	if err := occ(ctx, "app_api:app:disable", appTranscription); err != nil {
+	cli, err := k8sapi.Nouveau()
+	if err != nil {
+		return fmt.Errorf("Kubernetes client: %w", err)
+	}
+	pod, err := cli.PodDuDeploiement(ctx, nsNextcloud, "nextcloud", etiqNextcloud)
+	if err != nil {
+		return err
+	}
+
+	if _, err := occ(ctx, cli, pod, "app_api:app:disable", appTranscription); err != nil {
 		// Not fatal: it may already be disabled. Reported, not swallowed.
 		fmt.Printf("  note: disable returned: %v\n", err)
 	}
-	if err := occ(ctx, "app_api:app:unregister", appTranscription); err != nil {
+
+	if _, err := occ(ctx, cli, pod, "app_api:app:unregister", appTranscription); err != nil {
 		if estAbsent(err) {
 			fmt.Println("  live transcription is not installed — nothing to remove")
 			return nil
@@ -110,7 +131,7 @@ func TranscriptionSupprime(ctx context.Context) error {
 
 	// Confirm HaRP actually tore the workload down, rather than trusting the
 	// unregister call: a leftover Deployment would keep consuming RAM.
-	if err := attendreDisparition(ctx); err != nil {
+	if err := attendreDisparition(ctx, cli, pod); err != nil {
 		return err
 	}
 
@@ -118,48 +139,57 @@ func TranscriptionSupprime(ctx context.Context) error {
 	return nil
 }
 
-// verifierHarp refuses to go further when the deploy daemon is missing.
+// verifierHarp refuses to go further when no deploy daemon is registered.
 //
-// Without it the registration fails with a message about a daemon that is not
+// Without one the registration fails with a message about a daemon that is not
 // configured, which reads like an app problem rather than a missing
-// prerequisite. Saying it here costs one call and saves the confusion.
-func verifierHarp(ctx context.Context) error {
-	cmd := k8s.Command(ctx, "kubectl", "get", "deploy", nomHarp, "-n", nsHarp,
-		"-o", "jsonpath={.status.readyReplicas}")
-	out, err := cmd.Output()
+// prerequisite. Asking AppAPI directly is also the honest check: the daemon
+// could be running while not registered, and registering an ExApp needs the
+// registration, not the pod.
+func verifierHarp(ctx context.Context, cli *k8sapi.Client, pod string) error {
+	sortie, err := occ(ctx, cli, pod, "app_api:daemon:list")
 	if err != nil {
-		return fmt.Errorf("the ExApp deploy daemon (HaRP) is not deployed: run 'ceffio install' first")
+		return fmt.Errorf("cannot read the AppAPI daemon list: %w", err)
 	}
-	if strings.TrimSpace(string(out)) == "0" || strings.TrimSpace(string(out)) == "" {
-		return fmt.Errorf("the ExApp deploy daemon (HaRP) is not ready: check deploy/%s -n %s", nomHarp, nsHarp)
+	if !strings.Contains(strings.ToLower(sortie), nomHarp) {
+		return fmt.Errorf("no ExApp deploy daemon is registered in AppAPI (expected %q): run 'ceffio install' first", nomHarp)
 	}
 	return nil
 }
 
-// attendreDisparition waits for HaRP to have removed the ExApp workload.
-func attendreDisparition(ctx context.Context) error {
-	fmt.Println("∙ waiting for HaRP to remove the workload...")
+// attendreDisparition waits for the ExApp to be gone from AppAPI.
+//
+// We poll AppAPI rather than the Deployment: AppAPI is what decides, and HaRP
+// removes the workload as a consequence. Watching the wrong one would report
+// success while the workload is still there.
+func attendreDisparition(ctx context.Context, cli *k8sapi.Client, pod string) error {
+	fmt.Println("∙ waiting for the ExApp to be removed...")
 	fin := time.Now().Add(120 * time.Second)
 	for time.Now().Before(fin) {
-		cmd := k8s.Command(ctx, "kubectl", "get", "deploy", appTranscription,
-			"-n", nsExapps, "-o", "name")
-		if err := cmd.Run(); err != nil {
+		sortie, err := occ(ctx, cli, pod, "app_api:app:list")
+		if err == nil && !strings.Contains(sortie, appTranscription) {
 			fmt.Println("  ✓ workload removed")
 			return nil
 		}
 		time.Sleep(5 * time.Second)
 	}
-	return fmt.Errorf("the ExApp workload still exists after 120s — check deploy/%s -n %s", appTranscription, nsExapps)
+	return fmt.Errorf("the ExApp is still listed after 120s — check the ExApp namespace %s", nsExapps)
 }
 
-func occ(ctx context.Context, args ...string) error {
-	complet := append([]string{"exec", "-n", "ceffio-files", "deploy/nextcloud", "-c", "nextcloud", "--",
-		"php", "occ"}, args...)
-	out, err := k8s.Command(ctx, "kubectl", complet...).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
+// occ runs an occ command inside the Nextcloud pod, THROUGH THE KUBERNETES API.
+//
+// WHY NOT kubectl: the administration console runs in a distroless container
+// with no shell and no kubectl binary. Shelling out to kubectl works from the
+// command line but fails inside the console with
+//
+//	exec: "kubectl": executable file not found in $PATH
+//
+// which is exactly what happened in production. The API does the same thing
+// over HTTP and works in both contexts, so there is one code path, not two
+// that drift apart.
+func occ(ctx context.Context, cli *k8sapi.Client, pod string, args ...string) (string, error) {
+	complet := append([]string{"php", "occ"}, args...)
+	return cli.Executer(ctx, nsNextcloud, pod, "nextcloud", complet...)
 }
 
 func estAbsent(err error) bool {

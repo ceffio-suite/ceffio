@@ -504,3 +504,28 @@ func (c *Client) AttendrePodInstalle(ctx context.Context, ns, pod string, limite
 	}
 	return "", fmt.Errorf("pod %s/%s not scheduled after %s (%s)", ns, pod, limite, dernier)
 }
+
+// PodDuDeploiement returns the name of a RUNNING pod for a Deployment.
+//
+// WHY NOT USE THE DEPLOYMENT NAME DIRECTLY: "kubectl exec deploy/nextcloud"
+// lets kubectl resolve the pod, but the API does not — an exec request needs a
+// real pod name. The name carries a ReplicaSet hash that changes on every
+// rollout, so a hard-coded one works until the first update and then fails at
+// the worst possible moment.
+//
+// We select on the same label the Deployment uses, and require the pod to be
+// Running: a Pending pod would accept nothing and the error would be obscure.
+func (c *Client) PodDuDeploiement(ctx context.Context, ns, nom, etiquette string) (string, error) {
+	pods, err := c.cs.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: "app=" + etiquette,
+	})
+	if err != nil {
+		return "", fmt.Errorf("listing pods in %s: %w", ns, err)
+	}
+	for _, p := range pods.Items {
+		if p.Status.Phase == corev1.PodRunning {
+			return p.Name, nil
+		}
+	}
+	return "", fmt.Errorf("no %s pod in service in %s (deployment %s)", etiquette, ns, nom)
+}

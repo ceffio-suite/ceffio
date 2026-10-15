@@ -90,8 +90,12 @@ func (s *Server) repondreEtatTranscription(w http.ResponseWriter, r *http.Reques
 		Poids: "Environ 9 Go de disque (image et modeles) et 16 Go de RAM pour un ou deux appels simultanes.",
 	}
 
-	sortie, err := kubeCombined("exec", "-n", "ceffio-files", "deploy/nextcloud", "-c", "nextcloud",
-		"--", "php", "occ", "app_api:app:list")
+	// occScript goes through the Kubernetes API (remotecommand), NOT through a
+	// kubectl subprocess. This container is distroless: no shell, no kubectl.
+	// Shelling out here answered
+	//   exec: "kubectl": executable file not found in $PATH
+	// which is what the interface displayed before this fix.
+	sortie, err := s.occScript(r.Context(), "php occ app_api:app:list")
 	if err != nil {
 		// On ne conclut PAS « absente » sur un echec : on dit que l'etat est
 		// inconnu. Confondre les deux ferait proposer une installation alors
