@@ -14,6 +14,7 @@
 .edge{fill:none;stroke:#12151C;stroke-width:1.4}
 .edge.sso{stroke:#6A3FC8;stroke-dasharray:6 4;stroke-width:1.6}
 .edge.media{stroke:#C96A12;stroke-width:2.2}
+    .edge.ha{stroke:#1E7F6B;stroke-width:1.8}
 .t-ns{fill:#5A5F6B}.t-name{fill:#12151C}.t-sub{fill:#5A5F6B}
 .t-lbl,.t-host{fill:#12151C}.t-lbl.sso{fill:#6A3FC8}.t-lbl.media{fill:#C96A12}
 .pill{fill:#F6F5F1;stroke:#DEDBD2}
@@ -28,6 +29,7 @@
 .edge{fill:none;stroke:#ECEAE4;stroke-width:1.4}
 .edge.sso{stroke:#A98BF0;stroke-dasharray:6 4;stroke-width:1.6}
 .edge.media{stroke:#F5A55A;stroke-width:2.2}
+    .edge.ha{stroke:#4FCFAE;stroke-width:1.8}
 .t-ns{fill:#9BA1AE}.t-name{fill:#ECEAE4}.t-sub{fill:#9BA1AE}
 .t-lbl,.t-host{fill:#ECEAE4}.t-lbl.sso{fill:#A98BF0}.t-lbl.media{fill:#F5A55A}
 .pill{fill:#11141A;stroke:#2C313B}
@@ -36,6 +38,7 @@
 <rect class="paper" x="0" y="0" width="1200" height="820"/>
 <defs>
           <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0 0 L10 5 L0 10 z"/></marker>
+        <marker id="aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0 0 L10 5 L0 10 z"/></marker>
           <marker id="ahs" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-sso" d="M0 0 L10 5 L0 10 z"/></marker>
           <marker id="ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="ah-media" d="M0 0 L10 5 L0 10 z"/></marker>
         </defs>
@@ -148,7 +151,7 @@
         <text class="t-host" x="1000" y="436" text-anchor="middle">mail.</text>
 
         <!-- Row 3 -->
-        <rect class="grp talk" x="400" y="500" width="510" height="212" rx="10"/>
+        <rect class="grp talk" x="400" y="500" width="510" height="256" rx="10"/>
         <text class="t-ns" x="414" y="520">ceffio-video · Talk backend</text>
         <rect class="node" x="416" y="540" width="150" height="60" rx="7"/>
         <text class="t-name" x="430" y="565">signaling</text>
@@ -172,6 +175,23 @@
         <text class="t-sub" x="580" y="682">Talk calls it directly; it joins the room as a</text>
         <text class="t-sub" x="580" y="694">hidden participant and uploads the file.</text>
 
+        <!-- Live transcription. The recorder above produces the file; the
+             transcription ExApp consumes it. Both are ExApps, so both are
+             reached through HaRP, which is the proxy AppAPI talks to: Nextcloud
+             calls HaRP, HaRP tunnels to the ExApp (FRP). Drawing the edge
+             straight from Nextcloud would hide the component that actually
+             makes them reachable — and that component was the missing piece
+             that kept the ExApp permanently disabled. -->
+        <rect class="node" x="416" y="716" width="150" height="26" rx="7"/>
+        <text class="t-name" x="428" y="734" font-size="12">live-transcription</text>
+        <text class="t-sub" x="580" y="722">ExApp · Vosk models, audio-to-text on the</text>
+        <text class="t-sub" x="580" y="734">recording. Speaks to Talk over the HaRP tunnel.</text>
+
+        <rect class="node host" x="790" y="676" width="104" height="66" rx="7"/>
+        <text class="t-name" x="804" y="698" font-size="12">HaRP</text>
+        <text class="t-sub" x="804" y="714">ExApp proxy</text>
+        <text class="t-sub" x="804" y="730">AppAPI + FRP</text>
+
         <rect class="grp" x="940" y="500" width="240" height="180" rx="10"/>
         <text class="t-ns" x="954" y="520">ceffio-data</text>
         <rect class="node" x="956" y="534" width="208" height="58" rx="7"/>
@@ -187,6 +207,17 @@
              never through a group box. -->
         <polyline class="edge" points="416,690 360,690 360,140 666,140"/>
         <line class="edge" x1="666" y1="140" x2="662" y2="140" marker-end="url(#ah)"/>
+
+        <!-- HaRP: Nextcloud reaches the ExApps THROUGH HaRP, so the arrow climbs
+             from HaRP up to Nextcloud. This is the route that was missing
+             (/exapps); without it AppAPI retried a 404 forever and the ExApp
+             stayed disabled. It uses the narrow gutter at x≈922, between the
+             right edge of the group boxes (910) and ceffio-data (940), so it
+             crosses no node and no label on the way up. Then it enters
+             Nextcloud's box horizontally, in the free band at y=228 (below the
+             service pills, above the group's bottom edge at 220). -->
+        <polyline class="edge ha" points="894,709 922,709 922,104 900,104"/>
+        <line class="edge ha" x1="900" y1="104" x2="894" y2="104" marker-end="url(#aha)"/>
 
         <!-- Media -->
         <polyline class="edge media" points="75,410 75,745 852,745"/>

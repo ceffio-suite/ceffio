@@ -102,10 +102,42 @@ service, no common secret, no common NAT rule.
 ```
 spreed.<domain>      443/tcp       via Caddy — already routed by *.ceffio
 20000-20100/udp      Janus media                 ← TO OPEN
-3479/udp             TURN coturn (Ceffio)        ← TO OPEN (3478 = other RTC suite)
-5349/tcp             TURN-over-TLS               ← TO OPEN
-49152-49200/udp      coturn relay                ← TO OPEN
+3479/udp             TURN coturn (Ceffio)        ← OPEN, VERIFIED
+5349/tcp             TURN-over-TLS               ← OPEN, VERIFIED
+49152-49200/udp      coturn relay                ← OPEN, VERIFIED
 ```
+
+### Verification status (measured, not assumed)
+
+| Port | Opened | Verified how |
+|---|---|---|
+| `3479/udp` | yes (Freebox) | STUN Binding Request answered from outside; TURN Allocate succeeded |
+| `3479/tcp` | yes (Freebox) | TCP handshake from outside |
+| `5349/tcp` | yes (Freebox) | TLS handshake, certificate `talk.<domain>` served |
+| `49152-49200/udp` | yes (Freebox, "Relais coturn") | relay address allocated **from the public IP**: `82.64.251.96:49198` |
+| `443/tcp` | already | reference |
+
+The relay range is the one that is easy to get wrong, and the only honest way
+to test it is **from outside**, never from the host: from inside, traffic never
+leaves the network and the NAT rule is never exercised. The test that counts:
+
+```
+turnutils_uclient -u "<username>" -w "<credential>" -y \
+    -e <public-ip> -p 3479 talk.<domain>
+```
+
+A successful run prints the relay address, and the address **must** be the
+public one with a port inside the range:
+
+```
+INFO IPv4. Received relay addr: 82.64.251.96:49198
+INFO Total lost packets 0 (0.000000%)
+```
+
+A relay port outside `49152-49200` means `relay-min-port`/`relay-max-port` and
+the NAT rule disagree. A **private** relay address means `--external-ip` did not
+take effect — the browser would receive an unreachable candidate, which is
+exactly the "a TURN server is probably required" symptom.
 
 TURN port distribution in the infrastructure:
 
