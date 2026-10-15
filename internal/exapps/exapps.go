@@ -146,8 +146,21 @@ func enregistrerDaemon(ctx context.Context, domain, cle string) error {
 
 	fmt.Println("∙ registering the deploy daemon in AppAPI...")
 
-	// Best effort: absent on a fresh install, and its failure is not an error.
+	// REMOVE ANY DAEMON OF THAT NAME BEFORE RE-REGISTERING, and this is not
+	// cosmetic: re-registering an existing name is SILENTLY SKIPPED
+	//   ("Registration skipped, as the daemon config `appapi-harp` already
+	//   exists.")
+	// so a daemon created with wrong settings keeps them for good, and the only
+	// symptom is ExApps that install and stay disabled.
+	//
+	// The unregister can fail for one reason only: ExApps are still attached
+	// ("contains 1 ExApps, please remove them first"). In that case the daemon
+	// exists and is in use, so we leave it alone and say so rather than failing
+	// the whole deployment — the settings below are verified just after, which
+	// is what actually matters.
 	if _, err := execOcc(ctx, cli, pod, "app_api:daemon:unregister", nomHarp); err != nil {
+		// Either it did not exist (fine) or ExApps are attached (also fine:
+		// we then update in place, and the checks below decide).
 		_ = err
 	}
 
@@ -159,7 +172,14 @@ func enregistrerDaemon(ctx context.Context, domain, cle string) error {
 	if err != nil {
 		return fmt.Errorf("registering the HaRP daemon: %w", err)
 	}
-	if !strings.Contains(strings.ToLower(sortie), "successfully registered") {
+
+	// THE ANSWER IS NOT THE CONTRACT. "already exists" is an acceptable outcome:
+	// it means a daemon of that name is registered, which is what we want. What
+	// we must NOT do is treat it as success and move on — the whole point of
+	// this step is that the existing entry might carry WRONG settings. So the
+	// FRP address is checked below, and THAT is the real assertion.
+	brut := strings.ToLower(sortie)
+	if !strings.Contains(brut, "successfully registered") && !strings.Contains(brut, "already exists") {
 		return fmt.Errorf("registering the HaRP daemon (unexpected answer): %s", derniereLigneUtile(sortie))
 	}
 
