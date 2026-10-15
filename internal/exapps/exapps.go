@@ -486,3 +486,98 @@ func indentYaml(s string, n int) string {
 	}
 	return strings.Join(lignes, "\n")
 }
+
+// NomsHarp exposes the daemon identity to callers that must report on it (the
+// administration console reads its state). Kept as functions rather than
+// exported variables so the values stay single-sourced in one place.
+func NomsHarp() (nom, namespace string) { return nomHarp, nsHarp }
+
+// Remove takes the deploy daemon out, completely.
+//
+// ORDER MATTERS, and getting it wrong leaves orphans:
+//  1. the ExApps first — AppAPI refuses to remove a daemon that still has any
+//     ("harp daemon contains 1 ExApps, please remove them first to proceed"),
+//     so a daemon removal that runs first fails with a message about ExApps.
+//  2. then the daemon registration.
+//  3. then the Kubernetes resources: HaRP, its Service, its Ingress, its RBAC.
+//  4. and finally the namespace, which holds the ExApp volumes. Removing it
+//     frees the downloaded models; keeping it would silently retain gigabytes
+//     that nothing references any more.
+func Remove(ctx context.Context) error {
+	fmt.Println("\nRemoving the ExApp deploy daemon (HaRP)...")
+
+	cli, err := k8sapi.Nouveau()
+	if err != nil {
+		return fmt.Errorf("Kubernetes client: %w", err)
+	}
+
+	// 1. ExApps first. Best effort and reported: an empty list is the common
+	// case, and its error would be noise.
+	if pod, err := cli.PodDuDeploiement(ctx, "ceffio-files", "nextcloud", "nextcloud"); err == nil {
+		if liste, err := execOcc(ctx, cli, pod, "app_api:app:list"); err == nil {
+			for _, l := range strings.Split(liste, "\n") {
+				champ := strings.Fields(strings.TrimSpace(l))
+				if len(champ) > 0 && strings.Contains(champ[0], "_") &&
+					!strings.Contains(strings.ToLower(l), "command") &&
+					!strings.HasPrefix(strings.TrimSpace(l), "ExApps") {
+					app := champ[0]
+					fmt.Printf("∙ removing the ExApp %s first\n", app)
+					_, _ = execOcc(ctx, cli, pod, "app_api:app:unregister", app, "--force")
+				}
+			}
+		}
+		// 2. the daemon registration
+		_, _ = execOcc(ctx, cli, pod, "app_api:daemon:unregister", nomHarp)
+	}
+
+	// 3. the Kubernetes resources
+	for _, doc := range []string{
+		fmt.Sprintf("deployment/%s", nomHarp),
+		fmt.Sprintf("service/%s", nomHarp),
+		fmt.Sprintf("ingress/%s", nomHarp),
+		fmt.Sprintf("serviceaccount/%s", nomHarp),
+		fmt.Sprintf("role/%s", nomHarp),
+		fmt.Sprintf("rolebinding/%s", nomHarp),
+	} {
+		_ = k8s.Command(ctx, "kubectl", "delete", doc, "-n", nsHarp,
+			"--ignore-not-found").Run()
+	}
+
+	// 4. the namespace, which carries the ExApp volumes
+	if err := k8s.Command(ctx, "kubectl", "delete", "namespace", nsExapps,
+		"--ignore-not-found", "--wait=false").Run(); err != nil {
+		return fmt.Errorf("deleting the ExApp namespace %s: %w", nsExapps, err)
+	}
+
+	fmt.Println("✓ ExApp deploy daemon removed (namespace and ExApp volumes freed)")
+	return nil
+}
+
+// DeployeurPret reports whether an ExApp can be installed right now.
+//
+// WHY THIS IS A FUNCTION AND NOT A COMMENT: an ExApp cannot install itself.
+// HaRP deploys it, and AppAPI must also know about HaRP or nothing enables.
+// Without this check the failure is a registration error about a missing
+// daemon, which reads like an application problem and sends the reader to the
+// wrong place. Naming the missing piece here is the whole point.
+func DeployeurPret(ctx context.Context) error {
+	cli, err := k8sapi.Nouveau()
+	if err != nil {
+		return fmt.Errorf("Kubernetes client: %w", err)
+	}
+	if !cli.DeploiementPret(ctx, nsHarp, nomHarp) {
+		return fmt.Errorf("le deployeur d'applications (HaRP) n'est pas installe : installez-le d'abord, il deploie les applications externes")
+	}
+	pod, err := cli.PodDuDeploiement(ctx, "ceffio-files", "nextcloud", "nextcloud")
+	if err != nil {
+		return err
+	}
+	sortie, err := execOcc(ctx, cli, pod, "app_api:daemon:list")
+	if err != nil {
+		return fmt.Errorf("impossible de lire la liste des deployeurs AppAPI : %w", err)
+	}
+	if !strings.Contains(strings.ToLower(sortie), nomHarp) {
+		return fmt.Errorf("HaRP tourne mais n'est pas enregistre dans Nextcloud : les applications ne pourraient pas s'activer")
+	}
+	return nil
+}

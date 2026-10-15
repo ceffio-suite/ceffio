@@ -529,3 +529,16 @@ func (c *Client) PodDuDeploiement(ctx context.Context, ns, nom, etiquette string
 	}
 	return "", fmt.Errorf("no %s pod in service in %s (deployment %s)", etiquette, ns, nom)
 }
+
+// DeploiementPret reports whether a Deployment has at least one Ready replica.
+//
+// It reads the status rather than trusting the object's existence: a Deployment
+// with zero ready replicas exists, and answering "present" for it would claim a
+// service that is not serving.
+func (c *Client) DeploiementPret(ctx context.Context, ns, nom string) bool {
+	d, err := c.cs.AppsV1().Deployments(ns).Get(ctx, nom, metav1.GetOptions{})
+	if err != nil {
+		return false
+	}
+	return d.Status.ReadyReplicas > 0
+}

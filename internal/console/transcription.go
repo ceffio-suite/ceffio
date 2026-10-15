@@ -28,6 +28,12 @@ type etatTranscription struct {
 	Etat     string `json:"state"` // "installed", "absent", "unknown"
 	Detail   string `json:"detail,omitempty"`
 	Poids    string `json:"weightNote"`
+	// PretPourInstallation dit si le DEPLOYEUR est en place. L'app ne peut pas
+	// etre installee sans lui : c'est lui qui la deploie. L'interface s'appuie
+	// sur ce champ pour desactiver le bouton, plutot que de laisser l'utilisateur
+	// lancer une operation qui echouerait.
+	PretPourInstallation bool   `json:"readyToInstall"`
+	RaisonBlocage        string `json:"blockedReason,omitempty"`
 }
 
 type demandeTranscription struct {
@@ -54,6 +60,14 @@ func (s *Server) handleTranscription(w http.ResponseWriter, r *http.Request) {
 		var err error
 		switch d.Action {
 		case "install":
+			// ON VERIFIE LA DEPENDANCE ICI AUSSI, pas seulement dans l'interface.
+			// Un bouton grise se contourne (appel direct, page ouverte avant
+			// l'installation du deployeur) ; la seule garantie est de refuser
+			// l'operation cote serveur, avec un message qui nomme ce qui manque.
+			if err := exapps.DeployeurPret(r.Context()); err != nil {
+				apiErr(w, http.StatusConflict, err.Error())
+				return
+			}
 			err = exapps.TranscriptionDeploye(r.Context(), s.Domain)
 		case "uninstall":
 			err = exapps.TranscriptionSupprime(r.Context())
@@ -88,6 +102,15 @@ func (s *Server) handleTranscription(w http.ResponseWriter, r *http.Request) {
 func (s *Server) repondreEtatTranscription(w http.ResponseWriter, r *http.Request) {
 	etat := etatTranscription{
 		Poids: "Environ 9 Go de disque (image et modeles) et 16 Go de RAM pour un ou deux appels simultanes.",
+	}
+
+	// La disponibilite du deployeur est rapportee avec l'etat de l'app : c'est
+	// ce qui permet a l'interface de desactiver le bouton AVANT que
+	// l'utilisateur ne lance une operation vouee a echouer.
+	if err := exapps.DeployeurPret(r.Context()); err != nil {
+		etat.RaisonBlocage = err.Error()
+	} else {
+		etat.PretPourInstallation = true
 	}
 
 	// occScript goes through the Kubernetes API (remotecommand), NOT through a

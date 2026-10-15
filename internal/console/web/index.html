@@ -166,6 +166,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9S14.5 18.5 12 21c-2.5-2.5-3.5-5.5-3.5-9S9.5 5.5 12 3z"/></svg>
       Applications
     </div>
+    <div class="nav-item" data-tab="exapps">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+      Applications
+    </div>
     <div class="nav-item" data-tab="transcription">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4M8 22h8"/></svg>
       Transcription
@@ -263,6 +267,27 @@
         </table>
       </section>
 
+      <!-- EXAPPS -->
+      <section class="section" id="tab-exapps">
+        <div class="card">
+          <h3>External applications deployer (HaRP)</h3>
+          <p class="section-sub" style="margin-top:0">
+            Nextcloud runs some features as containers rather than PHP code.
+            It cannot start one by itself: it needs a deployer. HaRP is that
+            deployer, and it speaks the Kubernetes API directly.
+          </p>
+          <div id="exappsEtat" style="margin:14px 0"></div>
+          <div class="form-row">
+            <button class="btn" id="btnExappsInstall" onclick="exappsAction('install')">Install</button>
+            <button class="btn ghost" id="btnExappsRemove" onclick="exappsAction('uninstall')">Remove</button>
+          </div>
+          <p class="section-sub" style="margin-bottom:0">
+            Everything below depends on this. Removing it also removes the
+            applications it deployed and their volumes.
+          </p>
+        </div>
+      </section>
+
       <!-- TRANSCRIPTION -->
       <section class="section" id="tab-transcription">
         <div class="card">
@@ -280,6 +305,7 @@
             than in the initial deployment.
           </p>
           <div id="transcriptionEtat" style="margin:14px 0"></div>
+          <div id="transcriptionBlocage"></div>
           <div class="form-row">
             <button class="btn" id="btnTranscriptionInstall" onclick="transcriptionAction('install')">
               Install
@@ -456,6 +482,7 @@
     users:     ['Users', 'single sign-on accounts'],
     certs:     ['TLS certificates', 'validity and expiry'],
     infra:     ['Infrastructure', 'internal layers and pods'],
+    exapps:        ['Applications', 'external applications deployer'],
     transcription: ['Transcription', 'live transcription in Talk'],
   };
 
@@ -470,6 +497,7 @@
     // Load on open: the state is read from AppAPI, which is the only place
     // that knows what is actually installed.
     if (tab === 'transcription') renderTranscription();
+    if (tab === 'exapps') renderExapps();
   });
 
   setInterval(() => { $('clock').textContent = new Date().toLocaleTimeString('en-GB'); }, 1000);
@@ -833,6 +861,69 @@
   // removing are explicit actions: the component is heavy and its settings are
   // not revisable in place, so neither happens as a side effect of something
   // else.
+  // ── external applications deployer (HaRP) ──
+  //
+  // This is INFRASTRUCTURE, not a feature: without it Nextcloud cannot install
+  // any external application. It is shown separately for that reason, and the
+  // install button of the transcription app stays disabled until it is in
+  // place.
+  // Navigate to a tab from inside the page (used by the dependency notice).
+  function ouvrirOnglet(nom) {
+    const el = document.querySelector(`.nav-item[data-tab="${nom}"]`);
+    if (el) el.click();
+  }
+
+  async function renderExapps() {
+    const zone = $('exappsEtat');
+    zone.innerHTML = '<span class="badge mut">reading state…</span>';
+    try {
+      const d = await api('/api/exapps');
+      let pastille;
+      if (d.state === 'running') pastille = '<span class="badge ok">deployed</span>';
+      else if (d.state === 'absent') pastille = '<span class="badge mut">not deployed</span>';
+      else if (d.state === 'degraded') pastille = '<span class="badge warn">incomplete</span>';
+      else pastille = '<span class="badge warn">state unknown</span>';
+
+      zone.innerHTML = `
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          ${pastille}
+          <span class="muted" style="font-size:12px">
+            ${d.registered ? 'registered in Nextcloud' : 'not registered in Nextcloud'}
+          </span>
+        </div>
+        ${d.detail ? `<div class="note" style="margin-top:10px">${esc(d.detail)}</div>` : ''}`;
+
+      $('btnExappsInstall').disabled = (d.state === 'running');
+      $('btnExappsRemove').disabled = (d.state === 'absent');
+    } catch (e) {
+      zone.innerHTML = `<span class="badge warn">cannot read state</span>
+        <div class="note" style="margin-top:10px">${esc(e.message)}</div>`;
+    }
+  }
+
+  async function exappsAction(action) {
+    const installe = action === 'install';
+    const message = installe
+      ? 'Install the external applications deployer? It enables Nextcloud to run containerised features.'
+      : 'Remove the deployer? The applications it deployed and their volumes will also be removed.';
+    if (!confirm(message)) return;
+
+    const bouton = installe ? $('btnExappsInstall') : $('btnExappsRemove');
+    const libelle = bouton.textContent;
+    bouton.disabled = true;
+    bouton.textContent = installe ? 'Installing…' : 'Removing…';
+
+    try {
+      await api('/api/exapps', { method: 'POST', body: JSON.stringify({ action }) });
+      toast(installe ? 'Deployer installed' : 'Deployer removed');
+    } catch (e) {
+      toast(e.message, 'warn');
+    } finally {
+      bouton.textContent = libelle;
+      await renderExapps();
+    }
+  }
+
   async function renderTranscription() {
     const zone = $('transcriptionEtat');
     zone.innerHTML = '<span class="badge mut">reading state…</span>';
@@ -850,10 +941,30 @@
         </div>
         ${d.detail ? `<div class="note" style="margin-top:10px">${esc(d.detail)}</div>` : ''}`;
 
-      // Only the action that makes sense is enabled: offering "Install" on an
-      // installed app invites a pointless call that would answer with an error.
-      $('btnTranscriptionInstall').disabled = (d.state === 'installed');
+      // The install button needs TWO conditions, not one: the app must not
+      // already be installed, AND the deployer must be in place. Without the
+      // second, the button would launch an operation that can only fail —
+      // an external application cannot deploy itself, HaRP deploys it.
+      //
+      // The dependency is shown rather than merely enforced: a disabled button
+      // with no explanation is the same dead end as an install that fails.
+      const bloque = !d.readyToInstall && d.state !== 'installed';
+      $('btnTranscriptionInstall').disabled = (d.state === 'installed') || bloque;
       $('btnTranscriptionRemove').disabled = (d.state !== 'installed');
+
+      const zoneBlocage = $('transcriptionBlocage');
+      if (zoneBlocage) {
+        zoneBlocage.innerHTML = bloque
+          ? `<div class="note" style="margin-top:10px">
+               <b>Deployer required first.</b> ${esc(d.blockedReason || '')}
+               <div style="margin-top:8px">
+                 <button class="btn-ghost" onclick="ouvrirOnglet('exapps')">
+                   Go to Applications
+                 </button>
+               </div>
+             </div>`
+          : '';
+      }
     } catch (e) {
       zone.innerHTML = `<span class="badge warn">cannot read state</span>
         <div class="note" style="margin-top:10px">${esc(e.message)}</div>`;
