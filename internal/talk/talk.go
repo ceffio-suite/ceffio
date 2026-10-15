@@ -357,6 +357,14 @@ exec turnserver \
     --min-port=49152 \
     --max-port=49200 \
     --listening-port=%[4]d \
+    # TLS: WITHOUT THESE TWO OPTIONS COTURN DOES NOT OPEN 5349 AT ALL.
+    #
+    # It does not fail — it logs a warning and simply does not bind the port,
+    # so the manifest declares a listener that does not exist. The paths are
+    # the ones the volume mounts above.
+    --cert=/etc/coturn/certs/tls.crt \
+    --pkey=/etc/coturn/certs/tls.key \
+    --tls-listening-port=%[5]d \
     $EXTERNAL_ARG
 `, stunPort, stunPublic, "talk."+domaineDe(ctx), portTurn, portTurnTLS, "", k8sapi.IPLocaleNoeud(ctx))
 
@@ -420,6 +428,46 @@ spec:
         - {name: turn-tcp, containerPort: %[4]d, protocol: TCP}
         - {name: turns, containerPort: %[5]d, protocol: TCP}
         resources: {limits: {memory: 1Gi, cpu: "1"}}
+        # THE CERTIFICATE IS MOUNTED, or 5349 SILENTLY DOES NOT LISTEN.
+        #
+        # Measured: the port was declared in the manifest and NOTHING was bound
+        # to it. coturn refuses to open its TLS and DTLS listeners without a
+        # certificate, and reports it only as a WARNING:
+        #   cannot start TLS and DTLS listeners because certificate file is not
+        #   set properly
+        # An "openssl s_client -connect <ip>:5349" answered Connection refused —
+        # which is how it was noticed. A declared port is not an open port.
+        volumeMounts:
+        - {name: tls, mountPath: /etc/coturn/certs, readOnly: true}
+      volumes:
+      - name: tls
+        secret:
+          secretName: talk-tls
+          items:
+          - {key: tls.crt, path: tls.crt}
+          - {key: tls.key, path: tls.key}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: talk-tls
+  namespace: %[1]s
+spec:
+  # THE CERTIFICATE MUST CARRY THE REALM. coturn announces itself with
+  # --realm (talk.<domain>) and the browser verifies the certificate against
+  # the host it contacted. Any other name is rejected at the TLS handshake.
+  dnsNames:
+  - talk.%[9]s
+  duration: 2160h
+  renewBefore: 720h
+  secretName: talk-tls
+  issuerRef:
+    group: cert-manager.io
+    kind: ClusterIssuer
+    name: ceffio-ca-issuer
+  privateKey:
+    algorithm: ECDSA
+    size: 256
 ---
 # NodePort, NOT ClusterIP: these ports must be reachable from the Internet,
 # via the firewall's redirection rules toward the VM's IP. A ClusterIP only
@@ -436,7 +484,7 @@ spec:
   - {name: turn, port: %[4]d, targetPort: %[4]d, protocol: UDP}
   - {name: turn-tcp, port: %[4]d, targetPort: %[4]d, protocol: TCP}
   - {name: turns, port: %[5]d, targetPort: %[5]d, protocol: TCP}
-`, ns, coturnImage, indentYaml(script, 10), portTurn, portTurnTLS, annCoturn, k8sapi.IPLocaleNoeud(ctx))
+`, ns, coturnImage, indentYaml(script, 10), portTurn, portTurnTLS, annCoturn, k8sapi.IPLocaleNoeud(ctx), domaineDe(ctx))
 	return appliquer(ctx, manifeste)
 }
 
