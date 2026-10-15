@@ -292,6 +292,25 @@ func deployCoturn(ctx context.Context) error {
 
 ADDRESS=""
 read ADDRESS < /tmp/public-address.txt || true
+
+# THE LISTENING ADDRESS IS DISCOVERED, not assumed.
+#
+# The pod carries SEVERAL addresses: eth0 (192.168.1.48), the flannel overlay
+# (10.42.0.0) and the cni0 bridge (10.42.0.1). coturn listens on all of them by
+# default and picks one for the relay candidates — measured: it announced
+# 192.168.1.254, the NAT address of the box in front of the host. A browser
+# outside receives that and cannot reach it, which is exactly the "un serveur
+# TURN est probablement nécessaire" failure in Talk.
+#
+# So we pin the LOCAL address explicitly. The default route's source is the
+# interface address the host actually uses to leave the network, which is the
+# only one the NAT knows about.
+LOCAL_IP=""
+ip route get 8.8.8.8 2>/dev/null \
+    | sed -n 's/.*src \([0-9.]*\).*/\1/p' \
+    | head -1 > /tmp/local-address.txt || true
+read LOCAL_IP < /tmp/local-address.txt || true
+
 EXTERNAL_ARG=""
 if [ -n "$ADDRESS" ]; then
     EXTERNAL_ARG="--external-ip=$ADDRESS"
@@ -300,6 +319,19 @@ else
     echo "coturn: WARNING - public address not detected (STUN %[2]s:%[1]d unreachable)." >&2
     echo "coturn: relay candidates will carry the private address;" >&2
     echo "coturn: the relay will only serve inside the network." >&2
+fi
+
+# The listening and relay addresses must agree: --external-ip is the PUBLIC
+# address carried in the candidate, --relay-ip/--listening-ip are the LOCAL ones
+# coturn binds to. Pinning only the first leaves coturn free to answer from
+# another local address, and the NAT then maps them inconsistently.
+BIND_ARG=""
+if [ -n "$LOCAL_IP" ]; then
+    BIND_ARG="--listening-ip=$LOCAL_IP --relay-ip=$LOCAL_IP"
+    echo "coturn: binding on $LOCAL_IP"
+else
+    echo "coturn: WARNING - local address not resolved; coturn will bind to all interfaces." >&2
+    echo "coturn: with several addresses and a NAT, clients may receive an unreachable one." >&2
 fi
 
 exec turnserver \
@@ -312,6 +344,7 @@ exec turnserver \
     --no-multicast-peers \
     --no-stdout-log \
     --log-file=stdout \
+    $BIND_ARG \
     --stale-nonce=600 \
     --min-port=49152 \
     --max-port=49200 \
