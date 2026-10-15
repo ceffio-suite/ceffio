@@ -38,6 +38,9 @@ type installOptions struct {
 	mail            bool
 	office          bool
 	monitoring      bool
+	// Live transcription (Talk). Off unless asked: heavy, and its settings
+	// cannot be changed once installed.
+	liveTranscription bool
 
 	// Outbound delivery relay. INDISPENSABLE in practice: outbound port 25 is
 	// blocked by consumer ISPs (verified on Free), so Stalwart cannot deliver
@@ -83,6 +86,12 @@ Examples:
 	f.BoolVar(&o.mail, "mail", false, "Enable mail")
 	f.BoolVar(&o.office, "office", true, "Enable ONLYOFFICE")
 	f.BoolVar(&o.monitoring, "monitoring", true, "Enable observability")
+	// Live transcription in Talk. OFF BY DEFAULT, and that is deliberate:
+	// ~2.5 GB image + ~6 GB of models + ~16 GB of RAM, and its two settings
+	// cannot be changed after installation (the app must be removed and
+	// reinstalled). An installation that does not want it should not carry it,
+	// and the administration console can install and remove it later.
+	f.BoolVar(&o.liveTranscription, "live-transcription", false, "Enable live transcription in Talk (heavy: ~9 GB disk, ~16 GB RAM)")
 	// Outbound relay. Default: none (Stalwart receives but does not send
 	// to the outside). Since outbound port 25 is blocked by ISPs, this relay
 	// is what makes mail actually usable.
@@ -108,6 +117,7 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	fmt.Printf("Mail:       %s\n", yesNo(o.mail))
 	fmt.Printf("Office:     %s\n", yesNo(o.office))
 	fmt.Printf("Monitoring: %s\n", yesNo(o.monitoring))
+	fmt.Printf("Transcription: %s\n", yesNo(o.liveTranscription))
 	fmt.Println()
 
 	ctx := cmd.Context()
@@ -298,6 +308,14 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	// injector), which is why it cannot run before this point in the sequence.
 	if err := exapps.Deploy(ctx, o.domain); err != nil {
 		return err
+	}
+
+	// Live transcription is OPT-IN. It is installed only when asked, because
+	// of its weight and because its configuration is not revisable in place.
+	if o.liveTranscription {
+		if err := exapps.TranscriptionDeploye(ctx, o.domain); err != nil {
+			return err
+		}
 	}
 
 	// Secrets vault: OpenBao when configured, Kubernetes otherwise.
