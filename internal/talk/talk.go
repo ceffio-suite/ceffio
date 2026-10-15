@@ -37,6 +37,7 @@ import (
 	"strings"
 
 	"github.com/ceffio-suite/ceffio/internal/k8s"
+	"github.com/ceffio-suite/ceffio/internal/k8sapi"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"github.com/ceffio-suite/ceffio/internal/vault"
 	"github.com/ceffio-suite/ceffio/internal/version"
@@ -306,10 +307,17 @@ read ADDRESS < /tmp/public-address.txt || true
 # interface address the host actually uses to leave the network, which is the
 # only one the NAT knows about.
 LOCAL_IP=""
-ip route get 8.8.8.8 2>/dev/null \
-    | sed -n 's/.*src \([0-9.]*\).*/\1/p' \
-    | head -1 > /tmp/local-address.txt || true
-read LOCAL_IP < /tmp/local-address.txt || true
+# THE LOCAL ADDRESS COMES FROM THE ENVIRONMENT, not from a lookup inside the
+# container: this image has NO ip, ifconfig or route command (verified), so
+# an "ip route get" lookup cannot run here and the binding silently fell back
+# to "all interfaces" — measured: "WARNING - local address not resolved".
+#
+# The deployer resolves it through the Kubernetes API (the node's InternalIP,
+# which is the interface the host leaves the network by, the only one the NAT
+# knows about) and passes it in LOCALE_IP.
+if [ -n "$LOCALE_IP" ]; then
+    LOCAL_IP="$LOCALE_IP"
+fi
 
 EXTERNAL_ARG=""
 if [ -n "$ADDRESS" ]; then
@@ -350,7 +358,7 @@ exec turnserver \
     --max-port=49200 \
     --listening-port=%[4]d \
     $EXTERNAL_ARG
-`, stunPort, stunPublic, "talk."+domaineDe(ctx), portTurn)
+`, stunPort, stunPublic, "talk."+domaineDe(ctx), portTurn, portTurnTLS, "", k8sapi.IPLocaleNoeud(ctx))
 
 	// THE SECRETS ARE SET BY THE OPENBAO INJECTOR: coturn only needs the TURN
 	// secret, the one Nextcloud also holds.
@@ -397,6 +405,16 @@ spec:
           . /secrets/env
           set +a
 %[3]s
+        env:
+        # THE NODE'S LAN ADDRESS, resolved by the deployer through the
+        # Kubernetes API. It cannot be discovered inside the container: this
+        # image ships no ip/ifconfig/route command, so any lookup there fails
+        # silently and coturn binds to every interface — measured, and it then
+        # announces the NAT address to clients.
+        #
+        # hostNetwork is true, so this is also the address the host uses to
+        # leave the network: the only one the NAT maps.
+        - {name: LOCALE_IP, value: "%[7]s"}
         ports:
         - {name: turn, containerPort: %[4]d, protocol: UDP}
         - {name: turn-tcp, containerPort: %[4]d, protocol: TCP}

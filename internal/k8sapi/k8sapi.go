@@ -542,3 +542,33 @@ func (c *Client) DeploiementPret(ctx context.Context, ns, nom string) bool {
 	}
 	return d.Status.ReadyReplicas > 0
 }
+
+// IPLocaleNoeud returns the LAN address of the node, with a fallback.
+//
+// WHY THIS EXISTS: a hostNetwork pod cannot discover this address itself — the
+// coturn image ships no ip, ifconfig or route command, so a lookup inside it
+// fails silently and the process binds to every interface. Measured on the
+// cluster: the container then announced the NAT address (192.168.1.254) in its
+// relay candidates, and a browser outside could not reach it.
+//
+// The node's InternalIP is the interface the host uses to leave the network,
+// which is the only address the NAT maps. It is read from the API, which is the
+// one place that knows it without guessing.
+func IPLocaleNoeud(ctx context.Context) string {
+	cli, err := Nouveau()
+	if err != nil {
+		return ""
+	}
+	noeuds, err := cli.cs.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return ""
+	}
+	for _, n := range noeuds.Items {
+		for _, a := range n.Status.Addresses {
+			if a.Type == corev1.NodeInternalIP {
+				return a.Address
+			}
+		}
+	}
+	return ""
+}
