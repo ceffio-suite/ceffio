@@ -213,7 +213,7 @@ and the image repository
 ## Media and firewall
 
 This is the part most often gotten wrong, because it depends on the network
-topology rather than on the code. Three families of ports must be reachable
+topology rather than on the code. Four families of ports must be reachable
 **from the Internet**:
 
 | Ports | Protocol | Role |
@@ -221,12 +221,26 @@ topology rather than on the code. Three families of ports must be reachable
 | `20000-20100` | UDP | Janus media (the video itself) |
 | `3479` | UDP + TCP | TURN relay — essential on restrictive networks |
 | `5349` | TCP | TURN secured (fallback when UDP is blocked) |
+| `49152-49200` | UDP | coturn relay ports — the range the relayed media actually uses |
+
+All four are verified reachable on a live deployment: `3479` answers a STUN
+Binding Request from the Internet, `5349` performs a TLS handshake and serves
+the `talk.<domain>` certificate, and a TURN allocation made **from outside**
+returns a public relay address inside `49152-49200`.
+
+The relay range is the one that is easy to forget, and forgetting it produces
+a deceptive failure: the allocation succeeds (it goes over `3479`), the server
+believes the relay is up, and **no media ever passes** — because the media is
+supposed to flow on the range. A browser that cannot reach it falls back to
+direct candidates, and on a restrictive network there are none, so the call
+fails with "a TURN server is probably required" while the TURN server is, in
+fact, perfectly healthy.
 
 These ranges are **specific to Ceffio**: they do not overlap another LiveKit
 or Janus instance on the same network, so a failure of one does not affect
 the other.
 
-Two verified pitfalls:
+Three verified pitfalls:
 
 - **On a firewall that handles ranges, leave the internal port empty.** pf
   (OpenBSD/OPNsense) reads `rdr-to IP port N` as "map everything onto N":
@@ -236,6 +250,29 @@ Two verified pitfalls:
   turn sits behind the ISP box, rules placed on the router cannot work: they
   belong on the box. Always test from the Internet, never from the local
   network — an internal test proves nothing.
+- **A range must be forwarded 1:1.** Each port of `49152-49200` must reach the
+  **same** port on the host. coturn announces the relay port it allocated and
+  the peer connects back to exactly that number; a translating NAT breaks the
+  return path even though the allocation looked fine.
+
+The check that settles all of this, run against the **public** address:
+
+```bash
+turnutils_uclient -u "<username>" -w "<credential>" -y \
+    -e <public-ip> -p 3479 talk.<domain>
+```
+
+A healthy server prints a **public** relay address with a port inside the
+range, and loses no packet:
+
+```
+INFO IPv4. Received relay addr: 82.64.251.96:49198
+INFO Total lost packets 0 (0.000000%)
+```
+
+A **private** relay address means `--external-ip` did not take effect: the
+browser then receives a candidate it cannot reach, which is the same failure
+by another route.
 
 ## Releases
 
