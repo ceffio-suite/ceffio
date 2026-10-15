@@ -263,7 +263,10 @@ spec:
           set -a
           . /secrets/env
           set +a
-          exec /entrypoint.sh
+          # /usr/local/bin/start.sh is the image's ENTRYPOINT (verified in its
+          # Dockerfile). It takes NO argument: it starts haproxy, the SPOE
+          # agent and the FRP proxies itself and supervises them.
+          exec /usr/local/bin/start.sh
         env:
         # THE KUBERNETES BACKEND. Without this flag HaRP looks for a Docker
         # socket, does not find one, and the ExApp install fails.
@@ -274,17 +277,34 @@ spec:
           value: %[5]s
         - name: NC_INSTANCE_URL
           value: https://cloud.%[6]s
+        # REQUIRED: start.sh refuses to start without it. It is the address the
+        # FRP proxies bind to, used for the tunnel towards the ExApps.
+        - name: HP_FRP_ADDRESS
+          value: 0.0.0.0:%[8]d
         # Leave empty to use the cluster default storage class. Stated
         # explicitly so the value is visible rather than implied.
         - name: HP_K8S_DEFAULT_STORAGE_SIZE
           value: 10Gi
         ports:
+        - {name: agent, containerPort: 8200}
         - {name: control, containerPort: %[7]d}
         - {name: frp, containerPort: %[8]d}
+        # THE AGENT LISTENS ON 127.0.0.1 ONLY — verified in its own startup log
+        # ("Starting Python HaProxy Agent on 127.0.0.1:8200 and 127.0.0.1:9600").
+        # A kubelet httpGet probe would come from the POD address and be
+        # refused, so the probe has to run INSIDE the container. The image
+        # ships /healthcheck.sh for exactly this: use it rather than inventing
+        # a test, which is how this broke the first time.
         readinessProbe:
-          httpGet: {path: /info, port: control}
-          initialDelaySeconds: 5
+          exec: {command: ["/healthcheck.sh"]}
+          initialDelaySeconds: 10
           periodSeconds: 10
+          failureThreshold: 6
+        livenessProbe:
+          exec: {command: ["/healthcheck.sh"]}
+          initialDelaySeconds: 30
+          periodSeconds: 20
+          failureThreshold: 6
         resources:
           requests: {memory: 128Mi, cpu: 50m}
           limits: {memory: 512Mi}
