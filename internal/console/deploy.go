@@ -30,7 +30,7 @@ const (
 	// Bump MANDATORY on every change of the console page or code:
 	// buildAndImportImage skips the rebuild if the tag already exists in
 	// containerd. Without a bump, the old image keeps being served.
-	imageTag = "1.33.2"
+	imageTag = "1.33.3"
 	imageRef = imageName + ":" + imageTag
 )
 
@@ -404,6 +404,9 @@ metadata:
 rules:
 - apiGroups: [""]
   resources: [pods, namespaces]
+  verbs: [get, list, watch]
+- apiGroups: ["apps"]
+  resources: [deployments]
   verbs: [get, list, watch]
 - apiGroups: [networking.k8s.io]
   resources: [ingresses]
