@@ -952,39 +952,48 @@ func brancherNextcloud(ctx context.Context) error {
 
 	// 4. Declare the TURN servers (native, no external dependency).
 	//
+	// THE SHAPE MATTERS, and getting it wrong fails SILENTLY. Talk reads
+	// turn_servers with json_decode() and falls back to an EMPTY array when the
+	// value is not valid JSON:
+	//
+	//   $servers = json_decode($config, true);
+	//   if (!is_array($servers)) { $servers = []; }
+	//
+	// We wrote a URL list — "stun:...,turn:...?transport=udp,turn:...", the
+	// shape the signaling server takes. It is not JSON, so json_decode returned
+	// null, Talk ended up with zero ICE servers, and NO relay was ever offered
+	// to the browsers. Measured: "talk:turn:list --output=json" answered [],
+	// while the raw setting looked correct — which is why it went unnoticed.
+	//
+	// The expected shape is an array of objects (see Turn/Add.php):
+	//   [{"schemes":"turn,turns","server":"host:port","secret":"...",
+	//     "protocols":"udp,tcp"}]
+	//
 	// STUN AND TURN ARE DIFFERENT ROLES AND THE BROWSER NEEDS BOTH:
-	//
-	//   STUN  asks "what is my public address?" — it is what produces the
-	//         "srflx" candidates, without which a browser on another network
-	//         has nothing usable to offer the peer.
-	//   TURN  relays the media when no direct path exists.
-	//
-	// Measured from a 4G connection with TURN alone configured: Janus logged
-	// "No candidates not gathered yet" and "added 0, expected 1", coturn
-	// received ZERO requests, and the signaling only ever saw "typ host"
-	// candidates. The call could not connect while every setting looked right,
-	// because the browsers had no server to ask for their public address.
-	//
-	// The same host and port answer both, so nothing extra has to be opened:
-	// coturn replies to STUN on 3479, verified from outside the network.
+	//   STUN  asks "what is my public address?" — it produces the srflx
+	//         candidate, without which a browser on another network has nothing
+	//         usable to offer the peer.
+	//   TURN  relays the media once no direct path exists.
+	// Both are served by the same host and port here: coturn answers STUN on
+	// 3479 (verified from outside with a Binding Request), so no extra service
+	// and no extra port are needed.
+	turnSecret := entree["turn-secret"]
+	if turnSecret == "" {
+		return fmt.Errorf("TURN secret missing from the vault's talk/signaling entry")
+	}
 	serveurs := fmt.Sprintf(
-		"stun:talk.%[1]s:%[2]d,turn:talk.%[1]s:%[2]d?transport=udp,turn:talk.%[1]s:%[2]d?transport=tcp",
-		domaineDe(ctx), portTurn)
+		`[{"schemes":"turn,turns","server":"talk.%[1]s:%[2]d","secret":"%[3]s","protocols":"udp,tcp"}]`,
+		domaineDe(ctx), portTurn, turnSecret)
 	if err := occ(ctx, "config:app:set", "spreed", "turn_servers", "--value", serveurs); err != nil {
 		return fmt.Errorf("TURN servers: %w", err)
 	}
 
-	// Talk keeps the STUN servers in their OWN key, and it only reads it from
-	// there. Only filling turn_servers would leave stun_servers absent, which
-	// is the state measured above: TURN declared, and no srflx candidate ever
-	// gathered.
-	stunServeurs := fmt.Sprintf("talk.%s:%d", domaineDe(ctx), portTurn)
+	// Talk keeps the STUN servers in their OWN key, a plain list of host:port.
+	// Only filling turn_servers would leave stun_servers absent, which is the
+	// state measured above: TURN declared, and no srflx candidate ever gathered.
+	stunServeurs := fmt.Sprintf(`["talk.%s:%d"]`, domaineDe(ctx), portTurn)
 	if err := occ(ctx, "config:app:set", "spreed", "stun_servers", "--value", stunServeurs); err != nil {
 		return fmt.Errorf("STUN servers: %w", err)
-	}
-	turnSecret := entree["turn-secret"]
-	if turnSecret == "" {
-		return fmt.Errorf("TURN secret missing from the vault's talk/signaling entry")
 	}
 	if err := occ(ctx, "config:app:set", "spreed", "turn_secret", "--value", turnSecret); err != nil {
 		return fmt.Errorf("TURN secret: %w", err)
