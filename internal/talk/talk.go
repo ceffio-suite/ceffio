@@ -436,7 +436,7 @@ spec:
   - {name: turn, port: %[4]d, targetPort: %[4]d, protocol: UDP}
   - {name: turn-tcp, port: %[4]d, targetPort: %[4]d, protocol: TCP}
   - {name: turns, port: %[5]d, targetPort: %[5]d, protocol: TCP}
-`, ns, coturnImage, indentYaml(script, 10), portTurn, portTurnTLS, annCoturn)
+`, ns, coturnImage, indentYaml(script, 10), portTurn, portTurnTLS, annCoturn, k8sapi.IPLocaleNoeud(ctx))
 	return appliquer(ctx, manifeste)
 }
 
