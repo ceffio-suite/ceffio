@@ -394,6 +394,36 @@ spec:
   ports:
   - {name: control, port: %[7]d, targetPort: %[7]d}
   - {name: frp, port: %[8]d, targetPort: %[8]d}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: %[1]s
+  namespace: %[2]s
+  labels:
+    app: %[1]s
+spec:
+  ingressClassName: traefik
+  rules:
+  - host: cloud.%[6]s
+    http:
+      paths:
+      # THE ROUTE WITHOUT WHICH NOTHING WORKS, and HaRP's own documentation
+      # says so: "HaRP requires your reverse proxy to forward traffic from
+      # your public domain (e.g., nextcloud.com/exapps/) to the HaRP
+      # container's HP_EXAPPS_ADDRESS."
+      #
+      # Without it AppAPI calls https://cloud.<domain>/exapps/<app>/heartbeat,
+      # the request never reaches HaRP, and the answer is a 404 it retries
+      # hundreds of times. The ExApp installs, its pod runs, and it stays
+      # permanently disabled — with no error that points here.
+      - path: /exapps
+        pathType: Prefix
+        backend:
+          service:
+            name: %[1]s
+            port:
+              number: %[7]d
 `, nomHarp, nsHarp, indentYaml(annotations, 8), imageHarp, nsExapps, domain, portControl, portFRP)
 
 	return appliquer(ctx, manifeste)
