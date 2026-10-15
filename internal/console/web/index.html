@@ -90,6 +90,11 @@
   .badge.mut{color:var(--muted);background:var(--panel2);border-color:var(--line)}
   .badge.info{color:var(--acc2);background:rgba(56,189,248,.10);border-color:rgba(56,189,248,.25)}
 
+  /* Step numbers, for the two ordered steps of the Applications panel. */
+  .etape{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;
+         border-radius:50%;background:var(--acc);color:#fff;font-size:11px;font-weight:700;
+         vertical-align:middle;margin-right:4px}
+
   .table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
   .table th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:600;padding:10px 14px;background:var(--bg2);border-bottom:1px solid var(--line)}
   .table td{padding:10px 14px;border-bottom:1px solid var(--line);font-size:13px;vertical-align:middle}
@@ -169,10 +174,6 @@
     <div class="nav-item" data-tab="exapps">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
       Applications
-    </div>
-    <div class="nav-item" data-tab="transcription">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4M8 22h8"/></svg>
-      Transcription
     </div>
     <div class="nav-item" data-tab="admin">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 4 6v6c0 5 3.4 9.2 8 10 4.6-.8 8-5 8-10V6l-8-4z"/><path d="M12 11v4M12 8.5v.5"/></svg>
@@ -270,54 +271,67 @@
       <!-- EXAPPS -->
       <section class="section" id="tab-exapps">
         <div class="card">
-          <h3>External applications deployer (HaRP)</h3>
+          <h3>Transcription in Talk</h3>
           <p class="section-sub" style="margin-top:0">
-            Nextcloud runs some features as containers rather than PHP code.
-            It cannot start one by itself: it needs a deployer. HaRP is that
-            deployer, and it speaks the Kubernetes API directly.
+            Two steps, in order. Nextcloud cannot start a containerised feature
+            on its own — it needs a deployer first, then the application itself
+            can be installed.
           </p>
-          <div id="exappsEtat" style="margin:14px 0"></div>
-          <div class="form-row">
-            <button class="btn" id="btnExappsInstall" onclick="exappsAction('install')">Install</button>
-            <button class="btn ghost" id="btnExappsRemove" onclick="exappsAction('uninstall')">Remove</button>
-          </div>
-          <p class="section-sub" style="margin-bottom:0">
-            Everything below depends on this. Removing it also removes the
-            applications it deployed and their volumes.
-          </p>
-        </div>
-      </section>
 
-      <!-- TRANSCRIPTION -->
-      <section class="section" id="tab-transcription">
-        <div class="card">
-          <h3>Live transcription in Talk</h3>
-          <p class="section-sub" style="margin-top:0">
-            Transcribes speech live during a call, on this server, with open
-            source speech models. Nothing is sent to a third party.
-          </p>
-          <p class="section-sub">
-            <b>This is a heavy optional component.</b> It downloads about 9 GB
-            (container and speech models) and needs around 16 GB of RAM for one
-            or two simultaneous calls. It is not installed by default, and its
-            two settings cannot be changed once it is installed — the app has to
-            be removed and installed again. That is why it lives here rather
-            than in the initial deployment.
-          </p>
-          <div id="transcriptionEtat" style="margin:14px 0"></div>
-          <div id="transcriptionBlocage"></div>
-          <div class="form-row">
-            <button class="btn" id="btnTranscriptionInstall" onclick="transcriptionAction('install')">
-              Install
-            </button>
-            <button class="btn ghost" id="btnTranscriptionRemove" onclick="transcriptionAction('uninstall')">
-              Uninstall completely
-            </button>
+          <!-- Step 1: the deployer. Everything else depends on it. -->
+          <div style="margin-top:18px">
+            <div class="t-name" style="font-size:14px;font-weight:600">
+              <span class="etape">1</span> Deployer
+            </div>
+            <p class="section-sub" style="margin:6px 0 0 26px">
+              HaRP runs the containers Nextcloud asks for, speaking the
+              Kubernetes API directly. Nothing below can be installed without
+              it.
+            </p>
+            <div id="exappsEtat" style="margin:12px 0 12px 26px"></div>
+            <div class="form-row" style="margin-left:26px">
+              <button class="btn" id="btnExappsInstall" onclick="exappsAction('install')">
+                Deploy the deployer
+              </button>
+              <button class="btn ghost" id="btnExappsRemove" onclick="exappsAction('uninstall')">
+                Remove
+              </button>
+            </div>
           </div>
-          <p class="section-sub" style="margin-bottom:0">
-            Uninstalling removes the app, its workload, its service and its
-            volume — including the downloaded models.
-          </p>
+
+          <hr style="margin:22px 0;border:none;border-top:1px solid rgba(128,128,128,.25)">
+
+          <!-- Step 2: the application. Its button stays disabled until step 1
+               is done, and says why rather than just being greyed out. -->
+          <div>
+            <div class="t-name" style="font-size:14px;font-weight:600">
+              <span class="etape">2</span> Live transcription
+            </div>
+            <p class="section-sub" style="margin:6px 0 0 26px">
+              Transcribes speech live during a call, on this server, with open
+              source speech models. Nothing is sent to a third party.
+            </p>
+            <p class="section-sub" style="margin-left:26px">
+              <b>This is a heavy optional component.</b> It downloads about
+              9 GB (container and speech models) and needs around 16 GB of RAM
+              for one or two simultaneous calls. Its settings cannot be changed
+              once installed — the app has to be removed and installed again.
+            </p>
+            <div id="transcriptionEtat" style="margin:12px 0 12px 26px"></div>
+            <div id="transcriptionBlocage" style="margin-left:26px"></div>
+            <div class="form-row" style="margin-left:26px">
+              <button class="btn" id="btnTranscriptionInstall" onclick="transcriptionAction('install')">
+                Install live transcription
+              </button>
+              <button class="btn ghost" id="btnTranscriptionRemove" onclick="transcriptionAction('uninstall')">
+                Uninstall completely
+              </button>
+            </div>
+            <p class="section-sub" style="margin:12px 0 0 26px">
+              Uninstalling removes the app, its workload, its service and its
+              volume — including the downloaded models.
+            </p>
+          </div>
         </div>
       </section>
 
@@ -482,8 +496,7 @@
     users:     ['Users', 'single sign-on accounts'],
     certs:     ['TLS certificates', 'validity and expiry'],
     infra:     ['Infrastructure', 'internal layers and pods'],
-    exapps:        ['Applications', 'external applications deployer'],
-    transcription: ['Transcription', 'live transcription in Talk'],
+    exapps:    ['Applications', 'deployer, then transcription'],
   };
 
   document.querySelectorAll('.nav-item').forEach(el => el.onclick = () => {
@@ -496,8 +509,10 @@
     $('crumb').textContent = TITLES[tab][1];
     // Load on open: the state is read from AppAPI, which is the only place
     // that knows what is actually installed.
-    if (tab === 'transcription') renderTranscription();
-    if (tab === 'exapps') renderExapps();
+    // One panel, two states: the deployer and the application. Both are
+    // re-read together, so the second button's enabled state always
+    // reflects the first one's outcome.
+    if (tab === 'exapps') { renderExapps(); renderTranscription(); }
   });
 
   setInterval(() => { $('clock').textContent = new Date().toLocaleTimeString('en-GB'); }, 1000);
@@ -867,12 +882,6 @@
   // any external application. It is shown separately for that reason, and the
   // install button of the transcription app stays disabled until it is in
   // place.
-  // Navigate to a tab from inside the page (used by the dependency notice).
-  function ouvrirOnglet(nom) {
-    const el = document.querySelector(`.nav-item[data-tab="${nom}"]`);
-    if (el) el.click();
-  }
-
   async function renderExapps() {
     const zone = $('exappsEtat');
     zone.innerHTML = '<span class="badge mut">reading state…</span>';
@@ -920,7 +929,13 @@
       toast(e.message, 'warn');
     } finally {
       bouton.textContent = libelle;
+      // Re-read BOTH states: this panel holds the deployer and the application,
+      // and deploying the deployer is what unlocks the application's button.
+      // Refreshing only the deployer would leave the second button greyed out
+      // until the user switched tabs and came back — the dependency would look
+      // unsatisfied for no reason.
       await renderExapps();
+      await renderTranscription();
     }
   }
 
@@ -956,10 +971,10 @@
       if (zoneBlocage) {
         zoneBlocage.innerHTML = bloque
           ? `<div class="note" style="margin-top:10px">
-               <b>Deployer required first.</b> ${esc(d.blockedReason || '')}
+               <b>Deploy the deployer first.</b> ${esc(d.blockedReason || '')}
                <div style="margin-top:8px">
-                 <button class="btn-ghost" onclick="ouvrirOnglet('exapps')">
-                   Go to Applications
+                 <button class="btn-ghost" onclick="exappsAction('install')">
+                   Deploy it now
                  </button>
                </div>
              </div>`
