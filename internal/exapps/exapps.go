@@ -36,10 +36,12 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math/big"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ceffio-suite/ceffio/internal/k8s"
+	"github.com/ceffio-suite/ceffio/internal/k8sapi"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"github.com/ceffio-suite/ceffio/internal/vault"
 )
@@ -99,13 +101,83 @@ func Deploy(ctx context.Context, domain string) error {
 		return err
 	}
 
-	fmt.Println("✓ ExApp deploy daemon (HaRP) deployed")
-	fmt.Println("  Nextcloud still has to register it — run, once:")
-	fmt.Printf("    occ app_api:daemon:register harp \\\n")
-	fmt.Printf("      \"HaRP\" \"docker-install\" \"http\" \\\n")
-	fmt.Printf("      %s.%s.svc:%d %s \\\n", nomHarp, nsHarp, portControl, "https://cloud."+domain)
-	fmt.Println("      --k8s --k8s_namespace " + nsExapps + " --k8s_expose_type clusterip --set-default")
+	// REGISTER THE DAEMON, rather than printing a command to copy. The
+	// installation is not usable until Nextcloud knows about HaRP, and an
+	// instruction that has to be run by hand is one that can be skipped,
+	// mis-typed, or run with the wrong values.
+	//
+	// Note the arguments, each of which cost time to get right:
+	//   - "kubernetes-install", NOT "docker-install": it selects the backend
+	//     HaRP actually uses. "docker-install" is the legacy Docker socket
+	//     path, deprecated in Nextcloud 35.
+	//   - --harp_frp_address: the address HaRP exposes the ExApps on. WITHOUT
+	//     IT AppAPI polls https://cloud.<domain>/exapps/<app>/heartbeat, gets
+	//     404, and retries HUNDREDS of times: the app installs, then never
+	//     becomes enabled, and the language list in Talk fails to load.
+	//   - no --k8s_namespace exists: HaRP already knows its namespace through
+	//     HP_K8S_NAMESPACE. Passing it makes occ reject the whole command.
+	if err := enregistrerDaemon(ctx, domain, cle); err != nil {
+		return err
+	}
+
+	fmt.Println("✓ ExApp deploy daemon (HaRP) deployed and registered")
 	return nil
+}
+
+// enregistrerDaemon registers HaRP in AppAPI, replacing any previous entry.
+//
+// We unregister first: re-registering an existing name is silently skipped
+// ("Registration skipped, as the daemon config `harp` already exists"), so a
+// daemon created with wrong settings would keep them forever, and the only
+// symptom is ExApps that install and stay disabled.
+func enregistrerDaemon(ctx context.Context, domain, cle string) error {
+	cli, err := k8sapi.Nouveau()
+	if err != nil {
+		return fmt.Errorf("Kubernetes client: %w", err)
+	}
+	pod, err := cli.PodDuDeploiement(ctx, "ceffio-files", "nextcloud", "nextcloud")
+	if err != nil {
+		return err
+	}
+
+	hoteControl := fmt.Sprintf("%s.%s.svc:%d", nomHarp, nsHarp, portControl)
+	hoteFRP := fmt.Sprintf("%s.%s.svc:%d", nomHarp, nsHarp, portFRP)
+	urlNC := "https://cloud." + domain
+
+	fmt.Println("∙ registering the deploy daemon in AppAPI...")
+
+	// Best effort: absent on a fresh install, and its failure is not an error.
+	if _, err := execOcc(ctx, cli, pod, "app_api:daemon:unregister", nomHarp); err != nil {
+		_ = err
+	}
+
+	sortie, err := execOcc(ctx, cli, pod,
+		"app_api:daemon:register", nomHarp, "HaRP", "kubernetes-install", "http",
+		hoteControl, urlNC,
+		"--harp", "--harp_shared_key", cle, "--harp_frp_address", hoteFRP,
+		"--k8s", "--k8s_expose_type=clusterip", "--set-default")
+	if err != nil {
+		return fmt.Errorf("registering the HaRP daemon: %w", err)
+	}
+	if !strings.Contains(strings.ToLower(sortie), "successfully registered") {
+		return fmt.Errorf("registering the HaRP daemon (unexpected answer): %s", derniereLigneUtile(sortie))
+	}
+
+	// Read back the FRP address: it is the setting whose absence breaks ExApp
+	// activation in a way that is hard to attribute, so we confirm it landed
+	// rather than trusting the command's exit code.
+	verif, err := execOcc(ctx, cli, pod, "app_api:daemon:list")
+	if err != nil || !strings.Contains(verif, strconv.Itoa(portFRP)) {
+		return fmt.Errorf("the HaRP daemon is registered but its FRP address (%s) is not set: ExApps would install and never enable", hoteFRP)
+	}
+	fmt.Println("  ✓ daemon registered (FRP: " + hoteFRP + ")")
+	return nil
+}
+
+// execOcc runs occ in the Nextcloud pod through the Kubernetes API.
+func execOcc(ctx context.Context, cli *k8sapi.Client, pod string, args ...string) (string, error) {
+	complet := append([]string{"php", "occ"}, args...)
+	return cli.Executer(ctx, "ceffio-files", pod, "nextcloud", complet...)
 }
 
 // creerNamespace creates the ExApp namespace.

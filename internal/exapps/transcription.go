@@ -80,20 +80,48 @@ func TranscriptionDeploye(ctx context.Context, domain string) error {
 
 	fmt.Printf("∙ registering %s (signaling: %s)\n", appTranscription, urlSignaling)
 
-	// --wait-finish so the call reports the real outcome: the ExApp is pulled
-	// and started by HaRP, and without it the command returns before anything
-	// has happened.
+	// REGISTER WITHOUT --wait-finish, and this is not an oversight.
+	//
+	// --wait-finish waits for the ExApp to report itself READY — and an ExApp
+	// reports ready only once it is ENABLED. This one starts reporting
+	// "App is disabled on startup", which is its normal post-install state.
+	// AppAPI therefore polls /exapps/live_transcription/heartbeat, gets
+	//   "ExApp with appId live_transcription is disabled"
+	// and waits forever. The command never returns, and the installation is
+	// never confirmed: that is exactly what happened, twice.
+	//
+	// The order has to be register -> enable -> verify. We do not need
+	// --wait-finish anyway: the enable step below IS the confirmation, and it
+	// fails loudly if the ExApp did not come up.
 	sortie, err := occ(ctx, cli, pod,
 		"app_api:app:register", appTranscription,
 		"--env", "LT_HPB_URL="+urlSignaling,
-		"--env", "LT_INTERNAL_SECRET="+secretInterne,
-		"--wait-finish")
+		"--env", "LT_INTERNAL_SECRET="+secretInterne)
 	if err != nil {
 		return fmt.Errorf("registering %s: %w", appTranscription, err)
 	}
 	fmt.Println("  ✓ " + derniereLigneUtile(sortie))
 
-	fmt.Println("✓ Live transcription deployed")
+	// ENABLE. register only INSTALLS: the ExApp starts and reports
+	// "App is disabled on startup". Without this step the component is there,
+	// running, and Talk still has no transcription — which reads as a failed
+	// installation when everything actually worked.
+	//
+	// "Install completely" means installed AND usable, so we do not stop at
+	// the deployment.
+	fmt.Println("∙ enabling the app...")
+	if _, err := occ(ctx, cli, pod, "app_api:app:enable", appTranscription); err != nil {
+		return fmt.Errorf("enabling %s (it is installed but inactive): %w", appTranscription, err)
+	}
+
+	// We do not trust the exit code: we read the state back, because the only
+	// thing that matters is what AppAPI reports.
+	verif, err := occ(ctx, cli, pod, "app_api:app:list")
+	if err == nil && strings.Contains(verif, "[disabled]") {
+		return fmt.Errorf("%s is still reported as disabled after enabling", appTranscription)
+	}
+
+	fmt.Println("✓ Live transcription deployed and enabled")
 	fmt.Println("  The speech models are downloaded on first use (~6 GB).")
 	return nil
 }
