@@ -211,6 +211,7 @@
 <line class="edge media" x1="852" y1="760" x2="852" y2="619" marker-end="url(#ahm)"/>
 <text class="t-lbl media" x="196" y="786">WebRTC outside Traefik · UDP 20000–20100 → Janus</text>
 <text class="t-lbl media" x="196" y="804">3479 UDP/TCP and 5349 TCP → coturn (talk.&lt;domain&gt;)</text>
+<text class="t-lbl media" x="196" y="822">UDP 49152–49200 → coturn relay, the range relayed media uses</text>
 
 <!-- Legend -->
 <g transform="translate(20,975)">
