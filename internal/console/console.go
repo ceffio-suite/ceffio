@@ -111,6 +111,14 @@ func (s *Server) Handler() http.Handler {
 	// Single administration account: identifier, password rotation.
 	// A single account administers Nextcloud, Stalwart and this console — it lives
 	// in Keycloak, so rotation is applied there and propagates everywhere.
+	// Live transcription: heavy and not revisable in place, so installing and
+	// removing it are explicit actions, not part of the initial deployment.
+	mux.HandleFunc("/api/transcription", s.requireAuth(s.handleTranscription))
+	// The deploy daemon (HaRP) and the transcription app are SEPARATE things:
+	// one is infrastructure, the other a usage that depends on it. Each gets
+	// its own state and actions, so the interface can say which one is missing
+	// instead of leaving an installed-but-inactive app unexplained.
+	mux.HandleFunc("/api/exapps", s.requireAuth(s.handleExapps))
 	mux.HandleFunc("/api/admin", s.requireAuth(s.handleAdmin))
 	mux.HandleFunc("/api/admin/rotate", s.requireAuth(s.handleAdminRotate))
 	// NO /api/apps routes: application management happens in the INTERFACE OF

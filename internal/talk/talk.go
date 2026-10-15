@@ -37,6 +37,7 @@ import (
 	"strings"
 
 	"github.com/ceffio-suite/ceffio/internal/k8s"
+	"github.com/ceffio-suite/ceffio/internal/k8sapi"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"github.com/ceffio-suite/ceffio/internal/vault"
 	"github.com/ceffio-suite/ceffio/internal/version"
@@ -292,6 +293,32 @@ func deployCoturn(ctx context.Context) error {
 
 ADDRESS=""
 read ADDRESS < /tmp/public-address.txt || true
+
+# THE LISTENING ADDRESS IS DISCOVERED, not assumed.
+#
+# The pod carries SEVERAL addresses: eth0 (192.168.1.48), the flannel overlay
+# (10.42.0.0) and the cni0 bridge (10.42.0.1). coturn listens on all of them by
+# default and picks one for the relay candidates — measured: it announced
+# 192.168.1.254, the NAT address of the box in front of the host. A browser
+# outside receives that and cannot reach it, which is exactly the "un serveur
+# TURN est probablement nécessaire" failure in Talk.
+#
+# So we pin the LOCAL address explicitly. The default route's source is the
+# interface address the host actually uses to leave the network, which is the
+# only one the NAT knows about.
+LOCAL_IP=""
+# THE LOCAL ADDRESS COMES FROM THE ENVIRONMENT, not from a lookup inside the
+# container: this image has NO ip, ifconfig or route command (verified), so
+# an "ip route get" lookup cannot run here and the binding silently fell back
+# to "all interfaces" — measured: "WARNING - local address not resolved".
+#
+# The deployer resolves it through the Kubernetes API (the node's InternalIP,
+# which is the interface the host leaves the network by, the only one the NAT
+# knows about) and passes it in LOCALE_IP.
+if [ -n "$LOCALE_IP" ]; then
+    LOCAL_IP="$LOCALE_IP"
+fi
+
 EXTERNAL_ARG=""
 if [ -n "$ADDRESS" ]; then
     EXTERNAL_ARG="--external-ip=$ADDRESS"
@@ -302,6 +329,29 @@ else
     echo "coturn: the relay will only serve inside the network." >&2
 fi
 
+# The listening and relay addresses must agree: --external-ip is the PUBLIC
+# address carried in the candidate, --relay-ip/--listening-ip are the LOCAL ones
+# coturn binds to. Pinning only the first leaves coturn free to answer from
+# another local address, and the NAT then maps them inconsistently.
+BIND_ARG=""
+if [ -n "$LOCAL_IP" ]; then
+    BIND_ARG="--listening-ip=$LOCAL_IP --relay-ip=$LOCAL_IP"
+    echo "coturn: binding on $LOCAL_IP"
+else
+    echo "coturn: WARNING - local address not resolved; coturn will bind to all interfaces." >&2
+    echo "coturn: with several addresses and a NAT, clients may receive an unreachable one." >&2
+fi
+
+# TLS: WITHOUT --cert/--pkey/--tls-listening-port COTURN DOES NOT OPEN 5349.
+#
+# It does not fail — it logs a warning and simply does not bind the port, so
+# the manifest declares a listener that does not exist. The paths are the ones
+# the volume mounts above.
+#
+# THESE OPTIONS MUST SIT INSIDE THE CONTINUATION, with no comment between the
+# backslash and the next line: a '#' inside a line-continued command comments
+# out everything that follows, options included. That is exactly how the first
+# attempt silently dropped all three of them.
 exec turnserver \
     --realm=%[3]s \
     --use-auth-secret \
@@ -312,12 +362,16 @@ exec turnserver \
     --no-multicast-peers \
     --no-stdout-log \
     --log-file=stdout \
+    $BIND_ARG \
     --stale-nonce=600 \
     --min-port=49152 \
     --max-port=49200 \
     --listening-port=%[4]d \
+    --cert=/etc/coturn/certs/tls.crt \
+    --pkey=/etc/coturn/certs/tls.key \
+    --tls-listening-port=%[5]d \
     $EXTERNAL_ARG
-`, stunPort, stunPublic, "talk."+domaineDe(ctx), portTurn)
+`, stunPort, stunPublic, "talk."+domaineDe(ctx), portTurn, portTurnTLS, "", k8sapi.IPLocaleNoeud(ctx))
 
 	// THE SECRETS ARE SET BY THE OPENBAO INJECTOR: coturn only needs the TURN
 	// secret, the one Nextcloud also holds.
@@ -364,11 +418,61 @@ spec:
           . /secrets/env
           set +a
 %[3]s
+        env:
+        # THE NODE'S LAN ADDRESS, resolved by the deployer through the
+        # Kubernetes API. It cannot be discovered inside the container: this
+        # image ships no ip/ifconfig/route command, so any lookup there fails
+        # silently and coturn binds to every interface — measured, and it then
+        # announces the NAT address to clients.
+        #
+        # hostNetwork is true, so this is also the address the host uses to
+        # leave the network: the only one the NAT maps.
+        - {name: LOCALE_IP, value: "%[7]s"}
         ports:
         - {name: turn, containerPort: %[4]d, protocol: UDP}
         - {name: turn-tcp, containerPort: %[4]d, protocol: TCP}
         - {name: turns, containerPort: %[5]d, protocol: TCP}
         resources: {limits: {memory: 1Gi, cpu: "1"}}
+        # THE CERTIFICATE IS MOUNTED, or 5349 SILENTLY DOES NOT LISTEN.
+        #
+        # Measured: the port was declared in the manifest and NOTHING was bound
+        # to it. coturn refuses to open its TLS and DTLS listeners without a
+        # certificate, and reports it only as a WARNING:
+        #   cannot start TLS and DTLS listeners because certificate file is not
+        #   set properly
+        # An "openssl s_client -connect <ip>:5349" answered Connection refused —
+        # which is how it was noticed. A declared port is not an open port.
+        volumeMounts:
+        - {name: tls, mountPath: /etc/coturn/certs, readOnly: true}
+      volumes:
+      - name: tls
+        secret:
+          secretName: talk-tls
+          items:
+          - {key: tls.crt, path: tls.crt}
+          - {key: tls.key, path: tls.key}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: talk-tls
+  namespace: %[1]s
+spec:
+  # THE CERTIFICATE MUST CARRY THE REALM. coturn announces itself with
+  # --realm (talk.<domain>) and the browser verifies the certificate against
+  # the host it contacted. Any other name is rejected at the TLS handshake.
+  dnsNames:
+  - talk.%[9]s
+  duration: 2160h
+  renewBefore: 720h
+  secretName: talk-tls
+  issuerRef:
+    group: cert-manager.io
+    kind: ClusterIssuer
+    name: ceffio-ca-issuer
+  privateKey:
+    algorithm: ECDSA
+    size: 256
 ---
 # NodePort, NOT ClusterIP: these ports must be reachable from the Internet,
 # via the firewall's redirection rules toward the VM's IP. A ClusterIP only
@@ -385,7 +489,7 @@ spec:
   - {name: turn, port: %[4]d, targetPort: %[4]d, protocol: UDP}
   - {name: turn-tcp, port: %[4]d, targetPort: %[4]d, protocol: TCP}
   - {name: turns, port: %[5]d, targetPort: %[5]d, protocol: TCP}
-`, ns, coturnImage, indentYaml(script, 10), portTurn, portTurnTLS, annCoturn)
+`, ns, coturnImage, indentYaml(script, 10), portTurn, portTurnTLS, annCoturn, k8sapi.IPLocaleNoeud(ctx), domaineDe(ctx), domaineDe(ctx))
 	return appliquer(ctx, manifeste)
 }
 
@@ -533,19 +637,39 @@ spec:
 // Signaling server
 // ---------------------------------------------------------------------------
 
-// turnURL builds the list of TURN servers handed TO THE BROWSERS by the
-// signaling server.
+// turnURL builds the list of ICE servers handed TO THE BROWSERS by the
+// signaling server and by Talk.
 //
 // The address must be reachable from the Internet, otherwise the relay is
 // unusable. We give a public NAME rather than an address: it survives a
 // public-address change, and it is the same as the one declared on the
 // Nextcloud side. This is the only place where the public address appears,
 // and it appears there as a name, never as a frozen value.
+//
+// STUN COMES FIRST, AND THAT IS NOT COSMETIC. A browser needs STUN to discover
+// its own public address before it can even consider a relay: without it, it
+// only gathers "host" candidates — its local addresses — which are useless
+// from another network.
+//
+// Measured from a 4G connection, before this line existed:
+//
+//	Janus     : "No candidates not gathered yet for stream??"
+//	            "Failed to add some remote candidates (added 0, expected 1)"
+//	coturn    : zero requests — the relay was never even attempted
+//	signaling : only 7 "typ host" candidates
+//
+// The call fails while everything looks configured, because the browsers have
+// no server to ask "what is my public address?".
+//
+// The same host serves both roles: coturn answers STUN on this port (verified
+// from outside the network with a Binding Request), so no extra service is
+// needed and no extra port has to be opened.
 func turnURL(domaine string) string {
 	hote := "talk." + domaine
+	stun := fmt.Sprintf("stun:%s:%d", hote, portTurn)
 	udp := fmt.Sprintf("turn:%s:%d?transport=udp", hote, portTurn)
 	tcp := fmt.Sprintf("turn:%s:%d?transport=tcp", hote, portTurn)
-	return udp + "," + tcp
+	return stun + "," + udp + "," + tcp
 }
 
 // deploySignaling deploys the signaling server.
@@ -827,14 +951,49 @@ func brancherNextcloud(ctx context.Context) error {
 	}
 
 	// 4. Declare the TURN servers (native, no external dependency).
-	serveurs := fmt.Sprintf("turn:talk.%s:%d?transport=udp,turn:talk.%s:%d?transport=tcp",
-		domaineDe(ctx), portTurn, domaineDe(ctx), portTurn)
-	if err := occ(ctx, "config:app:set", "spreed", "turn_servers", "--value", serveurs); err != nil {
-		return fmt.Errorf("TURN servers: %w", err)
-	}
+	//
+	// THE SHAPE MATTERS, and getting it wrong fails SILENTLY. Talk reads
+	// turn_servers with json_decode() and falls back to an EMPTY array when the
+	// value is not valid JSON:
+	//
+	//   $servers = json_decode($config, true);
+	//   if (!is_array($servers)) { $servers = []; }
+	//
+	// We wrote a URL list — "stun:...,turn:...?transport=udp,turn:...", the
+	// shape the signaling server takes. It is not JSON, so json_decode returned
+	// null, Talk ended up with zero ICE servers, and NO relay was ever offered
+	// to the browsers. Measured: "talk:turn:list --output=json" answered [],
+	// while the raw setting looked correct — which is why it went unnoticed.
+	//
+	// The expected shape is an array of objects (see Turn/Add.php):
+	//   [{"schemes":"turn,turns","server":"host:port","secret":"...",
+	//     "protocols":"udp,tcp"}]
+	//
+	// STUN AND TURN ARE DIFFERENT ROLES AND THE BROWSER NEEDS BOTH:
+	//   STUN  asks "what is my public address?" — it produces the srflx
+	//         candidate, without which a browser on another network has nothing
+	//         usable to offer the peer.
+	//   TURN  relays the media once no direct path exists.
+	// Both are served by the same host and port here: coturn answers STUN on
+	// 3479 (verified from outside with a Binding Request), so no extra service
+	// and no extra port are needed.
 	turnSecret := entree["turn-secret"]
 	if turnSecret == "" {
 		return fmt.Errorf("TURN secret missing from the vault's talk/signaling entry")
+	}
+	serveurs := fmt.Sprintf(
+		`[{"schemes":"turn,turns","server":"talk.%[1]s:%[2]d","secret":"%[3]s","protocols":"udp,tcp"}]`,
+		domaineDe(ctx), portTurn, turnSecret)
+	if err := occ(ctx, "config:app:set", "spreed", "turn_servers", "--value", serveurs); err != nil {
+		return fmt.Errorf("TURN servers: %w", err)
+	}
+
+	// Talk keeps the STUN servers in their OWN key, a plain list of host:port.
+	// Only filling turn_servers would leave stun_servers absent, which is the
+	// state measured above: TURN declared, and no srflx candidate ever gathered.
+	stunServeurs := fmt.Sprintf(`["talk.%s:%d"]`, domaineDe(ctx), portTurn)
+	if err := occ(ctx, "config:app:set", "spreed", "stun_servers", "--value", stunServeurs); err != nil {
+		return fmt.Errorf("STUN servers: %w", err)
 	}
 	if err := occ(ctx, "config:app:set", "spreed", "turn_secret", "--value", turnSecret); err != nil {
 		return fmt.Errorf("TURN secret: %w", err)

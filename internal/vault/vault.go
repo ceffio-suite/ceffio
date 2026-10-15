@@ -891,6 +891,13 @@ path "sys/internal/ui/mounts/*" { capabilities = ["read"] }`},
 		{"ceffio-recording", `path "kv/data/ceffio/recording/*" { capabilities = ["read","list"] }
 path "kv/metadata/ceffio/recording/*" { capabilities = ["read","list"] }
 path "sys/internal/ui/mounts/*" { capabilities = ["read"] }`},
+		// HaRP reads its own shared key, and nothing else. It is the deploy
+		// daemon for the ExApps, not a consumer of any other component's
+		// secrets: giving it a wider policy would hand a component that
+		// creates third-party workloads a path to the platform's credentials.
+		{"ceffio-exapps-harp", `path "kv/data/ceffio/exapps/*" { capabilities = ["read","list"] }
+path "kv/metadata/ceffio/exapps/*" { capabilities = ["read","list"] }
+path "sys/internal/ui/mounts/*" { capabilities = ["read"] }`},
 		// ADMINISTRATION: the single human account, the one the directory
 		// designates as administrator. It has ALL rights on the vault — that
 		// is the meaning of an administration account, and it is what makes
@@ -1075,6 +1082,10 @@ func configurerAuthKubernetes(ctx context.Context, cli *k8sapi.Client) error {
 		// vault for a role that does not exist, and the failure is silent on the
 		// application side — the recorder simply runs without credentials.
 		{nom: "recording", sa: "talk-recording", ns: "ceffio-video", politique: "ceffio-recording"},
+		// HaRP. The ServiceAccount name and namespace MUST match what
+		// internal/exapps creates and what its RoleBinding names — a mismatch
+		// makes every vault request answer 403, and the pod starts anyway.
+		{nom: "exapps-harp", sa: "appapi-harp", ns: "ceffio-system", politique: "ceffio-exapps-harp"},
 	}
 	for _, r := range roles {
 		if _, err := baoAvecJeton(ctx, cli, adm,

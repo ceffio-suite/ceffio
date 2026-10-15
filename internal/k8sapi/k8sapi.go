@@ -504,3 +504,71 @@ func (c *Client) AttendrePodInstalle(ctx context.Context, ns, pod string, limite
 	}
 	return "", fmt.Errorf("pod %s/%s not scheduled after %s (%s)", ns, pod, limite, dernier)
 }
+
+// PodDuDeploiement returns the name of a RUNNING pod for a Deployment.
+//
+// WHY NOT USE THE DEPLOYMENT NAME DIRECTLY: "kubectl exec deploy/nextcloud"
+// lets kubectl resolve the pod, but the API does not — an exec request needs a
+// real pod name. The name carries a ReplicaSet hash that changes on every
+// rollout, so a hard-coded one works until the first update and then fails at
+// the worst possible moment.
+//
+// We select on the same label the Deployment uses, and require the pod to be
+// Running: a Pending pod would accept nothing and the error would be obscure.
+func (c *Client) PodDuDeploiement(ctx context.Context, ns, nom, etiquette string) (string, error) {
+	pods, err := c.cs.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: "app=" + etiquette,
+	})
+	if err != nil {
+		return "", fmt.Errorf("listing pods in %s: %w", ns, err)
+	}
+	for _, p := range pods.Items {
+		if p.Status.Phase == corev1.PodRunning {
+			return p.Name, nil
+		}
+	}
+	return "", fmt.Errorf("no %s pod in service in %s (deployment %s)", etiquette, ns, nom)
+}
+
+// DeploiementPret reports whether a Deployment has at least one Ready replica.
+//
+// It reads the status rather than trusting the object's existence: a Deployment
+// with zero ready replicas exists, and answering "present" for it would claim a
+// service that is not serving.
+func (c *Client) DeploiementPret(ctx context.Context, ns, nom string) bool {
+	d, err := c.cs.AppsV1().Deployments(ns).Get(ctx, nom, metav1.GetOptions{})
+	if err != nil {
+		return false
+	}
+	return d.Status.ReadyReplicas > 0
+}
+
+// IPLocaleNoeud returns the LAN address of the node, with a fallback.
+//
+// WHY THIS EXISTS: a hostNetwork pod cannot discover this address itself — the
+// coturn image ships no ip, ifconfig or route command, so a lookup inside it
+// fails silently and the process binds to every interface. Measured on the
+// cluster: the container then announced the NAT address (192.168.1.254) in its
+// relay candidates, and a browser outside could not reach it.
+//
+// The node's InternalIP is the interface the host uses to leave the network,
+// which is the only address the NAT maps. It is read from the API, which is the
+// one place that knows it without guessing.
+func IPLocaleNoeud(ctx context.Context) string {
+	cli, err := Nouveau()
+	if err != nil {
+		return ""
+	}
+	noeuds, err := cli.cs.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return ""
+	}
+	for _, n := range noeuds.Items {
+		for _, a := range n.Status.Addresses {
+			if a.Type == corev1.NodeInternalIP {
+				return a.Address
+			}
+		}
+	}
+	return ""
+}
