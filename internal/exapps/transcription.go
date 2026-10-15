@@ -5,12 +5,12 @@ package exapps
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/ceffio-suite/ceffio/internal/k8sapi"
-	"github.com/ceffio-suite/ceffio/internal/secrets"
 )
 
 // The app id, as Nextcloud knows it.
@@ -60,13 +60,22 @@ func TranscriptionDeploye(ctx context.Context, domain string) error {
 	// serves /spreed on the root, and a prefixed path answers 404.
 	urlSignaling := fmt.Sprintf("wss://spreed.%s/spreed", domain)
 
-	entree, err := secrets.LireEntreeCoffre(ctx, secrets.DepuisEnvironnement(), "talk", "signaling")
+	// THE SIGNALING SECRET IS READ FROM NEXTCLOUD, NOT FROM THE VAULT.
+	//
+	// Why not the vault: secrets.DepuisEnvironnement() reads BAO_ADDR/BAO_TOKEN,
+	// which the deployment process has and the CONSOLE DOES NOT. Its image has
+	// no shell, and the injector only gives it its own secrets already resolved
+	// (CEFFIO_KEY, KC_ADMIN, NC_USER) — never vault credentials. Reading the
+	// vault here worked from the command line and answered, in the interface:
+	//
+	//   no vault configured: cannot read talk/signaling
+	//
+	// So we ask the service that already holds the value: Talk. The setting is
+	// exactly what the signaling uses, it is already stored in the database, and
+	// reading it there needs no vault access at all.
+	secretInterne, err := secretSignaling(ctx, cli, pod)
 	if err != nil {
-		return fmt.Errorf("reading talk/signaling from the vault (the Talk layer must be deployed first): %w", err)
-	}
-	secretInterne := entree["partage"]
-	if secretInterne == "" {
-		return fmt.Errorf("talk/signaling has no \"partage\" secret: the transcription app cannot authenticate to the signaling")
+		return err
 	}
 
 	fmt.Printf("∙ registering %s (signaling: %s)\n", appTranscription, urlSignaling)
@@ -87,6 +96,49 @@ func TranscriptionDeploye(ctx context.Context, domain string) error {
 	fmt.Println("✓ Live transcription deployed")
 	fmt.Println("  The speech models are downloaded on first use (~6 GB).")
 	return nil
+}
+
+// secretSignaling reads the internal secret of the signaling FROM NEXTCLOUD.
+//
+// WHERE THE VALUE LIVES: Talk stores it in its own settings, under
+// `signaling_servers`, as
+//
+//	{"servers":[{"server":"..."}],"secret":"..."}
+//
+// It is the same value the signaling uses for [clients] internalsecret, so
+// reading it there guarantees byte-for-byte agreement — which is the only thing
+// that matters: a near-miss secret produces an app that starts, looks healthy,
+// and is rejected on every connection attempt.
+//
+// WHY NOT THE VAULT: the administration console has no vault credentials (see
+// the note in TranscriptionDeploye). Nextcloud is the source of truth for this
+// value anyway, and asking it needs no elevated right at all.
+func secretSignaling(ctx context.Context, cli *k8sapi.Client, pod string) (string, error) {
+	sortie, err := occ(ctx, cli, pod, "config:app:get", "spreed", "signaling_servers")
+	if err != nil {
+		return "", fmt.Errorf("reading the signaling settings from Talk: %w", err)
+	}
+
+	brut := strings.TrimSpace(sortie)
+	// occ may prefix its answer with a progress line; keep the last line, which
+	// is the JSON document.
+	if i := strings.LastIndex(brut, "\n"); i >= 0 {
+		brut = strings.TrimSpace(brut[i+1:])
+	}
+	if brut == "" {
+		return "", fmt.Errorf("Talk has no signaling server configured: deploy the Talk layer first")
+	}
+
+	var reglages struct {
+		Secret string `json:"secret"`
+	}
+	if err := json.Unmarshal([]byte(brut), &reglages); err != nil {
+		return "", fmt.Errorf("reading the Talk signaling settings (unexpected format): %w", err)
+	}
+	if reglages.Secret == "" {
+		return "", fmt.Errorf("Talk's signaling settings carry no secret: live transcription cannot authenticate to the signaling")
+	}
+	return reglages.Secret, nil
 }
 
 // TranscriptionSupprime removes the ExApp and everything it leaves behind.
