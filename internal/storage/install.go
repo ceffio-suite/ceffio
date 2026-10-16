@@ -30,6 +30,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -157,7 +158,7 @@ func paquetsAbsents(ctx context.Context) []string {
 
 // installerLonghorn installs the chart, with the settings that matter.
 //
-// THE TWO --set ARE NOT COSMETIC:
+// THE --set VALUES ARE NOT COSMETIC:
 //
 //	defaultDataPath        where volumes live. Defaulting to /var/lib/longhorn
 //	                       keeps them on the volume the operator sized for
@@ -167,11 +168,28 @@ func paquetsAbsents(ctx context.Context) []string {
 //	                       volume instead, and the failure appears as a full
 //	                       disk days later.
 //
-//	defaultReplicaCount=1  single-node cluster. Three replicas is the sane
+//	replicaCount=1         single-node cluster. Three replicas is the sane
 //	                       default for a real cluster, but on one node they
 //	                       all land on the same disk: it triples the space
 //	                       used, protects against nothing, and the volume can
 //	                       never be scheduled once a replica is lost.
+//
+// THE REPLICA COUNT IS SET TWICE, ON PURPOSE, AND THE SECOND ONE IS THE ONE
+// THAT COUNTS. Measured on a fresh node: with only
+// `defaultSettings.defaultReplicaCount=1`, Longhorn's global setting read
+// {"v1":"1"} while the StorageClass it created still carried
+// `numberOfReplicas: "3"` — the chart hardcodes 3 in the class, and a volume
+// takes its replica count FROM THE CLASS, not from the global setting.
+//
+// The result was a volume claiming 3 replicas on a machine with one disk:
+// robustness `degraded`, two replicas stuck in `stopped`, and the mount
+// failing with
+//
+//	mke2fs: /dev/longhorn/pvc-… is apparently in use by the system;
+//	will not make a filesystem here!
+//
+// The deployment then stopped on « PostgreSQL ceffio-pg not ready after 300s »,
+// which points nowhere near the replica count.
 func installerLonghorn(ctx context.Context) error {
 	fmt.Printf("∙ Longhorn %s (CSI: expansion, snapshots, backup)\n", longhornChartVersion)
 
@@ -182,8 +200,20 @@ func installerLonghorn(ctx context.Context) error {
 	cmd := k8s.Command(ctx, "helm", "upgrade", "--install", "longhorn", "longhorn/longhorn",
 		"--namespace", longhornNamespace, "--create-namespace",
 		"--set", "defaultSettings.defaultDataPath=/var/lib/longhorn",
-		"--set", "defaultSettings.defaultReplicaCount=1",
 		"--set", "defaultSettings.storageMinimalAvailablePercentage=10",
+		// THIS IS THE ONE THAT DECIDES THE REPLICA COUNT, and the first
+		// deployment got it wrong twice. `defaultSettings.defaultReplicaCount`
+		// (the Longhorn GLOBAL setting) is NOT what the StorageClass takes:
+		// the chart has its own key, and the class is built from it.
+		//
+		// Measured on a fresh node, with only defaultSettings set:
+		//   Longhorn global setting        → {"v1":"1"}
+		//   StorageClass numberOfReplicas  → "3"   (unchanged)
+		//   volume created                 → replicas=3, robustness degraded
+		//
+		// Both are set now — the global one keeps the cluster coherent, this
+		// one is what the volumes actually read.
+		"--set", fmt.Sprintf("persistence.defaultClassReplicaCount=%d", replicasPourLeCluster(ctx)),
 		"--timeout", "15m",
 		"--version", longhornChartVersion)
 	cmd.Stdout = os.Stdout
@@ -191,6 +221,77 @@ func installerLonghorn(ctx context.Context) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("installing Longhorn: %w", err)
 	}
+
+	// The install reports success whether or not the replica count landed, so
+	// we read it back rather than trust it.
+	return verifierReplicasClasse(ctx)
+}
+
+// replicasPourLeCluster: how many replicas a volume should have here.
+//
+// ONE ON A SINGLE NODE, THREE BEYOND. The count is read from the machine, not
+// from a preference: on one node every replica shares the same disk, so three
+// replicas triple the space used, protect against nothing, and leave the
+// volume unable to be scheduled once a replica is lost.
+//
+// Measured symptom of getting this wrong on a single node:
+//
+//	volume robustness `degraded`, two replicas stuck in `stopped`, and the
+//	mount failing on « /dev/longhorn/pvc-… is apparently in use by the
+//	system; will not make a filesystem here! »
+//
+// The deployment then stopped on « PostgreSQL ceffio-pg not ready after 300s »,
+// which points nowhere near the replica count.
+func replicasPourLeCluster(ctx context.Context) int {
+	out, err := k8s.Command(ctx, "kubectl", "get", "nodes", "--no-headers").Output()
+	if err != nil {
+		// Cannot count: assume the safer default for a real cluster rather
+		// than silently degrading durability on a machine we failed to read.
+		return 3
+	}
+	noeuds := 0
+	for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if strings.TrimSpace(l) != "" {
+			noeuds++
+		}
+	}
+	if noeuds <= 1 {
+		return 1
+	}
+	return 3
+}
+
+// verifierReplicasClasse proves the StorageClass carries what we asked for.
+//
+// WHY A READ-BACK AND NOT AN ASSUMPTION: the helm install succeeds whether or
+// not the replica count landed — that is exactly how the first deployment
+// passed this step and failed twenty minutes later inside PostgreSQL. A
+// StorageClass whose parameter did not take looks identical in
+// `kubectl get sc`: same name, same provisioner, same `(default)` marker.
+//
+// The class is NOT patched or recreated here. Its parameters are immutable —
+// verified: « parameters: … field is immutable » — and Longhorn's own
+// controller recreates it from its chart values the moment it is deleted. The
+// value has to arrive through helm; this function only checks that it did.
+func verifierReplicasClasse(ctx context.Context) error {
+	voulu := strconv.Itoa(replicasPourLeCluster(ctx))
+
+	sortie, err := k8s.Command(ctx, "kubectl", "get", "storageclass", "longhorn",
+		"-o", "jsonpath={.parameters.numberOfReplicas}").Output()
+	if err != nil {
+		return fmt.Errorf("reading numberOfReplicas from the longhorn StorageClass: %w", err)
+	}
+	obtenu := strings.TrimSpace(string(sortie))
+
+	if obtenu != voulu {
+		return fmt.Errorf("the longhorn StorageClass requests %s replicas, expected %s "+
+			"for this %s-node cluster — volumes would come up degraded and their "+
+			"mount would fail on « apparently in use by the system ». "+
+			"The value comes from the chart's persistence.defaultClassReplicaCount, "+
+			"not from defaultSettings.defaultReplicaCount", obtenu, voulu,
+			map[bool]string{true: "single", false: "multi"}[voulu == "1"])
+	}
+	fmt.Printf("  ✓ numberOfReplicas=%s on the longhorn StorageClass\n", obtenu)
 	return nil
 }
 
@@ -242,27 +343,51 @@ func attendreLonghorn(ctx context.Context) error {
 // definirClasseParDefaut makes `longhorn` the default StorageClass.
 //
 // WITHOUT THIS, A PVC WITHOUT AN EXPLICIT CLASS LANDS ON `local-path` — k3s
-// ships it as the default, and it has no expansion and no backup. The
-// difference would only surface the day someone tries to grow a volume.
+// ships it as the only class present on a fresh node, so it is what a volume
+// gets when nothing else claims the default. local-path has no expansion and
+// no backup, and the difference only surfaces the day someone tries to grow a
+// volume.
 //
-// The old default is UNANNOTATED rather than deleted: it is a k3s component,
-// deleting it can be undone by an upgrade, and a cluster where two classes
-// both claim to be default behaves unpredictably.
+// NOTE ON THE ANNOTATION: `local-path` carries NO is-default-class annotation
+// at all on a fresh node — verified. It does not need one to be picked, which
+// is why the fix is not to un-annotate it but to make longhorn the default
+// BEFORE any PVC exists; that is why this runs in the storage layer.
 func definirClasseParDefaut(ctx context.Context) error {
 	fmt.Println("∙ Longhorn as the default StorageClass")
 
-	// longhorn-static is a companion class for pre-provisioned volumes; it must
-	// never be the default.
-	if err := run(ctx, "kubectl", "annotate", "storageclass", "local-path",
-		"storageclass.kubernetes.io/is-default-class-", "--overwrite"); err != nil {
-		// Not fatal: on a cluster without local-path there is nothing to
-		// un-default, and stopping here would fail a valid installation.
-		fmt.Println("  ∙ local-path is not the default here, nothing to unset")
-	}
 	if err := run(ctx, "kubectl", "annotate", "storageclass", "longhorn",
 		"storageclass.kubernetes.io/is-default-class=true", "--overwrite"); err != nil {
 		return fmt.Errorf("marking longhorn as default: %w", err)
 	}
+
+	// longhorn-static is the companion class for pre-provisioned volumes and
+	// must never be the default. Un-annotated only when it carries the
+	// annotation; the command fails otherwise, which is expected.
+	for _, c := range []string{"local-path", "longhorn-static"} {
+		cmd := k8s.Command(ctx, "kubectl", "annotate", "storageclass", c,
+			"storageclass.kubernetes.io/is-default-class-", "--overwrite")
+		if err := cmd.Run(); err != nil {
+			continue // no such class, or no annotation to remove
+		}
+		fmt.Printf("  ∙ %s no longer claims to be the default\n", c)
+	}
+
+	// PROOF RATHER THAN ASSUMPTION: read the annotation back and refuse to
+	// continue if it did not land. A deployment that proceeds with the wrong
+	// default writes every volume to a provisioner that cannot expand or back
+	// them up, and nothing says so until someone tries to grow a volume.
+	cmd := k8s.Command(ctx, "kubectl", "get", "storageclass", "longhorn",
+		"-o", "jsonpath={.metadata.annotations.storageclass\\.kubernetes\\.io/is-default-class}")
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("reading back the default class: %w", err)
+	}
+	if strings.TrimSpace(string(out)) != "true" {
+		return fmt.Errorf("longhorn is not the default StorageClass after applying " +
+			"the annotation — every volume would land on local-path, which cannot " +
+			"be expanded nor backed up")
+	}
+	fmt.Println("  ✓ longhorn is the default StorageClass")
 	return nil
 }
 
