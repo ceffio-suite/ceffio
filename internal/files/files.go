@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
+	"github.com/ceffio-suite/ceffio/internal/storage"
 	"github.com/ceffio-suite/ceffio/internal/vault"
 	"os"
 	"strconv"
@@ -167,14 +168,34 @@ func applyWorkload(ctx context.Context) error {
 			}},
 		}))
 
-	manifest := fmt.Sprintf(`apiVersion: v1
+	manifest := manifesteNextcloud(ns, storage.Classe(), annotations, nextcloudImage,
+		dbService, dbName, valkeyService, valkeyPort)
+	return apply(ctx, manifest)
+}
+
+// manifesteNextcloud builds the PVC and the Nextcloud Deployment.
+//
+// EXTRACTED SO THE TEXT CAN BE TESTED. This manifest goes through
+// fmt.Sprintf with nine verbs, and Go silently shifts every verb that follows
+// the first indexed one (%[n]s) when the two styles are mixed — the compiler
+// and `go vet` both accept the result. It reached a deployment once:
+//
+//	error converting YAML to JSON: yaml: line 21: could not find expected ':'
+//
+// Nothing in that message points at the format string, and the cause was a
+// value landing on the line above its own. Reading the produced YAML is the
+// only check that distinguishes a correct manifest from a plausible one, which
+// is what the test in this package does.
+func manifesteNextcloud(ns, classe, annotations, image,
+	dbService, dbName, valkeyService, valkeyPort string) string {
+	return fmt.Sprintf(`apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: nextcloud-data
-  namespace: %s
+  namespace: %[1]s
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: local-path
+  storageClassName: %[2]s
   resources:
     requests:
       storage: 20Gi
@@ -183,7 +204,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: nextcloud
-  namespace: %s
+  namespace: %[1]s
   labels:
     app: nextcloud
     app.kubernetes.io/part-of: ceffio
@@ -198,13 +219,13 @@ spec:
         app: nextcloud
       # SECRETS ARE LAID DOWN BY THE OPENBAO INJECTOR (vault.AnnotationsAgent).
       annotations:
-%s
+%[3]s
     spec:
       # THIS ServiceAccount IS THE ONE THE VAULT ROLE DESIGNATES.
       serviceAccountName: nextcloud
       containers:
         - name: nextcloud
-          image: %s
+          image: %[4]s
           # THE ORIGINAL ENTRYPOINT SCRIPT IS PRESERVED: it is the one that prepares
           # the instance. We only source the rendered file before launching it.
           command: ["/bin/sh", "-c"]
@@ -216,13 +237,13 @@ spec:
               exec /entrypoint.sh apache2-foreground
           env:
             - name: POSTGRES_HOST
-              value: %s
+              value: %[5]s
             - name: POSTGRES_DB
-              value: %s
+              value: %[6]s
             - name: REDIS_HOST
-              value: %s
+              value: %[7]s
             - name: REDIS_HOST_PORT
-              value: "%s"
+              value: "%[8]s"
             - name: NEXTCLOUD_TRUSTED_DOMAINS
               value: "cloud.demo.local localhost 10.42.0.0/24"
           ports:
@@ -246,7 +267,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: nextcloud
-  namespace: %s
+  namespace: %[9]s
 spec:
   selector:
     app: nextcloud
@@ -254,8 +275,7 @@ spec:
     - name: http
       port: 80
       targetPort: 80
-`, ns, ns, annotations, nextcloudImage, dbService, dbName, valkeyService, valkeyPort, ns)
-	return apply(ctx, manifest)
+`, ns, classe, annotations, image, dbService, dbName, valkeyService, valkeyPort, ns)
 }
 
 func waitNextcloudReady(ctx context.Context) error {

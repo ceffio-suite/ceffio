@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/ceffio-suite/ceffio/internal/k8s"
+	"github.com/ceffio-suite/ceffio/internal/storage"
 	"os"
 	"strings"
 	"time"
@@ -92,13 +93,13 @@ func deployPostgres(ctx context.Context) error {
 	manifest := fmt.Sprintf(`apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
-  name: %s
-  namespace: %s
+  name: %[1]s
+  namespace: %[2]s
 spec:
   instances: 1
   storage:
     size: 10Gi
-    storageClass: local-path
+    storageClass: %[3]s
   bootstrap:
     initdb:
       database: mysuite
@@ -106,7 +107,7 @@ spec:
       postInitSQL:
         - CREATE DATABASE keycloak;
         - CREATE DATABASE nextcloud;
-`, pgClusterName, pgNamespace)
+`, pgClusterName, pgNamespace, storage.Classe())
 	if err := apply(ctx, manifest); err != nil {
 		return err
 	}

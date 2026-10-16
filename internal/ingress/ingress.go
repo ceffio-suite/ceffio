@@ -31,6 +31,43 @@ func Deploy(ctx context.Context, domain string) error {
 	if err := apply(ctx, ingressesManifest(domain)); err != nil {
 		return err
 	}
+
+	// KEYCLOAK'S PUBLIC HOSTNAME IS SET HERE, NOT LATER.
+	//
+	// It used to happen in AdoptURLs, which runs after the application
+	// layers. Too late: without KC_HOSTNAME_URL, Keycloak builds its OIDC
+	// discovery document with the scheme it sees internally — http — so the
+	// issuer came out as
+	//
+	//   "issuer":"http://keycloak.<domain>/realms/ceffio"
+	//
+	// while every client configures and expects https. Stalwart compares what
+	// it gets against its own https issuer and refuses:
+	//
+	//   discovery does not return the expected provider
+	//   (https://keycloak.ceffio.org/realms/ceffio):
+	//   {"issuer":"http://keycloak.ceffio.org/realms/ceffio",...}
+	//
+	// The deployment stopped there. Nothing is wrong with Keycloak: it simply
+	// has to be told its public name before anyone asks it who it is.
+	if err := adoptKeycloakHost(ctx, domain); err != nil {
+		return err
+	}
+
+	// TLS TRUST FOR THE INTERNAL AUTHORITY, ALSO BEFORE THE OIDC BLOCKS.
+	//
+	// Moved here with adoptKeycloakHost, for the same reason: what runs after
+	// this point talks to https://keycloak.<domain>, and a component that does
+	// not trust our authority fails at the handshake. Stalwart is the clearest
+	// case — curl without -k exits 60 with no output, and the deployment then
+	// reports a discovery problem, which reads like a Keycloak fault.
+	//
+	// The applications are already running when Deploy is called, so patching
+	// their trust store here works.
+	if err := InjecterConfianceTLS(ctx, domain, isDemo(domain)); err != nil {
+		return err
+	}
+
 	fmt.Println("✓ Ingress / TLS configured (Traefik + ClusterIssuer CA + hosts *." + domain + ")")
 	return nil
 }
@@ -81,6 +118,12 @@ func AdoptURLs(ctx context.Context, domain string) error {
 
 	// 6) Keycloak: public hostname + https frontend URL + proxy headers —
 	// otherwise its browser redirects point to the hardcoded internal hostname.
+	//
+	// ALREADY APPLIED BY Deploy, and replayed here on purpose: Deploy runs
+	// before the application layers, this one after. The call is idempotent,
+	// and repeating it costs one `kubectl set env` that changes nothing. It
+	// stays because a cluster deployed by an older binary has never run it
+	// from Deploy, and this is the pass that would fix it.
 	if err := adoptKeycloakHost(ctx, domain); err != nil {
 		return err
 	}
@@ -207,6 +250,33 @@ func InjecterConfianceTLS(ctx context.Context, domain string, avecHostAliases bo
 	}
 	if err := patchApp(ctx, "ceffio-office", "onlyoffice", "onlyoffice", tip,
 		hostsOffice, []envKV{{"NODE_EXTRA_CA_CERTS", "/etc/ceffio-ca/ceffio-ca.crt"}}, false); err != nil {
+		return err
+	}
+
+	// Stalwart (Rust): SSL_CERT_FILE, like Nextcloud.
+	//
+	// IT WAS MISSING HERE, AND THAT SILENTLY BROKE ITS OIDC LOGIN. Stalwart
+	// verifies its own single sign-on by fetching the discovery document over
+	// https://keycloak.<domain>. Without our authority in its trust store the
+	// fetch failed at the TLS handshake (curl exit 60), and the failure did
+	// not look like a certificate problem at all:
+	//
+	//   curl without -k  → exit 60, no output
+	//   curl with    -k  → {"issuer":"https://keycloak.ceffio.org/realms/ceffio",...}
+	//
+	// The deployment then reported « discovery does not return the expected
+	// provider », which reads like a Keycloak misconfiguration and sent the
+	// investigation there. Keycloak was correct the whole time.
+	//
+	// Combined bundle, not our authority alone: SSL_CERT_FILE REPLACES the
+	// default list, so pointing at ceffio-ca.crt would make Stalwart reject
+	// every public certificate — including the ones its outbound SMTP and
+	// spam-filter calls rely on.
+	if err := createCAConfigs(ctx, "ceffio-mail", ca); err != nil {
+		return err
+	}
+	if err := patchApp(ctx, "ceffio-mail", "stalwart", "stalwart", tip,
+		nil, []envKV{{"SSL_CERT_FILE", cheminPaquetCombine}}, false); err != nil {
 		return err
 	}
 	if avecHostAliases {

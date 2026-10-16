@@ -258,6 +258,31 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 		return err
 	}
 
+	// --- Ingress / real TLS (Phase 9) — MOVED HERE, BEFORE THE OIDC BLOCKS ---
+	//
+	// WHY IT MOVED: this block used to run at the very end, after the mail
+	// layer. But Stalwart's single sign-on verifies its own configuration by
+	// asking for the OIDC discovery document at
+	// https://keycloak.<domain>/realms/ceffio — an address that only exists
+	// once the Ingress is applied. At that point the name resolved, Traefik
+	// answered, and the answer was Stalwart's own discovery document instead
+	// of Keycloak's:
+	//
+	//   ceffio: discovery does not return the expected provider
+	//   (https://keycloak.ceffio.org/realms/ceffio):
+	//   {"issuer":"","authorization_endpoint":"/login","token_endpoint":"/auth/token",...}
+	//
+	// The deployment stopped there, on the last mile, with everything else
+	// installed and healthy. Keycloak itself was fine all along — reached on
+	// its cluster address it answers correctly.
+	//
+	// Nothing here depends on an application: these are Ingress objects and a
+	// CA. Applying them first is always valid, and it makes the OIDC
+	// verification run against a real address.
+	if err := ingress.Deploy(ctx, o.domain); err != nil {
+		return err
+	}
+
 	// 12bis. Mail (Phase 13): Stalwart. Nextcloud provides the interface
 	// (Mail app) but not the mail server. The outbound relay is INDISPENSABLE
 	// here: outbound port 25 is blocked by the ISP (verified), so Stalwart
@@ -330,12 +355,13 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 
 	fmt.Println("\n✓ OIDC SSO configured (single Keycloak login on Nextcloud).")
 
-	// 13. Ingress / real TLS (Phase 9).
-	if err := ingress.Deploy(ctx, o.domain); err != nil {
-		return err
-	}
-
 	// 14. Adoption of the public URLs into the apps (homeserver, SSO redirects, https).
+	//
+	// The Ingress itself was applied earlier — before the OIDC blocks, because
+	// Stalwart's SSO verification needs https://keycloak.<domain> to exist.
+	// What runs here needs the apps to be up: it writes the public URL into
+	// Nextcloud (https protocol, proxy headers), the SSO redirect URIs, and
+	// the ONLYOFFICE connector.
 	if err := ingress.AdoptURLs(ctx, o.domain); err != nil {
 		return err
 	}
