@@ -48,6 +48,11 @@ import (
 const (
 	ns = "ceffio-video"
 
+	// secretPull: the pull secret for the Janus image, created ONLY when
+	// GHCR_TOKEN is set. The image is public, so its absence is the normal
+	// case — and the manifest must not reference a secret that is not there.
+	secretPull = "ghcr-pull"
+
 	// HPB images.
 	signalingImage = "docker.io/strukturag/nextcloud-spreed-signaling:2.1.1"
 	natsImage      = "docker.io/library/nats:2.15"
@@ -515,7 +520,7 @@ func ensurePullSecret(ctx context.Context) error {
 	// deployment at this spot: the following components are never applied,
 	// without anything saying so. That is exactly what happened to Talk's
 	// signaling.
-	if secretExiste(ctx, "ghcr-pull") {
+	if secretExiste(ctx, secretPull) {
 		return nil
 	}
 	// ghcr.io/ceffio-suite/janus-gateway is PUBLIC since 2026-10-14: anonymous
@@ -566,6 +571,24 @@ data:
 // This is the component that CARRIES the media: each participant sends their
 // stream once, Janus redistributes it to everyone. Without it, Talk caps at
 // ~4-6 participants (direct connections between browsers).
+// blocPullSecret returns the imagePullSecrets stanza, or nothing at all.
+//
+// AN IMAGEPULLSECRETS NAMING A SECRET THAT DOES NOT EXIST IS NOT HARMLESS.
+// Kubernetes accepts the pod only because the image happens to be public: the
+// pull succeeds anonymously and the missing secret is never needed. The day
+// the image moves, or a fork republishes it privately WITHOUT setting
+// GHCR_TOKEN, the pod fails with « secret "ghcr-pull" not found » — a message
+// that describes the symptom and hides the cause.
+//
+// So the stanza is emitted only when the secret is really there. The image is
+// public: this is the normal case, and no secret is needed at all.
+func blocPullSecret(ctx context.Context) string {
+	if !secretExiste(ctx, secretPull) {
+		return ""
+	}
+	return "      imagePullSecrets:\n      - name: " + secretPull + "\n"
+}
+
 func deployJanus(ctx context.Context) error {
 	fmt.Printf("∙ Janus %s (SFU, UDP media %d-%d)\n", janusImage, plageMediaDebut, plageMediaFin)
 
@@ -611,9 +634,7 @@ spec:
       # redirects toward the VM's IP — so the pod must listen on that IP.
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
-      imagePullSecrets:
-      - name: ghcr-pull
-      containers:
+%[3]s      containers:
       - name: janus
         image: %[2]s
         env:
@@ -643,7 +664,7 @@ spec:
   ports:
   - {name: api, port: 8088, targetPort: 8088, protocol: TCP}
   - {name: ws, port: 8188, targetPort: 8188, protocol: TCP}
-`, ns, janusImage, "", plageMediaDebut, plageMediaFin, portTurn, stunPublic, stunPort)
+`, ns, janusImage, blocPullSecret(ctx), plageMediaDebut, plageMediaFin, portTurn, stunPublic, stunPort)
 	return appliquer(ctx, manifeste)
 }
 
