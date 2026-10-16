@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ceffio-suite/ceffio/internal/ingress"
 	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"github.com/ceffio-suite/ceffio/internal/vault"
@@ -622,7 +623,8 @@ metadata:
   name: admin
   namespace: ` + deployNS + `
   annotations:
-    cert-manager.io/cluster-issuer: ceffio-ca-issuer
+    cert-manager.io/cluster-issuer: ` + ingress.PourDomaine(domain) + `
+    traefik.ingress.kubernetes.io/router.middlewares: ceffio-system-ceffio-redirect-https@kubernetescrd
 spec:
   ingressClassName: traefik
   tls:
