@@ -340,12 +340,30 @@ func InjecterConfianceTLS(ctx context.Context, domain string, avecHostAliases bo
 	// default list, so pointing at ceffio-ca.crt would make Stalwart reject
 	// every public certificate — including the ones its outbound SMTP and
 	// spam-filter calls rely on.
+	// STALWART MAY NOT EXIST YET, AND THAT IS NOT AN ERROR.
+	//
+	// The Ingress is applied BEFORE the application layers — deliberately, so
+	// Stalwart can reach https://keycloak.<domain> when it verifies its own
+	// SSO. But the mail layer comes later, so on a first install this
+	// deployment does not exist yet, and the patch failed the whole run with
+	//
+	//	Error from server (NotFound): deployments.apps "stalwart" not found
+	//	ceffio: exit status 1
+	//
+	// after eleven successful layers.
+	//
+	// The ConfigMap is created regardless: it is a namespace-level object that
+	// does not depend on the pod. The env patch is skipped when the deployment
+	// is absent, and mail.Deploy applies it itself once Stalwart is created —
+	// it calls this same function at the end of its own layer.
 	if err := createCAConfigs(ctx, "ceffio-mail", ca); err != nil {
 		return err
 	}
-	if err := patchApp(ctx, "ceffio-mail", "stalwart", "stalwart", tip,
-		nil, []envKV{{"SSL_CERT_FILE", cheminPaquetCombine}}, false); err != nil {
-		return err
+	if deploiementExiste(ctx, "ceffio-mail", "stalwart") {
+		if err := patchApp(ctx, "ceffio-mail", "stalwart", "stalwart", tip,
+			nil, []envKV{{"SSL_CERT_FILE", cheminPaquetCombine}}, false); err != nil {
+			return err
+		}
 	}
 	if avecHostAliases {
 		fmt.Println("✓ Internal TLS trust applied (hostAliases→" + tip + ")")
@@ -768,6 +786,15 @@ func domainePublic(domain string) bool {
 		return false
 	}
 	return true
+}
+
+// deploiementExiste says whether a Deployment is present, without failing.
+//
+// Used wherever a patch is legitimate on a re-run but must not break a first
+// install: the Ingress layer prepares things for components it runs BEFORE.
+func deploiementExiste(ctx context.Context, ns, nom string) bool {
+	cmd := k8s.Command(ctx, "kubectl", "get", "deployment", nom, "-n", ns)
+	return cmd.Run() == nil
 }
 
 func apply(ctx context.Context, manifest string) error {
