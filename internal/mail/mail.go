@@ -35,6 +35,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ceffio-suite/ceffio/internal/ingress"
 	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"github.com/ceffio-suite/ceffio/internal/storage"
@@ -351,8 +352,24 @@ kind: Ingress
 metadata:
   name: mail
   namespace: %[1]s
+  annotations:
+    # TLS AND HTTPS REDIRECTION, ABSENT HERE AND MEASURED ON THE CLUSTER:
+    # the mail host answered http://mail.ceffio.org/ and redirected to
+    # http://mail.ceffio.org/account — a login form in clear, while every
+    # other host of the domain was on Let's Encrypt. The administration
+    # interface carries the admin session, so it is the last one that should
+    # have been left out.
+    #
+    # It was missed because this Ingress is written here, in the mail package,
+    # rather than in ingressesManifest with the others. The issuer and the
+    # redirection annotation are set the same way as there.
+    cert-manager.io/cluster-issuer: %[6]s
+    traefik.ingress.kubernetes.io/router.middlewares: %[1]s-ceffio-redirect-https@kubernetescrd
 spec:
   ingressClassName: traefik
+  tls:
+  - hosts: [%[2]s]
+    secretName: mail-tls
   rules:
   - host: %[2]s
     http:
@@ -363,7 +380,8 @@ spec:
           service:
             name: stalwart
             port: {number: 8080}
-`, ns, domaine, stalwartImage, annotations, storage.Classe())
+`, ns, domaine, stalwartImage, annotations, storage.Classe(),
+		ingress.PourDomaine(domaine))
 
 	return apply(ctx, manifest)
 }
