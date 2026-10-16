@@ -208,7 +208,7 @@ metadata:
   namespace: %[1]s
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: %[4]s
+  storageClassName: %[5]s
   resources:
     requests:
       storage: 20Gi
