@@ -31,6 +31,29 @@ func Deploy(ctx context.Context, domain string) error {
 	if err := apply(ctx, ingressesManifest(domain)); err != nil {
 		return err
 	}
+
+	// KEYCLOAK'S PUBLIC HOSTNAME IS SET HERE, NOT LATER.
+	//
+	// It used to happen in AdoptURLs, which runs after the application
+	// layers. Too late: without KC_HOSTNAME_URL, Keycloak builds its OIDC
+	// discovery document with the scheme it sees internally — http — so the
+	// issuer came out as
+	//
+	//   "issuer":"http://keycloak.<domain>/realms/ceffio"
+	//
+	// while every client configures and expects https. Stalwart compares what
+	// it gets against its own https issuer and refuses:
+	//
+	//   discovery does not return the expected provider
+	//   (https://keycloak.ceffio.org/realms/ceffio):
+	//   {"issuer":"http://keycloak.ceffio.org/realms/ceffio",...}
+	//
+	// The deployment stopped there. Nothing is wrong with Keycloak: it simply
+	// has to be told its public name before anyone asks it who it is.
+	if err := adoptKeycloakHost(ctx, domain); err != nil {
+		return err
+	}
+
 	fmt.Println("✓ Ingress / TLS configured (Traefik + ClusterIssuer CA + hosts *." + domain + ")")
 	return nil
 }
@@ -81,6 +104,12 @@ func AdoptURLs(ctx context.Context, domain string) error {
 
 	// 6) Keycloak: public hostname + https frontend URL + proxy headers —
 	// otherwise its browser redirects point to the hardcoded internal hostname.
+	//
+	// ALREADY APPLIED BY Deploy, and replayed here on purpose: Deploy runs
+	// before the application layers, this one after. The call is idempotent,
+	// and repeating it costs one `kubectl set env` that changes nothing. It
+	// stays because a cluster deployed by an older binary has never run it
+	// from Deploy, and this is the pass that would fix it.
 	if err := adoptKeycloakHost(ctx, domain); err != nil {
 		return err
 	}
