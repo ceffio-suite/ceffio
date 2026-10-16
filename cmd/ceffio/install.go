@@ -25,6 +25,7 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"github.com/ceffio-suite/ceffio/internal/sso"
 	"github.com/ceffio-suite/ceffio/internal/stacks"
+	"github.com/ceffio-suite/ceffio/internal/storage"
 	"github.com/ceffio-suite/ceffio/internal/talk"
 	"github.com/ceffio-suite/ceffio/internal/vault"
 	"github.com/spf13/cobra"
@@ -160,6 +161,23 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	fmt.Printf("\n✓ Cluster %q ready (%d node(s))\n", devClusterName, len(nodes))
 	for _, n := range nodes {
 		fmt.Printf("  ✓ node/%s Ready\n", n)
+	}
+
+	// 4bis. STORAGE (Phase 2, before the platform).
+	//
+	// It comes FIRST because every other layer writes volumes: PostgreSQL, the
+	// Nextcloud data, Stalwart, Keycloak. Installing the storage driver after
+	// them means those PVCs land on whatever default existed at the time —
+	// local-path, which cannot be expanded nor backed up — and switching later
+	// requires recreating PVCS, so losing the data.
+	//
+	// It also prepares the HOST: the iSCSI client and its daemon. Their absence
+	// is invisible from inside the cluster (pods Running, StorageClass
+	// present, volumes never leaving `creating`), and the first deployment to
+	// ceffio.org lost hours to exactly that.
+	fmt.Println("\n∙ storage layer (host prerequisites + Longhorn)")
+	if err := storage.Install(ctx); err != nil {
+		return err
 	}
 
 	// 5. Platform deployment (Phase 2).
