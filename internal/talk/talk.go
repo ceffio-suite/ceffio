@@ -525,9 +525,23 @@ func ensurePullSecret(ctx context.Context) error {
 	// republished under a different name.
 	token := os.Getenv("GHCR_TOKEN")
 	if token == "" {
-		return fmt.Errorf("GHCR_TOKEN missing: the Janus image is on GHCR (private) and " +
-			"the cluster must be able to pull it. Provide a token with read:packages")
+		// NOT AN ERROR. The image is public, so anonymous pulls work and no
+		// secret is needed at all.
+		//
+		// This used to return an error, and the cost was high: the deployment
+		// stopped here, before Talk, Mail and Console were applied — seven
+		// layers deployed, nothing told the operator that the rest was
+		// missing, and the message blamed a missing token for an image that
+		// needs none. A deployment that stops halfway is worse than one that
+		// continues: the cluster looks usable while half the product is
+		// absent.
+		//
+		// The token stays supported for private forks and air-gapped mirrors,
+		// where the image is republished elsewhere and anonymous pulls do
+		// fail.
+		return nil
 	}
+
 	fmt.Println("∙ GHCR pull secret created")
 
 	// The .dockerconfigjson file Kubernetes expects.
