@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
+	"github.com/ceffio-suite/ceffio/internal/storage"
 	"github.com/ceffio-suite/ceffio/internal/vault"
 	"os"
 	"strings"
@@ -101,10 +102,10 @@ func applyWorkload(ctx context.Context) error {
 kind: PersistentVolumeClaim
 metadata:
   name: onlyoffice-data
-  namespace: %s
+  namespace: %[1]s
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: local-path
+  storageClassName: %[7]s
   resources:
     requests:
       storage: 20Gi
@@ -113,13 +114,13 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: onlyoffice
-  namespace: %s
+  namespace: %[2]s
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: onlyoffice
-  namespace: %s
+  namespace: %[3]s
   labels:
     app: onlyoffice
     app.kubernetes.io/part-of: ceffio
@@ -135,13 +136,13 @@ spec:
       # SECRETS ARE LAID DOWN BY THE OPENBAO INJECTOR, which adds the
       # init-container, the IN-MEMORY volume and the right user/group pair itself.
       annotations:
-%s
+%[4]s
     spec:
       # THIS ServiceAccount IS THE ONE THE VAULT ROLE DESIGNATES.
       serviceAccountName: onlyoffice
       containers:
         - name: onlyoffice
-          image: %s
+          image: %[5]s
           # THE MAIN CONTAINER SOURCES THE RENDERED FILE, THEN RUNS THE ORIGINAL
           # ENTRYPOINT — the one from the image, which prepares the server.
           command: ["/bin/bash", "-c"]
@@ -173,7 +174,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: onlyoffice
-  namespace: %s
+  namespace: %[6]s
 spec:
   selector:
     app: onlyoffice
@@ -181,7 +182,7 @@ spec:
     - name: http
       port: 80
       targetPort: 80
-`, ns, ns, ns, annotations, officeImage, ns)
+`, ns, ns, ns, annotations, officeImage, ns, storage.Classe())
 	return apply(ctx, manifest)
 }
 

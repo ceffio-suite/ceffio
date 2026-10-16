@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/ceffio-suite/ceffio/internal/k8s"
+	"github.com/ceffio-suite/ceffio/internal/storage"
 	"os"
 	"strings"
 	"time"
@@ -98,7 +99,7 @@ spec:
   instances: 1
   storage:
     size: 10Gi
-    storageClass: local-path
+    storageClass: %[3]s
   bootstrap:
     initdb:
       database: mysuite
@@ -106,7 +107,7 @@ spec:
       postInitSQL:
         - CREATE DATABASE keycloak;
         - CREATE DATABASE nextcloud;
-`, pgClusterName, pgNamespace)
+`, pgClusterName, pgNamespace, storage.Classe())
 	if err := apply(ctx, manifest); err != nil {
 		return err
 	}
