@@ -261,6 +261,20 @@ spec:
       # THIS ServiceAccount IS THE ONE THE VAULT ROLE DESIGNATES, and it is the
       # one the agent presents to authenticate.
       serviceAccountName: stalwart
+      # fsGroup: THE OFFICIAL IMAGE RUNS AS UID 2000 (its Dockerfile declares
+      # useradd -u 2000 then USER stalwart), while a freshly provisioned
+      # Longhorn volume belongs to root:root. Without this line the container
+      # starts and dies immediately on:
+      #
+      #   Failed to open database: IO error: While open a file for appending:
+      #   /var/lib/stalwart/LOG: Permission denied
+      #
+      # fsGroup makes the kubelet chown the volume to this group before the
+      # container starts. It only applies when the driver declares
+      # ReadWriteOnceWithFSType — which Longhorn does, on an RWO ext4 volume
+      # exactly like this one. The same setting is already used for vault.
+      securityContext:
+        fsGroup: 2000
       containers:
       - name: stalwart
         image: %[3]s
