@@ -70,6 +70,46 @@ var paquetsPrerequis = []string{"open-iscsi", "nfs-common", "util-linux"}
 // the restart through the wrapper.
 var servicesPrerequis = []string{"iscsid", "open-iscsi", "multipathd"}
 
+// multipathBlacklist is the multipathd configuration Longhorn requires.
+//
+// WITHOUT IT, NO VOLUME EVER MOUNTS. multipathd claims every eligible block
+// device, including the ones Longhorn creates, and turns /dev/sdc into a
+// multipath device. mke2fs then refuses to format what it sees as already
+// taken:
+//
+//	MountVolume.MountDevice failed for volume "pvc-…":
+//	format of disk "/dev/longhorn/pvc-…" failed: type:("ext4")
+//	errcode:(exit status 1) output:(
+//	  mke2fs 1.47.2: /dev/longhorn/pvc-… is apparently in use by the
+//	  system; will not make a filesystem here!)
+//
+// The device is NOT in use — verified with `fuser -m`, which returned nothing.
+// The message is misleading, and the deployment fails at a mount error that
+// points nowhere near multipath.
+//
+// This is the fix documented by Longhorn itself
+// (longhorn.io/kb/troubleshooting-volume-with-multipath): blacklist the whole
+// sd* range. It is written here rather than left to the operator because the
+// alternative — discovering it after a FailedMount on a live deployment — cost
+// a full deployment cycle.
+const multipathBlacklist = `# Written by the Ceffio installer.
+#
+# multipathd must NOT claim the block devices Longhorn creates: it turns them
+# into multipath devices, and mke2fs then refuses to format them with
+# « apparently in use by the system » — a message that describes the symptom
+# and hides the cause.
+#
+# The blacklist covers the whole sd* range on purpose. Selectively excluding
+# only the Longhorn devices is not possible: they appear as ordinary /dev/sdX
+# before Longhorn attaches them, so there is nothing to match on yet.
+defaults {
+    user_friendly_names yes
+}
+blacklist {
+    devnode "^sd[a-z0-9]+"
+}
+`
+
 // Install prepares the host and installs Longhorn, then makes it the default
 // StorageClass. Idempotent: safe to re-run on a working cluster.
 //
@@ -119,6 +159,15 @@ func prerequisHote(ctx context.Context) error {
 		}
 	}
 
+	// THE MULTIPATH BLACKLIST GOES IN BEFORE multipathd IS RESTARTED, so the
+	// daemon reads it at startup rather than being restarted a second time.
+	//
+	// Idempotent by construction: the file is only written when its content
+	// differs, so a re-run neither touches the mtime nor restarts anything.
+	if err := ecrireBlacklistMultipath(ctx); err != nil {
+		return err
+	}
+
 	// THE PACKAGES ARE INSTALLED, THE SERVICES RUN — BUT THE NODE MAY STILL
 	// NOT SEE THE MODULES. A kernel that was never told to load iscsi_tcp
 	// leaves Longhorn unable to attach anything, with no error anywhere in the
@@ -131,6 +180,44 @@ func prerequisHote(ctx context.Context) error {
 	}
 
 	fmt.Println("✓ storage prerequisites in place (iSCSI + multipath)")
+	return nil
+}
+
+// ecrireBlacklistMultipath writes /etc/multipath.conf when it differs, then
+// restarts multipathd so the daemon reads it.
+//
+// THE RESTART IS CONDITIONAL, and that matters on a re-run: multipathd being
+// bounced while volumes are mounted drops their device mappings, and the
+// symptom — volumes that suddenly disappear from a running workload — is far
+// worse than the problem this file solves. The content is compared first; if
+// it already matches, nothing happens at all.
+func ecrireBlacklistMultipath(ctx context.Context) error {
+	const chemin = "/etc/multipath.conf"
+
+	actuel, _ := k8s.Command(ctx, "sudo", "-n", "cat", chemin).Output()
+	if strings.TrimSpace(string(actuel)) == strings.TrimSpace(multipathBlacklist) {
+		return nil // already in place, no restart needed
+	}
+
+	fmt.Println("∙ multipath blacklist (Longhorn volumes must not be claimed by multipathd)")
+
+	// Written through stdin rather than an argument: the content has quotes
+	// and newlines, and nesting it in a shell command would break on the
+	// first one. sudo -n tee is the standard shape for this.
+	cmd := k8s.Command(ctx, "sudo", "-n", "tee", chemin)
+	cmd.Stdin = strings.NewReader(multipathBlacklist)
+	cmd.Stdout = nil // tee copies stdin to stdout; we do not want it echoed
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("writing %s: %w", chemin, err)
+	}
+
+	// The daemon reads its configuration at startup, so a reload is not
+	// enough — `reload` re-reads the maps, not the blacklist.
+	if err := run(ctx, "sudo", "-n", "systemctl", "restart", "multipathd"); err != nil {
+		return fmt.Errorf("restarting multipathd after the blacklist: %w", err)
+	}
+	fmt.Println("  ✓ multipathd no longer claims sd* devices")
 	return nil
 }
 
@@ -269,27 +356,50 @@ func replicasPourLeCluster(ctx context.Context) int {
 // StorageClass whose parameter did not take looks identical in
 // `kubectl get sc`: same name, same provisioner, same `(default)` marker.
 //
+// IT RETRIES, AND THAT IS NOT DEFENSIVE PADDING. Measured: right after
+// `helm install` returns, the StorageClass may not exist yet — Longhorn's own
+// controller creates it asynchronously, and the first read failed with a bare
+//
+//	ceffio: reading numberOfReplicas from the longhorn StorageClass: exit status 1
+//
+// A few seconds later the same command returned `1`. Failing on that first
+// attempt stops a deployment that is doing nothing wrong, and the message
+// names a storage class problem where there is none.
+//
 // The class is NOT patched or recreated here. Its parameters are immutable —
-// verified: « parameters: … field is immutable » — and Longhorn's own
-// controller recreates it from its chart values the moment it is deleted. The
-// value has to arrive through helm; this function only checks that it did.
+// verified: « parameters: … field is immutable » — and Longhorn recreates it
+// from its chart values the moment it is deleted. The value has to arrive
+// through helm; this function only checks that it did.
 func verifierReplicasClasse(ctx context.Context) error {
 	voulu := strconv.Itoa(replicasPourLeCluster(ctx))
 
-	sortie, err := k8s.Command(ctx, "kubectl", "get", "storageclass", "longhorn",
-		"-o", "jsonpath={.parameters.numberOfReplicas}").Output()
-	if err != nil {
-		return fmt.Errorf("reading numberOfReplicas from the longhorn StorageClass: %w", err)
+	var obtenu string
+	for essai := 0; essai < 30; essai++ {
+		sortie, err := k8s.Command(ctx, "kubectl", "get", "storageclass", "longhorn",
+			"-o", "jsonpath={.parameters.numberOfReplicas}").Output()
+		if err == nil {
+			if v := strings.TrimSpace(string(sortie)); v != "" {
+				obtenu = v
+				break
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
 	}
-	obtenu := strings.TrimSpace(string(sortie))
 
+	if obtenu == "" {
+		return fmt.Errorf("the longhorn StorageClass did not appear within 60s after " +
+			"the helm install — check `kubectl get sc` and the longhorn-manager logs")
+	}
 	if obtenu != voulu {
 		return fmt.Errorf("the longhorn StorageClass requests %s replicas, expected %s "+
-			"for this %s-node cluster — volumes would come up degraded and their "+
-			"mount would fail on « apparently in use by the system ». "+
-			"The value comes from the chart's persistence.defaultClassReplicaCount, "+
-			"not from defaultSettings.defaultReplicaCount", obtenu, voulu,
-			map[bool]string{true: "single", false: "multi"}[voulu == "1"])
+			"for this cluster — volumes would come up degraded and their mount would "+
+			"fail on « apparently in use by the system ». The value comes from the "+
+			"chart's persistence.defaultClassReplicaCount, not from "+
+			"defaultSettings.defaultReplicaCount", obtenu, voulu)
 	}
 	fmt.Printf("  ✓ numberOfReplicas=%s on the longhorn StorageClass\n", obtenu)
 	return nil
