@@ -93,8 +93,8 @@ func deployPostgres(ctx context.Context) error {
 	manifest := fmt.Sprintf(`apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
-  name: %s
-  namespace: %s
+  name: %[1]s
+  namespace: %[2]s
 spec:
   instances: 1
   storage:
