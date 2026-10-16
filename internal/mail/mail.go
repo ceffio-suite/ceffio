@@ -37,6 +37,7 @@ import (
 
 	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
+	"github.com/ceffio-suite/ceffio/internal/storage"
 	"github.com/ceffio-suite/ceffio/internal/vault"
 )
 
@@ -207,7 +208,7 @@ metadata:
   namespace: %[1]s
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: local-path
+  storageClassName: %[4]s
   resources:
     requests:
       storage: 20Gi
@@ -348,7 +349,7 @@ spec:
           service:
             name: stalwart
             port: {number: 8080}
-`, ns, domaine, stalwartImage, annotations)
+`, ns, domaine, stalwartImage, annotations, storage.Classe())
 
 	return apply(ctx, manifest)
 }
