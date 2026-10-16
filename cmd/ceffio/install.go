@@ -409,6 +409,18 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 		return err
 	}
 
+	// 16. THE CLOSING SUMMARY.
+	//
+	// It runs LAST, because most of what it shows only exists now: the
+	// administration key was generated a moment ago, the certificate dates
+	// come from when Let's Encrypt answered, and the pod state is what
+	// actually came up. Printed anywhere else it would be a guess.
+	//
+	// It cannot fail the installation: the deployment succeeded, and turning a
+	// success into a failure over a summary line would be the worst possible
+	// trade. See the note in console.Synthese.
+	console.Synthese(ctx, o.domain)
+
 	// Videoconferencing was already deployed in the parallel batch above
 	// (Phase 10, with files ‖ chat). Do NOT replay it here: the duplicate call
 	// only reconfirmed what was done, paying a second time the
