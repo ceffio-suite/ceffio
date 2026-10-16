@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/ceffio-suite/ceffio/internal/apps"
@@ -133,6 +134,25 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 		mem = fmt.Sprintf("%d MB", hw.MemoryTotalMB)
 	}
 	fmt.Printf("Machine:    %s/%s · %d vCPU · RAM %s\n", hw.OS, hw.Arch, hw.CPUs, mem)
+
+	// 1bis. PREREQUISITES, CHECKED BEFORE ANYTHING IS INSTALLED.
+	//
+	// Two families, and they fail in opposite ways. The system packages can be
+	// fixed here; the DNS records cannot — they belong to a registrar, and no
+	// privilege on this machine will create them. Checking both together, and
+	// BEFORE touching the cluster, is the difference between a five-minute fix
+	// and an afternoon: on the first deployment to ceffio.org the DNS was
+	// missing, nothing said so, and the failure only surfaced forty minutes
+	// later as an OIDC discovery error that pointed at Keycloak.
+	//
+	// The DNS check does NOT stop the run. A record can be wrong in a way that
+	// does not prevent the cluster from being built, and an operator fixing
+	// DNS while watching a stopped installer has no reason to be stopped. The
+	// warning is printed, the deployment continues, and the failure — if it
+	// comes — arrives with the list already on screen.
+	if err := verifierPrerequis(ctx, o, hw); err != nil {
+		return err
+	}
 
 	// 2. Runtime resolution.
 	rt, err := resolveRuntime(o, hw.OS)
@@ -412,4 +432,97 @@ func resolveRuntime(o *installOptions, osName string) (cluster.Runtime, error) {
 	default:
 		return "", fmt.Errorf("unknown runtime %q", o.runtime)
 	}
+}
+
+// nomsAttendus lists every hostname this deployment will serve, derived from
+// the domain rather than hardcoded.
+//
+// THE LIST IS THE PRODUCT'S SURFACE. Each entry is a certificate cert-manager
+// will request and an Ingress Traefik will publish; a missing record means the
+// HTTP-01 challenge never completes for that host, and the symptom appears much
+// later, during the TLS phase, as a certificate that stays unissued.
+func nomsAttendus(domain string) []string {
+	// cloud, keycloak, office, spreed (signaling), bao (vault) — the five
+	// Ingresses of ingressManifest, plus admin (console) and mail (Stalwart),
+	// which are written by their own packages.
+	return []string{
+		"cloud." + domain,
+		"keycloak." + domain,
+		"office." + domain,
+		"spreed." + domain,
+		"bao." + domain,
+		"admin." + domain,
+		"mail." + domain,
+	}
+}
+
+// verifierPrerequis checks the DNS and the machine, and REPORTS WITHOUT
+// STOPPING.
+//
+// WHY IT DOES NOT ABORT ON A DNS PROBLEM: the records live at a registrar, the
+// operator may be fixing them right now, and stopping the installer would force
+// a full re-run — k3s provisioning included — for something that does not
+// prevent the cluster from being built. The check exists to put the information
+// on screen BEFORE the confusing error, not to gate the deployment.
+//
+// The one thing that does abort is the hardware minimum: below it the platform
+// does not run at all, and going further would produce a half-installed
+// machine.
+func verifierPrerequis(ctx context.Context, o *installOptions, hw bootstrap.Hardware) error {
+	fmt.Println("\nPrerequisites:")
+
+	// --- 1. Hardware -------------------------------------------------------
+	if manque := bootstrap.MinHardwareOK(hw); len(manque) > 0 {
+		return fmt.Errorf("hardware below the minimum (%s)", strings.Join(manque, ", "))
+	}
+	fmt.Printf("  ✓ hardware (%d vCPU, %d MB RAM)\n", hw.CPUs, hw.MemoryTotalMB)
+
+	// --- 2. DNS ------------------------------------------------------------
+	// A private domain (*.local) has no public record by design: the demo
+	// reaches its Ingresses through hostAliases, and asking for a record would
+	// make it impossible to run. We say so rather than reporting seven
+	// failures that are not failures.
+	public := !strings.HasSuffix(o.domain, ".local")
+
+	noms := nomsAttendus(o.domain)
+	resultats := bootstrap.Verifier(ctx, noms)
+
+	// The address to compare against: what the INTERNET sees, not what an
+	// interface reports. On a host behind NAT they differ, and the certificate
+	// is issued for the name — so the record must carry the public address.
+	attendue := bootstrap.AdressePublique(ctx)
+
+	problemes := bootstrap.Rapport(resultats, attendue, public)
+	switch {
+	case !public:
+		fmt.Println("  ∙ DNS: private domain, no public record expected")
+	case len(problemes) == 0:
+		fmt.Printf("  ✓ DNS (%d names → %s)\n", len(noms), attendue)
+	default:
+		// THE BLOCK IS DELIBERATELY LOUD AND COMPLETE. Reporting one name at a
+		// time would mean seven round trips to the registrar.
+		fmt.Printf("  ! DNS: %d problème(s) — à corriger chez le registrar avant le TLS\n", len(problemes))
+		for _, p := range problemes {
+			fmt.Printf("      · %s\n", p)
+		}
+		if attendue == "" {
+			fmt.Println("      (adresse publique illisible — comparer à la main)")
+		} else {
+			fmt.Printf("      attendu : %s\n", attendue)
+		}
+		fmt.Println("      le déploiement continue : les certificats de ces hôtes échoueront")
+	}
+
+	// --- 3. System packages ------------------------------------------------
+	// NOT INSTALLED HERE. This function only reports; the storage layer
+	// installs what is missing, a few seconds later, with the privileges it
+	// already uses. Two places installing packages would be two places to fix
+	// when one of them is wrong.
+	if manquants := storage.PaquetsAbsents(ctx); len(manquants) > 0 {
+		fmt.Printf("  ∙ packages manquants, installés à l'étape suivante: %s\n",
+			strings.Join(manquants, " "))
+	} else {
+		fmt.Println("  ✓ system packages")
+	}
+	return nil
 }

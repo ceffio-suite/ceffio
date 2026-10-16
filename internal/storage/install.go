@@ -133,10 +133,16 @@ func prerequisHote(ctx context.Context) error {
 	return nil
 }
 
-// paquetsAbsents returns the prerequisite packages that are NOT installed.
+// PaquetsAbsents returns the prerequisite packages that are NOT installed.
+//
+// EXPORTED SO THE PRE-FLIGHT CHECK CAN REPORT THEM without installing: the
+// install step runs a few seconds later, and duplicating the package list in
+// two packages would mean two places to update when it changes.
 //
 // dpkg-query rather than `dpkg -l`: the latter returns 0 for a package that is
 // known but removed, which is exactly the case we need to detect.
+func PaquetsAbsents(ctx context.Context) []string { return paquetsAbsents(ctx) }
+
 func paquetsAbsents(ctx context.Context) []string {
 	var manquants []string
 	for _, p := range paquetsPrerequis {
