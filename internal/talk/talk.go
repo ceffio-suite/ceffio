@@ -36,6 +36,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ceffio-suite/ceffio/internal/ingress"
 	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"github.com/ceffio-suite/ceffio/internal/k8sapi"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
@@ -474,7 +475,7 @@ spec:
   issuerRef:
     group: cert-manager.io
     kind: ClusterIssuer
-    name: ceffio-ca-issuer
+    name: %[10]s
   privateKey:
     algorithm: ECDSA
     size: 256
@@ -494,7 +495,7 @@ spec:
   - {name: turn, port: %[4]d, targetPort: %[4]d, protocol: UDP}
   - {name: turn-tcp, port: %[4]d, targetPort: %[4]d, protocol: TCP}
   - {name: turns, port: %[5]d, targetPort: %[5]d, protocol: TCP}
-`, ns, coturnImage, indentYaml(script, 10), portTurn, portTurnTLS, annCoturn, k8sapi.IPLocaleNoeud(ctx), domaineDe(ctx), domaineDe(ctx))
+`, ns, coturnImage, indentYaml(script, 10), portTurn, portTurnTLS, annCoturn, k8sapi.IPLocaleNoeud(ctx), domaineDe(ctx), domaineDe(ctx), ingress.PourDomaine(domaineDe(ctx)))
 	return appliquer(ctx, manifeste)
 }
 

@@ -16,18 +16,86 @@ import (
 	"fmt"
 	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
+)
+
+// The two issuers a certificate can come from. Named once, referenced
+// everywhere: a typo in an issuer name does not fail loudly — the Ingress is
+// created, no certificate is ever issued, and the browser shows the default
+// Traefik certificate, which looks like a TLS problem nobody can place.
+const (
+	// issuerACME: Let's Encrypt. Trusted by every browser out of the box.
+	issuerACME = "ceffio-letsencrypt"
+	// issuerCA: our own authority, created by caManifest. For private names,
+	// and as the fallback the operator can force.
+	issuerCA = "ceffio-ca-issuer"
 )
 
 // Deploy applies idempotently the CA + the Ingresses for the domain.
 // domain: base domain, e.g. "company.fr" → cloud.company.fr, chat.company.fr...
 func Deploy(ctx context.Context, domain string) error {
 	fmt.Printf("\nIngress / TLS (Phase 9) for domain=%s...\n", domain)
+
+	// The internal CA is created ALWAYS, even when Let's Encrypt signs the
+	// public hostnames: the components call each other on https://<host> and
+	// verify that authority (InjecterConfianceTLS below). It costs three small
+	// objects and it is what makes the internal calls work at all.
 	if err := apply(ctx, caManifest()); err != nil {
 		return err
 	}
+
+	// Let's Encrypt issuers: created ONLY for a public domain, and only when
+	// the operator gave an address.
+	//
+	// WITHOUT THE EMAIL, NO ISSUER: Let's Encrypt requires one at
+	// registration, and it is the only channel they use to warn about an
+	// expiring certificate or a suspended account. Inventing an address would
+	// send those warnings to somebody who does not exist — so we would rather
+	// not create the issuer and say so, than create one that silently drops
+	// them.
+	if issuerPour(domain) == issuerACME {
+		email := strings.TrimSpace(os.Getenv("CEFFIO_ACME_EMAIL"))
+		if email == "" {
+			// A hard stop, not a warning: continuing would install Ingress
+			// objects asking for certificates that can never be issued, and
+			// the deployment would look successful while every browser showed
+			// a certificate warning.
+			return fmt.Errorf("CEFFIO_ACME_EMAIL is required to obtain Let's Encrypt "+
+				"certificates for %s — set it to the address that should receive "+
+				"expiry warnings, or force the internal authority with "+
+				"CEFFIO_TLS_ISSUER=ca", domain)
+		}
+		if err := apply(ctx, acmeManifest(email)); err != nil {
+			return err
+		}
+		fmt.Printf("∙ Let's Encrypt issuers ready (HTTP-01, account %s)\n", email)
+	} else {
+		fmt.Println("∙ internal authority only (private domain, or CEFFIO_TLS_ISSUER=ca)")
+	}
+
+	// HTTPS redirection on port 80, with the ACME path exempted. Applied
+	// BEFORE the Ingresses so the middleware exists when they reference it —
+	// an Ingress pointing at a missing middleware is accepted by the API and
+	// then silently ignored by Traefik, which serves the route in clear.
+	// ONE MIDDLEWARE PER NAMESPACE, and this is not a detail.
+	//
+	// Traefik resolves "<namespace>-<name>@kubernetescrd", so the middleware
+	// must live in the SAME namespace as the Ingress that references it.
+	// Verified on the cluster both ways: referenced as
+	// "ceffio-system/ceffio-redirect-https" (slash) Traefik logs
+	// « middleware does not exist » and serves the route IN CLEAR, without
+	// failing the deployment — the worst possible outcome, since everything
+	// looks applied.
+	for _, ns := range []string{"ceffio-files", "ceffio-identity", "ceffio-office",
+		"ceffio-vault", "ceffio-video", "ceffio-system", "ceffio-mail"} {
+		if err := apply(ctx, redirectionManifest(ns)); err != nil {
+			return err
+		}
+	}
+
 	if err := apply(ctx, ingressesManifest(domain)); err != nil {
 		return err
 	}
@@ -635,12 +703,121 @@ func kcadmRedirect(ctx context.Context, clientID, uri string) error {
 	return err
 }
 
+// issuerPour decides WHERE a domain's certificates are signed.
+//
+// TWO KINDS OF DOMAIN, AND THE DIFFERENCE IS NOT COSMETIC:
+//
+//	A PUBLIC domain (example.com): Let's Encrypt signs it. The visitor's
+//	browser already trusts that authority, so nobody sees a warning. The
+//	ACME server validates over HTTP-01, which needs the domain to resolve
+//	here and port 80 to answer — both true by construction for a domain
+//	the operator just pointed at us.
+//
+//	A PRIVATE domain (*.local, *.test, or any name that does not resolve on
+//	the public Internet): our own CA. Let's Encrypt cannot validate a name
+//	it cannot reach, and an HTTP-01 challenge would simply never complete.
+//
+// THE OPERATOR CAN FORCE EITHER ONE with CEFFIO_TLS_ISSUER=letsencrypt or
+// CEFFIO_TLS_ISSUER=ca — for a public domain behind a VPN, or a private name
+// that has a real DNS record internally. Without the variable, the rule above
+// applies and the answer is right for the normal case.
+//
+// NEVER BOTH. cert-manager applies one issuer per Ingress, and asking for a
+// certificate we cannot obtain means no certificate at all: the Ingress would
+// serve the default self-signed Traefik certificate, which is worse than the
+// honest CA we control.
+// PourDomaine exposes the issuer choice to the other layers (console, talk).
+//
+// They build their Ingress and Certificate objects in their own package, so
+// they cannot call issuerPour. Without this export they would keep the CA
+// issuer hardcoded, and a public domain would end up with a mix: most hosts on
+// Let us Encrypt, the console and the signaling server on our CA — exactly the
+// inconsistency this change exists to remove.
+func PourDomaine(domain string) string { return issuerPour(domain) }
+
+func issuerPour(domain string) string {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("CEFFIO_TLS_ISSUER"))) {
+	case "letsencrypt", "le", "acme":
+		return issuerACME
+	case "ca", "selfsigned", "interne":
+		return issuerCA
+	}
+	if domainePublic(domain) {
+		return issuerACME
+	}
+	return issuerCA
+}
+
+// domainePublic: does this name resolve on the public Internet?
+//
+// A domain that ends in a reserved TLD or has no dot at all is private — that
+// is a name, not an address. `.local` is reserved by RFC 6762 (mDNS) and is
+// what the demo deployment uses; it can never be signed by a public authority.
+func domainePublic(domain string) bool {
+	d := strings.ToLower(strings.TrimSpace(domain))
+	if d == "" || !strings.Contains(d, ".") {
+		return false
+	}
+	for _, prive := range []string{".local", ".test", ".internal", ".invalid", ".example"} {
+		if strings.HasSuffix(d, prive) {
+			return false
+		}
+	}
+	// A bare IP address has no certificate to obtain over HTTP-01.
+	if net.ParseIP(d) != nil {
+		return false
+	}
+	return true
+}
+
 func apply(ctx context.Context, manifest string) error {
 	cmd := k8s.Command(ctx, "kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(manifest)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// acmeManifest: the Let's Encrypt ClusterIssuer, plus a STAGING twin.
+//
+// WHY STAGING EXISTS AND MUST STAY: Let's Encrypt limits production to 5
+// failures per account per hostname per hour, and 50 certificates per
+// registered domain per week. A deployment that is being debugged retries —
+// against production those retries lock the domain out for days, and the
+// operator has no way to ask for it back. The staging endpoint has the same
+// behaviour with no limit that matters, so a deployment in doubt can be run
+// against it and switched over once.
+//
+// The email is REQUIRED by Let's Encrypt: it is the only way they warn about
+// an expiring certificate or an account problem. It comes from the operator
+// (CEFFIO_ACME_EMAIL) with no default — inventing an address would send
+// expiry warnings to somebody who does not exist.
+func acmeManifest(email string) string {
+	bloc := func(nom, url string) string {
+		return fmt.Sprintf(`apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: %s
+spec:
+  acme:
+    server: %s
+    email: %s
+    privateKeySecretRef:
+      name: %s-account
+    solvers:
+    # HTTP-01 ONLY. The challenge is served by Traefik on port 80, which is
+    # already open for the Ingresses — no DNS credential to store, rotate or
+    # leak. DNS-01 would allow a wildcard, but it needs a provider token in
+    # the cluster, and a wildcard certificate is not needed to serve seven
+    # known hostnames.
+    - http01:
+        ingress:
+          class: traefik
+`, nom, url, email, nom)
+	}
+	return bloc("ceffio-letsencrypt", "https://acme-v02.api.letsencrypt.org/directory") +
+		"---\n" +
+		bloc("ceffio-letsencrypt-staging", "https://acme-staging-v02.api.letsencrypt.org/directory")
 }
 
 // caManifest: self-signed CA (bootstrap issuer → CA certificate → CA issuer)
@@ -686,7 +863,58 @@ type appRoute struct {
 	port                    int
 }
 
+// redirectionManifest: force HTTPS on port 80, WITHOUT breaking the ACME
+// challenge.
+//
+// THE PORT CANNOT SIMPLY BE CLOSED: HTTP-01 is how Let's Encrypt proves the
+// domain points here, and it reads the token over plain http on port 80.
+// Closing it means no certificate at renewal — and the failure shows up months
+// later, when nobody is watching.
+//
+// So the port stays open and serves TWO things:
+//
+//	/.well-known/acme-challenge/*  served as-is, in clear (it is a public
+//	                               token, not a secret)
+//	everything else                301 to https, permanent
+//
+// VERIFIED NECESSARY, not theoretical: Keycloak and ONLYOFFICE build their
+// redirects with the scheme they receive. Arriving over http, they answered
+// http://keycloak.<domain>/admin/ and http://office.<domain>/welcome/ — a
+// login page and a document server handed back to the browser in clear, right
+// after we had paid for real certificates.
+//
+// WHY A MIDDLEWARE AND NOT TRAEFIK'S entryPoint REDIRECTION: the entryPoint
+// setting cannot be excluded per Ingress, so it would also capture the
+// challenge path and break renewal. The middleware lets us exempt it.
+func redirectionManifest(ns string) string {
+	return fmt.Sprintf(`apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: ceffio-redirect-https
+  namespace: %s
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+`, ns)
+}
+
+// redirectionAnnotations returns the annotation forcing https on one Ingress.
+//
+// Applied to EVERY route, including the signaling server: its WebSocket
+// upgrade carries the session, and leaving one host reachable in clear would
+// mean the rule holds everywhere except the one place nobody remembers to
+// check.
+func redirectionAnnotations(ns string) string {
+	return "    traefik.ingress.kubernetes.io/router.middlewares: " +
+		ns + "-ceffio-redirect-https@kubernetescrd\n"
+}
+
 func ingressesManifest(domain string) string {
+	// One decision for the whole set: every host of a domain is signed by the
+	// same authority. Mixing them would mean some names show a browser warning
+	// and others do not, with no rule the operator could state.
+	issuer := issuerPour(domain)
 	routes := []appRoute{
 		{sub: "cloud", namespace: "ceffio-files", service: "nextcloud", port: 80},
 		{sub: "keycloak", namespace: "ceffio-identity", service: "keycloak", port: 8080},
@@ -726,7 +954,8 @@ metadata:
   name: %[1]s
   namespace: %[2]s
   annotations:
-    cert-manager.io/cluster-issuer: ceffio-ca-issuer
+    cert-manager.io/cluster-issuer: %[7]s
+    traefik.ingress.kubernetes.io/router.middlewares: %[2]s-ceffio-redirect-https@kubernetescrd
 %[5]s
 spec:
   ingressClassName: traefik
@@ -744,7 +973,7 @@ spec:
                 name: %[4]s
                 port:
                   number: %[6]d
-`, r.sub, r.namespace, host, r.service, ann, r.port)
+`, r.sub, r.namespace, host, r.service, ann, r.port, issuer)
 	}
 	return sb.String()
 }
