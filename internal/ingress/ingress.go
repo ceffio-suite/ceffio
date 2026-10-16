@@ -54,6 +54,20 @@ func Deploy(ctx context.Context, domain string) error {
 		return err
 	}
 
+	// TLS TRUST FOR THE INTERNAL AUTHORITY, ALSO BEFORE THE OIDC BLOCKS.
+	//
+	// Moved here with adoptKeycloakHost, for the same reason: what runs after
+	// this point talks to https://keycloak.<domain>, and a component that does
+	// not trust our authority fails at the handshake. Stalwart is the clearest
+	// case — curl without -k exits 60 with no output, and the deployment then
+	// reports a discovery problem, which reads like a Keycloak fault.
+	//
+	// The applications are already running when Deploy is called, so patching
+	// their trust store here works.
+	if err := InjecterConfianceTLS(ctx, domain, isDemo(domain)); err != nil {
+		return err
+	}
+
 	fmt.Println("✓ Ingress / TLS configured (Traefik + ClusterIssuer CA + hosts *." + domain + ")")
 	return nil
 }
