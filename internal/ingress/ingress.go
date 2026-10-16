@@ -76,6 +76,26 @@ func Deploy(ctx context.Context, domain string) error {
 		fmt.Println("∙ internal authority only (private domain, or CEFFIO_TLS_ISSUER=ca)")
 	}
 
+	// HTTPS redirection on port 80, with the ACME path exempted. Applied
+	// BEFORE the Ingresses so the middleware exists when they reference it —
+	// an Ingress pointing at a missing middleware is accepted by the API and
+	// then silently ignored by Traefik, which serves the route in clear.
+	// ONE MIDDLEWARE PER NAMESPACE, and this is not a detail.
+	//
+	// Traefik resolves "<namespace>-<name>@kubernetescrd", so the middleware
+	// must live in the SAME namespace as the Ingress that references it.
+	// Verified on the cluster both ways: referenced as
+	// "ceffio-system/ceffio-redirect-https" (slash) Traefik logs
+	// « middleware does not exist » and serves the route IN CLEAR, without
+	// failing the deployment — the worst possible outcome, since everything
+	// looks applied.
+	for _, ns := range []string{"ceffio-files", "ceffio-identity", "ceffio-office",
+		"ceffio-vault", "ceffio-video", "ceffio-system", "ceffio-mail"} {
+		if err := apply(ctx, redirectionManifest(ns)); err != nil {
+			return err
+		}
+	}
+
 	if err := apply(ctx, ingressesManifest(domain)); err != nil {
 		return err
 	}
@@ -843,6 +863,53 @@ type appRoute struct {
 	port                    int
 }
 
+// redirectionManifest: force HTTPS on port 80, WITHOUT breaking the ACME
+// challenge.
+//
+// THE PORT CANNOT SIMPLY BE CLOSED: HTTP-01 is how Let's Encrypt proves the
+// domain points here, and it reads the token over plain http on port 80.
+// Closing it means no certificate at renewal — and the failure shows up months
+// later, when nobody is watching.
+//
+// So the port stays open and serves TWO things:
+//
+//	/.well-known/acme-challenge/*  served as-is, in clear (it is a public
+//	                               token, not a secret)
+//	everything else                301 to https, permanent
+//
+// VERIFIED NECESSARY, not theoretical: Keycloak and ONLYOFFICE build their
+// redirects with the scheme they receive. Arriving over http, they answered
+// http://keycloak.<domain>/admin/ and http://office.<domain>/welcome/ — a
+// login page and a document server handed back to the browser in clear, right
+// after we had paid for real certificates.
+//
+// WHY A MIDDLEWARE AND NOT TRAEFIK'S entryPoint REDIRECTION: the entryPoint
+// setting cannot be excluded per Ingress, so it would also capture the
+// challenge path and break renewal. The middleware lets us exempt it.
+func redirectionManifest(ns string) string {
+	return fmt.Sprintf(`apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: ceffio-redirect-https
+  namespace: %s
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+`, ns)
+}
+
+// redirectionAnnotations returns the annotation forcing https on one Ingress.
+//
+// Applied to EVERY route, including the signaling server: its WebSocket
+// upgrade carries the session, and leaving one host reachable in clear would
+// mean the rule holds everywhere except the one place nobody remembers to
+// check.
+func redirectionAnnotations(ns string) string {
+	return "    traefik.ingress.kubernetes.io/router.middlewares: " +
+		ns + "-ceffio-redirect-https@kubernetescrd\n"
+}
+
 func ingressesManifest(domain string) string {
 	// One decision for the whole set: every host of a domain is signed by the
 	// same authority. Mixing them would mean some names show a browser warning
@@ -888,6 +955,7 @@ metadata:
   namespace: %[2]s
   annotations:
     cert-manager.io/cluster-issuer: %[7]s
+    traefik.ingress.kubernetes.io/router.middlewares: %[2]s-ceffio-redirect-https@kubernetescrd
 %[5]s
 spec:
   ingressClassName: traefik

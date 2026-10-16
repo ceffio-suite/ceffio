@@ -624,6 +624,7 @@ metadata:
   namespace: ` + deployNS + `
   annotations:
     cert-manager.io/cluster-issuer: ` + ingress.PourDomaine(domain) + `
+    traefik.ingress.kubernetes.io/router.middlewares: ceffio-system-ceffio-redirect-https@kubernetescrd
 spec:
   ingressClassName: traefik
   tls:
