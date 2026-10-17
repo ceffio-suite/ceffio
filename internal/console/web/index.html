@@ -171,9 +171,9 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9S14.5 18.5 12 21c-2.5-2.5-3.5-5.5-3.5-9S9.5 5.5 12 3z"/></svg>
       Applications
     </div>
-    <div class="nav-item" data-tab="exapps">
+    <div class="nav-item" data-tab="modules">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
-      Applications
+      Modules
     </div>
     <div class="nav-item" data-tab="admin">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 4 6v6c0 5 3.4 9.2 8 10 4.6-.8 8-5 8-10V6l-8-4z"/><path d="M12 11v4M12 8.5v.5"/></svg>
@@ -268,71 +268,14 @@
         </table>
       </section>
 
-      <!-- EXAPPS -->
-      <section class="section" id="tab-exapps">
-        <div class="card">
-          <h3>Transcription in Talk</h3>
-          <p class="section-sub" style="margin-top:0">
-            Two steps, in order. Nextcloud cannot start a containerised feature
-            on its own — it needs a deployer first, then the application itself
-            can be installed.
-          </p>
-
-          <!-- Step 1: the deployer. Everything else depends on it. -->
-          <div style="margin-top:18px">
-            <div class="t-name" style="font-size:14px;font-weight:600">
-              <span class="etape">1</span> Deployer
-            </div>
-            <p class="section-sub" style="margin:6px 0 0 26px">
-              HaRP runs the containers Nextcloud asks for, speaking the
-              Kubernetes API directly. Nothing below can be installed without
-              it.
-            </p>
-            <div id="exappsEtat" style="margin:12px 0 12px 26px"></div>
-            <div class="form-row" style="margin-left:26px">
-              <button class="btn" id="btnExappsInstall" onclick="exappsAction('install')">
-                Deploy the deployer
-              </button>
-              <button class="btn ghost" id="btnExappsRemove" onclick="exappsAction('uninstall')">
-                Remove
-              </button>
-            </div>
-          </div>
-
-          <hr style="margin:22px 0;border:none;border-top:1px solid rgba(128,128,128,.25)">
-
-          <!-- Step 2: the application. Its button stays disabled until step 1
-               is done, and says why rather than just being greyed out. -->
-          <div>
-            <div class="t-name" style="font-size:14px;font-weight:600">
-              <span class="etape">2</span> Live transcription
-            </div>
-            <p class="section-sub" style="margin:6px 0 0 26px">
-              Transcribes speech live during a call, on this server, with open
-              source speech models. Nothing is sent to a third party.
-            </p>
-            <p class="section-sub" style="margin-left:26px">
-              <b>This is a heavy optional component.</b> It downloads about
-              9 GB (container and speech models) and needs around 16 GB of RAM
-              for one or two simultaneous calls. Its settings cannot be changed
-              once installed — the app has to be removed and installed again.
-            </p>
-            <div id="transcriptionEtat" style="margin:12px 0 12px 26px"></div>
-            <div id="transcriptionBlocage" style="margin-left:26px"></div>
-            <div class="form-row" style="margin-left:26px">
-              <button class="btn" id="btnTranscriptionInstall" onclick="transcriptionAction('install')">
-                Install live transcription
-              </button>
-              <button class="btn ghost" id="btnTranscriptionRemove" onclick="transcriptionAction('uninstall')">
-                Uninstall completely
-              </button>
-            </div>
-            <p class="section-sub" style="margin:12px 0 0 26px">
-              Uninstalling removes the app, its workload, its service and its
-              volume — including the downloaded models.
-            </p>
-          </div>
-        </div>
+      <!-- MODULES -->
+      <section class="section" id="tab-modules">
+        <h2 class="section-title">Optional modules</h2>
+        <p class="section-sub">Every optional module of the registry, generated from
+        <span class="mono">/api/modules</span>: state, resources, and the install or
+        uninstall action. While an operation runs, this page re-reads the state
+        every 3 seconds and shows the operation journal.</p>
+        <div class="grid-services" id="modulesGrid"></div>
       </section>
 
       <!-- ADMINISTRATION -->
@@ -496,7 +439,7 @@
     users:     ['Users', 'single sign-on accounts'],
     certs:     ['TLS certificates', 'validity and expiry'],
     infra:     ['Infrastructure', 'internal layers and pods'],
-    exapps:    ['Applications', 'deployer, then transcription'],
+    modules:   ['Optional modules', 'generated from the registry'],
   };
 
   document.querySelectorAll('.nav-item').forEach(el => el.onclick = () => {
@@ -507,12 +450,9 @@
     $('tab-' + tab).classList.add('active');
     $('pageTitle').textContent = TITLES[tab][0];
     $('crumb').textContent = TITLES[tab][1];
-    // Load on open: the state is read from AppAPI, which is the only place
-    // that knows what is actually installed.
-    // One panel, two states: the deployer and the application. Both are
-    // re-read together, so the second button's enabled state always
-    // reflects the first one's outcome.
-    if (tab === 'exapps') { renderExapps(); renderTranscription(); }
+    // Load on open: the state comes from the registry walk behind
+    // /api/modules — the only place that knows what is installed.
+    if (tab === 'modules') { loadModules(); }
   });
 
   setInterval(() => { $('clock').textContent = new Date().toLocaleTimeString('en-GB'); }, 1000);
@@ -864,172 +804,178 @@
 
 
 
+  // ── Optional modules, generated from the registry ────────────────────────
+  //
+  // ONE page for every optional module: /api/modules carries Info (title,
+  // description, resources, warning), the observed state and the blocking
+  // reason, so the cards are generated instead of hand-written per feature.
+  // Adding a module to the registry adds its card here with no code change.
+  //
+  // Actions are ASYNCHRONOUS server-side (202 + journal): while one runs,
+  // this view re-reads every 3 s and shows the journal — the old
+  // synchronous call was cut by the ingress proxy on the minutes-long
+  // transcription install, leaving the operator with no answer.
+  let modulesData = [];
+  let modulePoll = null;          // setInterval handle, active only while an operation runs
+  let moduleAwaiting = null;      // {id, action} of the inline confirmation currently open
+
+  function moduleStatusBadge(st) {
+    switch (st.status) {
+      case 'installed':  return '<span class="badge ok"><span class="bdot"></span>installed</span>';
+      case 'absent':     return '<span class="badge mut"><span class="bdot"></span>not installed</span>';
+      case 'installing': return '<span class="badge info"><span class="bdot"></span>installing…</span>';
+      case 'removing':   return '<span class="badge warn"><span class="bdot"></span>removing…</span>';
+      case 'degraded':   return '<span class="badge ko"><span class="bdot"></span>degraded</span>';
+      default:           return '<span class="badge warn"><span class="bdot"></span>state unknown</span>';
+    }
+  }
+
+  function moduleCard(m) {
+    const st = m.state || {};
+    const busy = (st.status === 'installing' || st.status === 'removing');
+    const installed = (st.status === 'installed');
+    // The blocking reason comes from the SERVER (module.Blocked): the page
+    // shows why the button is disabled rather than recomputing dependencies.
+    const blocked = busy ? 'an operation is already in progress' : (m.blocked || '');
+    const actionBlocked = !!blocked;
+
+    const awaiting = moduleAwaiting && moduleAwaiting.id === m.id;
+    const pendingAction = awaiting ? moduleAwaiting.action : null;
+
+    // Inline confirmation (NOT the browser confirm()): the Warning text is
+    // long and matters — "settings cannot be changed once installed" — and a
+    // native dialog would cut it from the card context.
+    const confirmBox = (awaiting && m.warning) ? `
+      <div class="note" style="margin-top:10px;border-color:rgba(251,191,36,.4)">
+        <b>Before ${pendingAction === 'install' ? 'installing' : 'uninstalling'}:</b> ${esc(m.warning)}
+        <div class="form-row" style="margin-top:8px">
+          <button class="btn" onclick="moduleConfirmYes('${esc(m.id)}')">Confirm ${esc(pendingAction)}</button>
+          <button class="btn-ghost" onclick="moduleConfirmNo()">Cancel</button>
+        </div>
+      </div>` : '';
+
+    const buttons = `
+      <div class="form-row" style="margin-top:auto">
+        ${installed
+          ? `<button class="btn-danger" ${actionBlocked ? 'disabled title="' + esc(blocked) + '"' : ''}
+               onclick="moduleAction('${esc(m.id)}','uninstall')">Uninstall</button>`
+          : `<button class="btn" ${actionBlocked ? 'disabled title="' + esc(blocked) + '"' : ''}
+               onclick="moduleAction('${esc(m.id)}','install')">Install</button>`}
+        ${busy ? '<span class="muted">operation in progress — refreshed every 3 s</span>' : ''}
+      </div>
+      ${blocked && !busy ? `<div class="muted" style="font-size:11.5px;margin-top:4px">${esc(blocked)}</div>` : ''}`;
+
+    return `<div class="svc">
+      <div class="head">
+        <span class="dot ${st.status === 'installed' ? 'ok' : st.status === 'degraded' ? 'ko' : 'unknown'}"></span>
+        <b>${esc(m.title)}</b>
+        <span class="spacer"></span>
+        ${moduleStatusBadge(st)}
+      </div>
+      <div class="role">${esc(m.description || '')}</div>
+      <div class="meta">
+        <span class="mono" style="font-size:11px;color:var(--faint)">${esc(m.id)}</span>
+        ${m.resources ? `<span class="badge warn">${esc(m.resources)}</span>` : ''}
+        ${m.default ? '<span class="badge info">installed by default</span>' : ''}
+      </div>
+      ${st.detail ? `<div class="muted" style="font-size:12px">${esc(st.detail)}</div>` : ''}
+      ${m.warning && !awaiting ? `<div class="muted" style="font-size:11.5px">⚠ ${esc(m.warning)}</div>` : ''}
+      ${confirmBox}
+      <div id="modJournal-${esc(m.id)}"></div>
+      ${buttons}
+    </div>`;
+  }
+
+  function renderModules() {
+    const opt = modulesData.filter(m => m.kind === 'optional');
+    $('modulesGrid').innerHTML = opt.length
+      ? opt.map(moduleCard).join('')
+      : '<div class="empty">No optional module in the registry.</div>';
+  }
+
+  async function loadModules(showJournal) {
+    try {
+      const d = await api('/api/modules');
+      modulesData = d.modules || [];
+      renderModules();
+      // Poll every 3 s WHILE an operation runs, and stop when none does:
+      // a permanent poll would re-run the exec-based state reads (occ in the
+      // Nextcloud pod) for nothing.
+      const busy = modulesData.some(m => m.state && (m.state.status === 'installing' || m.state.status === 'removing'));
+      if (busy && !modulePoll) {
+        modulePoll = setInterval(() => loadModules(true), 3000);
+      } else if (!busy && modulePoll) {
+        clearInterval(modulePoll);
+        modulePoll = null;
+      }
+      if (showJournal) {
+        for (const m of modulesData) {
+          if (m.state && (m.state.status === 'installing' || m.state.status === 'removing')) {
+            renderModuleJournal(m.id);
+          }
+        }
+      }
+    } catch (e) {
+      if (e.message !== 'auth') {
+        $('modulesGrid').innerHTML = `<div class="empty">Error: ${esc(e.message)}</div>`;
+      }
+    }
+  }
+
+  async function renderModuleJournal(id) {
+    const zone = $('modJournal-' + id);
+    if (!zone) return;
+    try {
+      const d = await api('/api/modules/' + id);
+      const op = d.operation;
+      if (!op || !op.journal || !op.journal.length) return;
+      zone.innerHTML = `<pre class="mono" style="max-height:160px;overflow:auto;font-size:11px;background:var(--bg2);padding:10px;border-radius:8px;white-space:pre-wrap;margin:8px 0 0">${esc(op.journal.join('\n'))}</pre>`;
+    } catch (e) { /* the card keeps working without the journal */ }
+  }
+
+  // moduleAction starts an action; when the module carries a Warning, an
+  // INLINE confirmation is shown first (never the browser confirm()).
+  window.moduleAction = (id, action) => {
+    const m = modulesData.find(x => x.id === id);
+    if (!m) return;
+    if (m.warning) {
+      moduleAwaiting = { id, action };
+      renderModules();
+      return;
+    }
+    moduleStart(id, action);
+  };
+
+  window.moduleConfirmYes = (id) => {
+    const pending = moduleAwaiting;
+    moduleAwaiting = null;
+    if (!pending || pending.id !== id) { renderModules(); return; }
+    moduleStart(id, pending.action);
+  };
+
+  window.moduleConfirmNo = () => {
+    moduleAwaiting = null;
+    renderModules();
+  };
+
+  async function moduleStart(id, action) {
+    try {
+      // 202: the server accepted the operation; the truth now comes from
+      // the 3 s poll, not from this response.
+      await api('/api/modules/' + id, { method: 'POST', body: JSON.stringify({ action }) });
+      toast(action === 'install' ? 'Installation started' : 'Uninstallation started');
+      await loadModules(true);
+    } catch (e) {
+      toast(e.message, 'ko');
+      await loadModules();
+    }
+  }
+
   // ── Mail (platform SMTP) ─────────────────────────────────
   //
   // THE TEST BEFORE SAVE is the important point: we test what is ENTERED, not
   // what is saved. The user adjusts, tests, then saves only when the test
   // passes — instead of discovering the error afterwards.
-
-  // ── live transcription ──
-  //
-  // Reads the state from AppAPI, never from a local guess. Installing and
-  // removing are explicit actions: the component is heavy and its settings are
-  // not revisable in place, so neither happens as a side effect of something
-  // else.
-  // ── external applications deployer (HaRP) ──
-  //
-  // This is INFRASTRUCTURE, not a feature: without it Nextcloud cannot install
-  // any external application. It is shown separately for that reason, and the
-  // install button of the transcription app stays disabled until it is in
-  // place.
-  async function renderExapps() {
-    const zone = $('exappsEtat');
-    zone.innerHTML = '<span class="badge mut">reading state…</span>';
-    try {
-      const d = await api('/api/exapps');
-      let pastille;
-      if (d.state === 'running') pastille = '<span class="badge ok">deployed</span>';
-      else if (d.state === 'absent') pastille = '<span class="badge mut">not deployed</span>';
-      else if (d.state === 'degraded') pastille = '<span class="badge warn">incomplete</span>';
-      else pastille = '<span class="badge warn">state unknown</span>';
-
-      zone.innerHTML = `
-        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-          ${pastille}
-          <span class="muted" style="font-size:12px">
-            ${d.registered ? 'registered in Nextcloud' : 'not registered in Nextcloud'}
-          </span>
-        </div>
-        ${d.detail ? `<div class="note" style="margin-top:10px">${esc(d.detail)}</div>` : ''}`;
-
-      $('btnExappsInstall').disabled = (d.state === 'running');
-      $('btnExappsRemove').disabled = (d.state === 'absent');
-    } catch (e) {
-      zone.innerHTML = `<span class="badge warn">cannot read state</span>
-        <div class="note" style="margin-top:10px">${esc(e.message)}</div>`;
-    }
-  }
-
-  async function exappsAction(action) {
-    const installe = action === 'install';
-    const message = installe
-      ? 'Install the external applications deployer? It enables Nextcloud to run containerised features.'
-      : 'Remove the deployer? The applications it deployed and their volumes will also be removed.';
-    if (!confirm(message)) return;
-
-    const bouton = installe ? $('btnExappsInstall') : $('btnExappsRemove');
-    const libelle = bouton.textContent;
-    bouton.disabled = true;
-    bouton.textContent = installe ? 'Installing…' : 'Removing…';
-
-    try {
-      await api('/api/exapps', { method: 'POST', body: JSON.stringify({ action }) });
-      toast(installe ? 'Deployer installed' : 'Deployer removed');
-    } catch (e) {
-      toast(e.message, 'warn');
-    } finally {
-      bouton.textContent = libelle;
-      // Re-read BOTH states: this panel holds the deployer and the application,
-      // and deploying the deployer is what unlocks the application's button.
-      // Refreshing only the deployer would leave the second button greyed out
-      // until the user switched tabs and came back — the dependency would look
-      // unsatisfied for no reason.
-      await renderExapps();
-      await renderTranscription();
-    }
-  }
-
-  async function renderTranscription() {
-    const zone = $('transcriptionEtat');
-    zone.innerHTML = '<span class="badge mut">reading state…</span>';
-    try {
-      const d = await api('/api/transcription');
-      let pastille;
-      if (d.state === 'installed') pastille = '<span class="badge ok">installed</span>';
-      else if (d.state === 'absent') pastille = '<span class="badge mut">not installed</span>';
-      else pastille = '<span class="badge warn">state unknown</span>';
-
-      zone.innerHTML = `
-        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-          ${pastille}
-          <span class="muted" style="font-size:12px">${esc(d.weightNote || '')}</span>
-        </div>
-        ${d.detail ? `<div class="note" style="margin-top:10px">${esc(d.detail)}</div>` : ''}`;
-
-      // The install button needs TWO conditions, not one: the app must not
-      // already be installed, AND the deployer must be in place. Without the
-      // second, the button would launch an operation that can only fail —
-      // an external application cannot deploy itself, HaRP deploys it.
-      //
-      // The dependency is shown rather than merely enforced: a disabled button
-      // with no explanation is the same dead end as an install that fails.
-      const bloque = !d.readyToInstall && d.state !== 'installed';
-      $('btnTranscriptionInstall').disabled = (d.state === 'installed') || bloque;
-      $('btnTranscriptionRemove').disabled = (d.state !== 'installed');
-
-      const zoneBlocage = $('transcriptionBlocage');
-      if (zoneBlocage) {
-        zoneBlocage.innerHTML = bloque
-          ? `<div class="note" style="margin-top:10px">
-               <b>Deploy the deployer first.</b> ${esc(d.blockedReason || '')}
-               <div style="margin-top:8px">
-                 <button class="btn-ghost" onclick="exappsAction('install')">
-                   Deploy it now
-                 </button>
-               </div>
-             </div>`
-          : '';
-      }
-    } catch (e) {
-      zone.innerHTML = `<span class="badge warn">cannot read state</span>
-        <div class="note" style="margin-top:10px">${esc(e.message)}</div>`;
-    }
-  }
-
-  async function transcriptionAction(action) {
-    const installe = action === 'install';
-    const message = installe
-      ? 'Install live transcription? About 9 GB will be downloaded and it needs around 16 GB of RAM.'
-      : 'Uninstall live transcription completely? The app, its workload and its downloaded models will be removed.';
-    if (!confirm(message)) return;
-
-    const bouton = installe ? $('btnTranscriptionInstall') : $('btnTranscriptionRemove');
-    const libelle = bouton.textContent;
-    bouton.disabled = true;
-    bouton.textContent = installe ? 'Installing…' : 'Removing…';
-
-    try {
-      // The operation is long: the image is pulled and the ExApp started, which
-      // is why the call waits server-side. The toast only appears once the real
-      // state has been re-read.
-      const d = await api('/api/transcription', {
-        method: 'POST',
-        body: JSON.stringify({ action })
-      });
-      toast(installe ? 'Live transcription installed' : 'Live transcription removed');
-      afficherEtatTranscription(d);
-    } catch (e) {
-      toast(e.message, 'warn');
-    } finally {
-      bouton.textContent = libelle;
-      // Re-read from the server rather than restoring the previous state: if the
-      // action failed, the truth is on the server side.
-      await renderTranscription();
-    }
-  }
-
-  function afficherEtatTranscription(d) {
-    const zone = $('transcriptionEtat');
-    if (!zone) return;
-    const pastille = d.state === 'installed'
-      ? '<span class="badge ok">installed</span>'
-      : '<span class="badge mut">not installed</span>';
-    zone.innerHTML = `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-        ${pastille}
-        <span class="muted" style="font-size:12px">${esc(d.weightNote || '')}</span>
-      </div>`;
-  }
-
   async function chargerSmtp() {
     try {
       const d = await api('/api/smtp');
@@ -1142,25 +1088,14 @@
 
   majBoutonSmtp();
 
-  // THE TWO FUNCTIONS THE BUTTONS CALL MUST BE ON `window`.
+  // THE FUNCTIONS THE GENERATED CARDS CALL MUST BE ON `window`.
   //
   // The whole page lives inside an IIFE, so a `function` declaration is local
   // to it and an `onclick="..."` attribute — which runs in the GLOBAL scope —
   // cannot see it. The click does nothing at all: no error, no request, no
-  // message. Measured in the browser:
-  //
-  //   typeof window.transcriptionAction  → "undefined"
-  //   the button: enabled, visible, onclick="transcriptionAction('install')"
-  //
-  // Thirteen other handlers were already exposed this way; these two were
-  // missed. The page's own "Deploy it now" button was dead for the same
-  // reason, which is how a broken button hides a second one.
-  //
-  // Note for the next handler added here: the failure is SILENT. A button that
-  // throws would have been noticed in a minute; one that does nothing looks
-  // like a slow server or a permissions problem.
-  window.transcriptionAction = transcriptionAction;
-  window.exappsAction = exappsAction;
+  // message. web_test.go checks this mechanically for every onclick in the
+  // page; moduleAction/moduleConfirmYes/moduleConfirmNo are assigned to
+  // window where they are defined above.
 
   window.refresh = async () => {
     if (!key) { openKeyModal(); return; }

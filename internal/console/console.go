@@ -47,12 +47,16 @@ type Server struct {
 	ncUser string
 	ncPass string
 	kcBase string // Keycloak API base URL (resolved Service ClusterIP)
+
+	// ops tracks the asynchronous module operations (one at a time per
+	// module, with the in-memory journal). See module_ops.go.
+	ops *opsManager
 }
 
 // New creates the console server: in-cluster K8s client (or out-of-cluster
 // kubeconfig), and Keycloak admin access read from the keycloak-admin secret.
 func New(domain, apiKey string) (*Server, error) {
-	s := &Server{Domain: domain, APIKey: apiKey}
+	s := &Server{Domain: domain, APIKey: apiKey, ops: newOpsManager()}
 	// Kubernetes client: in-cluster if possible, otherwise the default kubeconfig.
 	if cfg, err := rest.InClusterConfig(); err == nil {
 		cs, err := kubernetes.NewForConfig(cfg)
@@ -110,14 +114,19 @@ func (s *Server) Handler() http.Handler {
 	// Single administration account: identifier, password rotation.
 	// A single account administers Nextcloud, Stalwart and this console — it lives
 	// in Keycloak, so rotation is applied there and propagates everywhere.
-	// Live transcription: heavy and not revisable in place, so installing and
-	// removing it are explicit actions, not part of the initial deployment.
-	mux.HandleFunc("/api/transcription", s.requireAuth(s.handleTranscription))
-	// The deploy daemon (HaRP) and the transcription app are SEPARATE things:
-	// one is infrastructure, the other a usage that depends on it. Each gets
-	// its own state and actions, so the interface can say which one is missing
-	// instead of leaving an installed-but-inactive app unexplained.
-	mux.HandleFunc("/api/exapps", s.requireAuth(s.handleExapps))
+	// Generic module endpoints: ONE API for every registry module, replacing
+	// the hand-written HaRP and transcription handlers. Install/uninstall run
+	// asynchronously (202 + in-memory journal) — see module_ops.go for the
+	// measured reason (a live-transcription install takes several minutes).
+	mux.HandleFunc("GET /api/modules", s.requireAuth(s.handleModulesList))
+	mux.HandleFunc("GET /api/modules/{id}", s.requireAuth(s.handleModuleDetail))
+	mux.HandleFunc("POST /api/modules/{id}", s.requireAuth(s.handleModuleAction))
+	// Deprecated aliases kept for cached pages and pre-existing scripts:
+	// they delegate to the registry modules (live-transcription,
+	// exapps-daemon) instead of carrying their own logic.
+	// Deprecated: remove after v0.7.
+	mux.HandleFunc("/api/transcription", s.requireAuth(s.handleTranscriptionAlias))
+	mux.HandleFunc("/api/exapps", s.requireAuth(s.handleExappsAlias))
 	mux.HandleFunc("/api/admin", s.requireAuth(s.handleAdmin))
 	mux.HandleFunc("/api/admin/rotate", s.requireAuth(s.handleAdminRotate))
 	// NO /api/apps routes: application management happens in the INTERFACE OF
