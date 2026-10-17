@@ -4,6 +4,7 @@
 package console
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -233,7 +234,49 @@ func (s *Server) createUser(r *http.Request, username, email, password string) (
 			return id, err
 		}
 	}
+
+	// LE COMPTE EXISTE AUSSI DANS NEXTCLOUD, sinon il ne peut pas se connecter.
+	//
+	// Cette fonction ne créait l'utilisateur QUE dans Keycloak. L'opérateur
+	// voyait son compte dans la page Users, le SSO l'authentifiait — puis
+	// Nextcloud refusait, parce qu'il n'avait aucun compte local correspondant.
+	//
+	// Le chemin de secours est le même raisonnement que pour l'administrateur :
+	// le SSO est la porte principale, le compte local permet d'entrer quand
+	// Keycloak est indisponible. Un compte qui n'existe que côté annuaire
+	// dépend entièrement de la disponibilité de l'annuaire.
+	//
+	// NON BLOQUANT, ET RAPPORTÉ : le compte Keycloak est déjà créé à ce
+	// stade, et une erreur côté Nextcloud ne doit pas faire croire à un échec
+	// total — la console peut réessayer.
+	if err := s.creerCompteNextcloud(r.Context(), username, password); err != nil {
+		fmt.Printf("  ⚠ %s created in Keycloak but not in Nextcloud: %v\n", username, err)
+	}
+
 	return id, nil
+}
+
+// creerCompteNextcloud creates the local account, so it can sign in directly
+// when Keycloak is unavailable.
+//
+// L'IDENTIFIANT EST LE MÊME QUE DANS KEYCLOAK, et ce n'est pas un détail : le
+// SSO de Nextcloud est configuré pour mapper `preferred_username`, donc c'est
+// sous cette forme que l'utilisateur se présentera. Un compte local nommé
+// autrement serait un compte de plus, avec des droits distincts, et
+// l'utilisateur se connecterait tantôt à l'un, tantôt à l'autre selon la porte
+// empruntée.
+//
+// Idempotent : `user:add` sur un compte existant échoue, et cette erreur est
+// ignorée — c'est l'état voulu au second appel.
+func (s *Server) creerCompteNextcloud(ctx context.Context, identifiant, mdp string) error {
+	script := "export OC_PASS=" + shellQuote(mdp) + "; " +
+		"php occ user:add --password-from-env " + shellQuote(identifiant) + " >/dev/null 2>&1 || true; " +
+		"php occ user:info " + shellQuote(identifiant) + " >/dev/null 2>&1 || { echo 'account absent after creation'; exit 1; }"
+	sortie, err := s.occScript(ctx, script)
+	if err != nil {
+		return fmt.Errorf("creating %s in Nextcloud: %w: %s", identifiant, err, tronquer(sortie, 160))
+	}
+	return nil
 }
 
 // setPassword sets a non-temporary password to the user.
