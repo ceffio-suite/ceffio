@@ -148,6 +148,42 @@ func (c *Client) PoserSecret(ctx context.Context, ns, nom string, donnees map[st
 }
 
 // SupprimerSecret deletes a Secret, without failing if it does not exist.
+// SupprimerEfface supprime une ressource à partir de sa forme « Kind/nom »,
+// comme `kubectl delete`.
+//
+// WHY THIS REPLACES A `kubectl delete`: the console runs in a container built
+// from scratch — no shell, no kubectl binary. Measured on a button click:
+//
+//	applying: exec: "kubectl": executable file not found in $PATH
+//
+// Any code that may run INSIDE a pod has to go through the API. Shelling out
+// to a binary is reserved for the CLI, which is the only place one exists.
+//
+// The group and version are resolved by ressourceDe, which knows the common
+// Kinds and falls back to the cluster's own discovery for the rest — so the
+// caller names a Kind, not a group.
+func (c *Client) SupprimerEfface(ctx context.Context, ns, forme string) error {
+	parties := strings.SplitN(forme, "/", 2)
+	if len(parties) != 2 || parties[0] == "" || parties[1] == "" {
+		return fmt.Errorf("forme invalide %q : attendu Kind/nom", forme)
+	}
+	kind, nom := parties[0], parties[1]
+
+	gvr, err := c.ressourceDe(schema.GroupVersionKind{Kind: kind})
+	if err != nil {
+		// A Kind the cluster does not advertise is not a failure to delete: it
+		// is absent, and the caller asked for it to be absent. Same meaning as
+		// `kubectl delete --ignore-not-found`.
+		return nil
+	}
+	if err := c.dyn.Resource(gvr).Namespace(ns).Delete(ctx, nom, metav1.DeleteOptions{}); err != nil &&
+		!apierrors.IsNotFound(err) {
+		return fmt.Errorf("suppression de %s/%s : %w", kind, nom, err)
+	}
+	return nil
+}
+
+// SupprimerSecret supprime un Secret par son nom.
 func (c *Client) SupprimerSecret(ctx context.Context, ns, nom string) error {
 	if err := c.cs.CoreV1().Secrets(ns).Delete(ctx, nom, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		return err
@@ -216,6 +252,33 @@ func (c *Client) appliquerObjet(ctx context.Context, obj *unstructured.Unstructu
 	actuel, err := ri.Get(ctx, obj.GetName(), metav1.GetOptions{})
 	if err != nil {
 		return err
+	}
+
+	// NOTHING TO DO WHEN NOTHING CHANGES, and this is the important part.
+	//
+	// An update is not free: it needs the `update` verb on the resource, it
+	// bumps the generation, and it wakes every controller watching it. Writing
+	// unconditionally meant re-applying an identical manifest demanded
+	// permissions it had no reason to hold.
+	//
+	// MEASURED: clicking "Deploy the deployer" failed on
+	//
+	//	updating Namespace/ceffio-exapps:
+	//	namespaces "ceffio-exapps" is forbidden:
+	//	User "system:serviceaccount:ceffio-system:ceffio-admin" cannot update
+	//	resource "namespaces" …
+	//
+	// The namespace already existed and already carried the right labels. The
+	// operation was a no-op that the API refused, and the user saw a
+	// permission error where nothing needed doing. The same click also failed
+	// earlier on `delete`, for the same reason: the code wrote where it only
+	// needed to compare.
+	//
+	// Comparing first fixes both: a resource identical to its manifest is left
+	// alone, so the console only needs write access to the objects it actually
+	// changes.
+	if equivalent(actuel, obj) {
+		return nil
 	}
 
 	// THE ALREADY-ALLOCATED nodePort VALUES ARE CARRIED OVER, and this is not
@@ -571,4 +634,147 @@ func IPLocaleNoeud(ctx context.Context) string {
 		}
 	}
 	return ""
+}
+
+// equivalent compares the fields a manifest actually declares against the live
+// object.
+//
+// WHAT "EQUAL" MEANS HERE: every field present in the manifest is present and
+// identical in the live object. Fields the manifest does NOT mention are
+// ignored — they belong to Kubernetes or to another controller (status,
+// resourceVersion, an annotation added by the API server, a sidecar injected by
+// a webhook).
+//
+// COMPARING ONLY WHAT THE MANIFEST DECLARES IS THE WHOLE POINT. A strict
+// comparison would always report a difference, so the update would run every
+// time and the permission problem would come back. An absent field means "I
+// have no opinion", not "make it absent".
+func equivalent(actuel, voulu *unstructured.Unstructured) bool {
+	return sousEnsemble(voulu.Object, actuel.Object)
+}
+
+// sousEnsemble vérifie récursivement que tout ce que `voulu` contient se
+// retrouve à l'identique dans `actuel`.
+//
+// MAPS ARE COMPARED KEY BY KEY, lists as unordered sets of their elements, and
+// scalars by value. Lists are unordered because the API server reorders some of
+// them (environment variables, node selectors after a merge), and comparing by
+// index would report a difference where the content is the same.
+func sousEnsemble(voulu, actuel interface{}) bool {
+	switch v := voulu.(type) {
+	case map[string]interface{}:
+		a, ok := actuel.(map[string]interface{})
+		if !ok {
+			return false
+		}
+		for cle, sousVoulu := range v {
+			sousActuel, existe := a[cle]
+			if !existe {
+				return false
+			}
+			if !sousEnsemble(sousVoulu, sousActuel) {
+				return false
+			}
+		}
+		return true
+
+	case []interface{}:
+		a, ok := actuel.([]interface{})
+		if !ok {
+			return false
+		}
+		if len(v) != len(a) {
+			return false
+		}
+		// Chaque élément voulu doit trouver un élément actuel équivalent, sans
+		// réutiliser le même.
+		utilise := make([]bool, len(a))
+		for _, elemVoulu := range v {
+			trouve := false
+			for i, elemActuel := range a {
+				if utilise[i] {
+					continue
+				}
+				if sousEnsemble(elemVoulu, elemActuel) {
+					utilise[i] = true
+					trouve = true
+					break
+				}
+			}
+			if !trouve {
+				return false
+			}
+		}
+		return true
+
+	default:
+		// Scalaire : comparaison directe. Les nombres viennent du décodage
+		// JSON (float64), des deux côtés, donc la comparaison est fiable.
+		return voulu == actuel
+	}
+}
+
+// AttendrePret attend qu'un namespace EXISTE et soit Active.
+//
+// C'EST LE PENDANT EXACT D'AttendreDisparition, et les deux ne se confondent
+// pas. AttendreDisparition sert quand on vient de demander une suppression ;
+// celle-ci sert quand on vient de demander une création, et que le namespace
+// peut être encore en Terminating d'un « Remove » précédent.
+//
+// LA DISTINCTION EST CRITIQUE : appelée par erreur à la place de l'autre, cette
+// fonction attend la disparition d'un namespace qui existe — c'est-à-dire
+// jusqu'au délai, systématiquement, avec un déploiement qui ne fait rien et un
+// journal qui s'arrête sur sa première ligne.
+//
+// Un namespace absent est simplement attendu, pas traité comme une erreur :
+// c'est un état transitoire normal juste après une création.
+func (c *Client) AttendrePret(ctx context.Context, nom string, limite time.Duration) error {
+	fin := time.Now().Add(limite)
+	var dernier string
+	for time.Now().Before(fin) {
+		ns, err := c.cs.CoreV1().Namespaces().Get(ctx, nom, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			dernier = "absent"
+		} else if err != nil {
+			dernier = err.Error()
+		} else {
+			dernier = string(ns.Status.Phase)
+			if ns.Status.Phase == corev1.NamespaceActive {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+	return fmt.Errorf("le namespace %s est %s après %s", nom, dernier, limite)
+}
+
+// PAS D'AttendreDisparition ICI, ET C'EST VOLONTAIRE.
+//
+// La fonction a existé, le temps où « Remove » supprimait le namespace des
+// ExApp. Elle a été retirée avec la suppression elle-même.
+//
+// LA GARDER AU VOISINAGE D'AttendrePret SERAIT UN PIÈGE : deux fonctions de
+// même signature et de noms proches, dont l'une attend l'apparition et l'autre
+// la disparition. C'est précisément l'inversion qui a rendu le bouton « Deploy
+// the deployer » inerte — un appel erroné ne se voit ni au build ni au vet. Une
+// fonction morte qui invite à cette erreur n'a rien à faire ici.
+
+// ListerPVC returns the names of the PersistentVolumeClaims in a namespace.
+//
+// Used when uninstalling a component: the volumes are what carry the data and
+// therefore what actually frees disk, while the namespace itself can stay.
+func (c *Client) ListerPVC(ctx context.Context, ns string) ([]string, error) {
+	l, err := c.cs.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	noms := make([]string, 0, len(l.Items))
+	for _, v := range l.Items {
+		noms = append(noms, v.Name)
+	}
+	return noms, nil
 }
