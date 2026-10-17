@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -156,16 +155,6 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func apiErr(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg})
-}
-
-// kubectl helpers (kept for potential non-API needs).
-func kubeCombined(args ...string) (string, error) {
-	out, err := exec.Command("kubectl", args...).CombinedOutput()
-	return strings.TrimSpace(string(out)), err
-}
-
-func kubeRun(args ...string) error {
-	return exec.Command("kubectl", args...).Run()
 }
 
 func genSecret(n int) (string, error) {

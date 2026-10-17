@@ -176,7 +176,7 @@ func secretSignaling(ctx context.Context, cli *k8sapi.Client, pod string) (strin
 //
 //  1. unregister from AppAPI — this is what tells HaRP to delete the ExApp
 //     Deployment, its Service and its PersistentVolumeClaim in
-//     nextcloud-exapps. Skipping it leaves a running workload nobody manages.
+//     ceffio-exapps. Skipping it leaves a running workload nobody manages.
 //  2. disable the app itself in Nextcloud, otherwise it stays listed and Talk
 //     keeps advertising a transcription capability that has no backend.
 //  3. the downloaded language models live in the ExApp's volume. Removing the

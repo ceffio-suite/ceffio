@@ -1142,6 +1142,26 @@
 
   majBoutonSmtp();
 
+  // THE TWO FUNCTIONS THE BUTTONS CALL MUST BE ON `window`.
+  //
+  // The whole page lives inside an IIFE, so a `function` declaration is local
+  // to it and an `onclick="..."` attribute — which runs in the GLOBAL scope —
+  // cannot see it. The click does nothing at all: no error, no request, no
+  // message. Measured in the browser:
+  //
+  //   typeof window.transcriptionAction  → "undefined"
+  //   the button: enabled, visible, onclick="transcriptionAction('install')"
+  //
+  // Thirteen other handlers were already exposed this way; these two were
+  // missed. The page's own "Deploy it now" button was dead for the same
+  // reason, which is how a broken button hides a second one.
+  //
+  // Note for the next handler added here: the failure is SILENT. A button that
+  // throws would have been noticed in a minute; one that does nothing looks
+  // like a slow server or a permissions problem.
+  window.transcriptionAction = transcriptionAction;
+  window.exappsAction = exappsAction;
+
   window.refresh = async () => {
     if (!key) { openKeyModal(); return; }
     try {

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1000" width="1200" height="1000" role="img" aria-label="The browser reaches Traefik over HTTPS, which routes by host name to Keycloak, Nextcloud, ONLYOFFICE, the console, OpenBao, Stalwart and the Talk signaling server. Keycloak provides SSO OIDC to Nextcloud, the console, OpenBao and Stalwart. Nextcloud calls ONLYOFFICE with a JWT token, and drives its External Apps through HaRP, which deploys them in the nextcloud-exapps namespace and reaches them over an FRP tunnel. The Talk recording server joins calls through the signaling server. WebRTC media goes directly from the browser to Janus and coturn, in hostNetwork, without passing through Traefik. The CLI drives the K3s Kubernetes API.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1000" width="1200" height="1000" role="img" aria-label="The browser reaches Traefik over HTTPS, which routes by host name to Keycloak, Nextcloud, ONLYOFFICE, the console, OpenBao, Stalwart and the Talk signaling server. Keycloak provides SSO OIDC to Nextcloud, the console, OpenBao and Stalwart. Nextcloud calls ONLYOFFICE with a JWT token, and drives its External Apps through HaRP, which deploys them in the ceffio-exapps namespace and reaches them over an FRP tunnel. The Talk recording server joins calls through the signaling server. WebRTC media goes directly from the browser to Janus and coturn, in hostNetwork, without passing through Traefik. The CLI drives the K3s Kubernetes API.">
 <style>
 .t-ns,.t-lbl,.t-host{font-family:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px}
 .t-ns{letter-spacing:.04em}
@@ -176,7 +176,7 @@
 <text class="t-host" x="464" y="724" text-anchor="middle">spreed.</text>
 
 <rect class="grp" x="940" y="520" width="240" height="220" rx="10"/>
-<text class="t-ns" x="954" y="540">nextcloud-exapps</text>
+<text class="t-ns" x="954" y="540">ceffio-exapps</text>
 <rect class="node" x="956" y="546" width="208" height="64" rx="7"/>
 <text class="t-name" x="970" y="572">live-transcription</text>
 <text class="t-sub" x="970" y="591">ExApp · Vosk · optional</text>

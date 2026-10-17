@@ -81,7 +81,7 @@ func deployPostgres(ctx context.Context) error {
 	// Wait for the operator (deployment "cnpg-cloudnative-pg").
 	for _, d := range []string{"cnpg-cloudnative-pg"} {
 		cmd := k8s.Command(ctx, "kubectl", "rollout", "status",
-			"deployment/"+d, "-n", cnpgNamespace, "--timeout=300s")
+			"deployment/"+d, "-n", cnpgNamespace, "--timeout=600s")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {

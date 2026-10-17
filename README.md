@@ -110,7 +110,7 @@ its agent-injector: nothing is in clear text in Git.
 | `ceffio-files` | Nextcloud (files, Talk, Mail) |
 | `ceffio-office` | ONLYOFFICE Docs |
 | `ceffio-video` | Talk HPB: signaling, NATS, Janus, coturn, recording |
-| `nextcloud-exapps` | ExApps: HaRP deploy daemon, live transcription |
+| `ceffio-exapps` | ExApps: HaRP deploy daemon, live transcription |
 | `ceffio-vault` | OpenBao, agent-injector |
 | `ceffio-mail` | Stalwart |
 | `ceffio-data` | PostgreSQL (CloudNativePG), Valkey |

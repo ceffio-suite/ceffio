@@ -34,6 +34,21 @@ type client struct {
 	app       string
 	id        string
 	redirects string
+	// public marks a browser-side application, which cannot keep a secret and
+	// generates its own PKCE challenge. Deliberately NOT a default: a client
+	// that can hold a secret should hold one, and only the interfaces that
+	// cannot are declared public.
+	public bool
+	// audience marks a client that validates the token's AUDIENCE, and
+	// therefore needs it present. Keycloak never puts the caller's own
+	// clientId in `aud` on its own: without an explicit mapper the claim is
+	// simply absent, and a relying party that checks it refuses every token.
+	audience bool
+	// postLogout lists the addresses allowed as a return target AFTER A
+	// SIGN-OUT. Keycloak keeps this list SEPARATE from redirectUris: filling
+	// one does not fill the other, and the sign-out then fails on
+	// "Invalid redirect uri" while the login works perfectly.
+	postLogout string
 }
 
 // clientsOIDC builds the client list with the CURRENT domain.
@@ -62,6 +77,50 @@ func clientsOIDC(domain string) []client {
 			redirects: fmt.Sprintf(
 				"https://bao.%s/ui/vault/auth/oidc/oidc/callback,https://bao.%s/vault/auth/oidc/oidc/callback,http://localhost:8250/oidc/callback",
 				domain, domain),
+		},
+		{
+			// THE MAIL WEB INTERFACE, and the client was simply missing.
+			//
+			// internal/mail/sso.go configures Stalwart to REQUIRE this client
+			// on its side — it writes `oauthClientId: stalwart-webui` into the
+			// application object. Nothing ever created it in Keycloak, so the
+			// login ended on the provider's own error page:
+			//
+			//	We are sorry... Client not found.
+			//	clientId="stalwart-webui" error="client_not_found"
+			//
+			// The two halves of a single configuration lived in two packages,
+			// and only one of them was done. Declaring the client here puts
+			// both sides of the same handshake in the same place.
+			//
+			// THE RETURN ADDRESS IS THE WEBUI'S OWN CALLBACK PATH, on the
+			// public mail host — Stalwart serves it, and the address has to
+			// match what it sends or Keycloak refuses the redirect.
+			// LE CLIENT DE L'INTERFACE WEB EST PUBLIC, ET ELLE GÉNÈRE SON PROPRE PKCE.
+			//
+			// Ce n'est PAS un client confidentiel comme nextcloud ou openbao : le
+			// WebUI de Stalwart est une application navigateur, elle ne peut pas
+			// garder un secret. Elle ouvre l'échange authorization-code avec un
+			// client id et un code_verifier, sans secret.
+			//
+			// Le déclarer confidentiel produit exactement le refus qu'on a vu :
+			// le navigateur arrive sur la page d'erreur du fournisseur, alors que
+			// côté Stalwart tout est configuré.
+			//
+			// LES DEUX CHEMINS DE RETOUR SONT /account ET /admin : l'interface
+			// construite dynamiquement `{origine}{chemin}/oauth/callback`, et elle
+			// sert les deux espaces. Les lister tous les deux évite un refus de
+			// redirection selon la page d'où l'on vient.
+			app:       "stalwart-webui",
+			id:        "stalwart-webui",
+			audience:  true,
+			redirects: fmt.Sprintf("https://mail.%s/account/oauth/callback,https://mail.%s/admin/oauth/callback", domain, domain),
+			// L'INTERFACE REVIENT SUR SA PAGE DE CONNEXION APRÈS DÉCONNEXION.
+			// Les deux espaces, comme pour les redirections : le chemin de
+			// retour dépend de l'espace qu'on quitte, et n'en déclarer qu'un
+			// ferait échouer la déconnexion de l'autre.
+			postLogout: fmt.Sprintf("https://mail.%s/account/login,https://mail.%s/admin/login", domain, domain),
+			public:     true,
 		},
 		// NB: no "jitsi" client — Jitsi is in free access (SSO removed on
 		// 2026-10-09, see internal/media/sans_sso.go). Existing installations
@@ -100,9 +159,42 @@ func EnsureOIDCClients(ctx context.Context, domain string) error {
 // standalone vault deployment. Copying these four steps would have been enough
 // for the two paths to diverge at the first fix.
 func assurerUnClient(ctx context.Context, c client) error {
-	uuid, err := ensureClient(ctx, c.id, c.redirects)
+	uuid, err := ensureClient(ctx, c.id, c.redirects, c.postLogout, c.public)
 	if err != nil {
 		return fmt.Errorf("OIDC client %s: %w", c.id, err)
+	}
+
+	// UN CLIENT PUBLIC N'A PAS DE SECRET, ET ON S'ARRÊTE LÀ.
+	//
+	// Toute la suite de cette fonction consiste à générer un secret, à le poser
+	// dans Keycloak et à le stocker dans le coffre pour que l'application le
+	// lise. Un client public n'en a aucun : le WebUI de Stalwart est une
+	// application navigateur, il s'authentifie par PKCE.
+	//
+	// Continuer malgré tout écrirait un secret dans le coffre et sur un client
+	// qui refuse les secrets — l'installation annoncerait un client prêt, et la
+	// connexion échouerait sans que rien ne relie les deux.
+	// L'AUDIENCE DU JETON, POUR LES CLIENTS QUI LA VÉRIFIENT.
+	//
+	// Stalwart déclare `requireAudience: stalwart-webui` sur son annuaire
+	// OIDC : il refuse tout jeton dont l'audience ne correspond pas. Keycloak,
+	// lui, ne met JAMAIS le clientId appelant dans `aud` de sa propre
+	// initiative — la revue de ses propres changements le dit noir sur blanc :
+	// « the RP client id is never on the aud list ». Sans mapper explicite, le
+	// claim est absent, et Stalwart renvoie vers son formulaire local après
+	// une connexion Keycloak pourtant réussie.
+	//
+	// LA BOUCLE EST DONC FERMÉE : ce n'est pas un défaut d'authentification,
+	// c'est un claim manquant. Le symptôme ne le dit pas — l'utilisateur voit
+	// une page de connexion là où il vient de s'authentifier.
+	if c.audience {
+		if err := assurerMapperAudience(ctx, uuid, c.id); err != nil {
+			return err
+		}
+	}
+
+	if c.public {
+		return nil
 	}
 	// Reuses the existing secret (the apps point at it), otherwise generates one.
 	//
@@ -187,25 +279,74 @@ func AssurerClientCoffre(ctx context.Context, domain string) error {
 	return fmt.Errorf("OIDC client \"openbao\" absent from the list: the vault cannot authenticate")
 }
 
-func ensureClient(ctx context.Context, clientID, redirects string) (string, error) {
+func ensureClient(ctx context.Context, clientID, redirects, postLogout string, public bool) (string, error) {
 	uuid, err := clientUUID(ctx, clientID)
-	if err == nil && uuid != "" {
-		return uuid, nil
-	}
-	out, err := runKcadm(ctx, "create", "clients",
-		"-s", "clientId="+clientID,
+
+	// LES PROPRIÉTÉS SONT POSÉES DANS LES DEUX CAS, création ET MISE À JOUR.
+	//
+	// La version précédente rendait la main dès que le client existait, ce qui
+	// rendait toute propriété ajoutée plus tard INAPPLICABLE : un client déjà
+	// présent — sur toute installation existante — n'aurait jamais reçu sa
+	// liste de redirections de déconnexion, et le défaut serait resté visible
+	// après le correctif censé le réparer.
+	//
+	// C'est exactement le piège que ce fichier documente ailleurs : une fonction
+	// idempotente doit comparer ce qui est déclaré à ce qui est posé, pas
+	// supposer que l'existence suffit.
+	corps := []string{
 		"-s", "enabled=true",
 		"-s", "protocol=openid-connect",
-		"-s", "publicClient=false",
-		"-s", `redirectUris=["`+strings.ReplaceAll(redirects, ",", `","`)+`"]`)
-	if err != nil {
+		"-s", fmt.Sprintf("publicClient=%t", public),
+		"-s", `redirectUris=["` + strings.ReplaceAll(redirects, ",", `","`) + `"]`,
+	}
+	// LA LISTE DE DÉCONNEXION EST DISTINCTE, et c'est la source du défaut : un
+	// client dont on a rempli les redirections de connexion peut malgré tout
+	// refuser de revenir où que ce soit après un sign-out.
+	// KEYCLOAK 26 N'A PLUS DE CHAMP postLogoutRedirectUris : c'est devenu un
+	// ATTRIBUT, et le poser comme champ est refusé —
+	//
+	//	Unrecognized field "postLogoutRedirectUris"
+	//
+	// Le séparateur est ## et non une virgule : c'est la convention de Keycloak
+	// pour les listes stockées dans un attribut. Une virgule y serait lue comme
+	// un seul chemin contenant une virgule, et la déconnexion échouerait
+	// toujours sur « Invalid redirect uri ».
+	if postLogout != "" {
+		corps = append(corps,
+			"-s", `attributes."post.logout.redirect.uris"=`+
+				strings.ReplaceAll(postLogout, ",", "##"))
+	}
+	// PKCE IS MANDATORY FOR A PUBLIC CLIENT, not an optimisation: without it
+	// the authorization code could be intercepted and replayed.
+	if public {
+		corps = append(corps,
+			"-s", "standardFlowEnabled=true",
+			"-s", "directAccessGrantsEnabled=false",
+			"-s", `attributes."pkce.code.challenge.method"=S256`)
+	}
+
+	// LE CLIENT N'EXISTE PAS ENCORE : on le crée avec les mêmes propriétés,
+	// puis on s'arrête. Une seule définition de ce qu'un client doit être,
+	// plutôt que deux listes d'arguments à tenir synchronisées.
+	if err != nil || uuid == "" {
+		out, err := runKcadm(ctx, append([]string{"create", "clients",
+			"-s", "clientId=" + clientID}, corps...)...)
+		if err != nil {
+			return "", err
+		}
+		id := parseID(out)
+		if id == "" {
+			return "", fmt.Errorf("client creation %s without id: %s", clientID, out)
+		}
+		return id, nil
+	}
+
+	// IL EXISTE : on lui repose ses propriétés, pour que les corrections
+	// suivantes atteignent aussi les installations déjà en place.
+	if _, err := runKcadm(ctx, append([]string{"update", "clients/" + uuid}, corps...)...); err != nil {
 		return "", err
 	}
-	id := parseID(out)
-	if id == "" {
-		return "", fmt.Errorf("client creation %s without id: %s", clientID, out)
-	}
-	return id, nil
+	return uuid, nil
 }
 
 func clientUUID(ctx context.Context, clientID string) (string, error) {
@@ -346,5 +487,39 @@ func SupprimerClientOIDC(ctx context.Context, clientID string) error {
 	// NO MORE KUBERNETES SECRET TO REMOVE: the client lives in the vault, at
 	// kv/ceffio/<component>/oidc. Nothing to erase here — and above all not the
 	// vault, which must survive the deletion of a client we may recreate.
+	return nil
+}
+
+// assurerMapperAudience adds the audience mapper that puts the client's own id
+// into the token's `aud` claim.
+//
+// IDEMPOTENT: an existing mapper is left alone. We look for it by name rather
+// than by id, because the id is Keycloak's to choose and re-creating the mapper
+// on every run would add a duplicate that multiplies the claim.
+func assurerMapperAudience(ctx context.Context, uuid, clientID string) error {
+	nom := "audience-" + clientID
+
+	sortie, err := runKcadm(ctx, "get", "clients/"+uuid+"/protocol-mappers/models",
+		"--fields", "name")
+	if err != nil {
+		return fmt.Errorf("reading the mappers of %s: %w", clientID, err)
+	}
+	if strings.Contains(sortie, nom) {
+		return nil
+	}
+
+	if _, err := runKcadm(ctx, "create", "clients/"+uuid+"/protocol-mappers/models",
+		"-s", "name="+nom,
+		"-s", "protocol=openid-connect",
+		"-s", "protocolMapper=oidc-audience-mapper",
+		"-s", `config."included.client.audience"=`+clientID,
+		"-s", `config."access.token.claim"=true`,
+		// L'ID TOKEN N'EST PAS CONCERNÉ : c'est le jeton d'accès que le
+		// vérificateur présente, et ajouter l'audience aux deux ne servirait
+		// qu'à élargir ce qui circule.
+		"-s", `config."id.token.claim"=false`); err != nil {
+		return fmt.Errorf("audience mapper for %s: %w", clientID, err)
+	}
+	fmt.Printf("  ∙ audience mapper for %s (the token now carries aud=%s)\n", clientID, clientID)
 	return nil
 }
