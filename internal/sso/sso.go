@@ -39,6 +39,11 @@ type client struct {
 	// that can hold a secret should hold one, and only the interfaces that
 	// cannot are declared public.
 	public bool
+	// audience marks a client that validates the token's AUDIENCE, and
+	// therefore needs it present. Keycloak never puts the caller's own
+	// clientId in `aud` on its own: without an explicit mapper the claim is
+	// simply absent, and a relying party that checks it refuses every token.
+	audience bool
 }
 
 // clientsOIDC builds the client list with the CURRENT domain.
@@ -103,6 +108,7 @@ func clientsOIDC(domain string) []client {
 			// redirection selon la page d'où l'on vient.
 			app:       "stalwart-webui",
 			id:        "stalwart-webui",
+			audience:  true,
 			redirects: fmt.Sprintf("https://mail.%s/account/oauth/callback,https://mail.%s/admin/oauth/callback", domain, domain),
 			public:    true,
 		},
@@ -158,6 +164,25 @@ func assurerUnClient(ctx context.Context, c client) error {
 	// Continuer malgré tout écrirait un secret dans le coffre et sur un client
 	// qui refuse les secrets — l'installation annoncerait un client prêt, et la
 	// connexion échouerait sans que rien ne relie les deux.
+	// L'AUDIENCE DU JETON, POUR LES CLIENTS QUI LA VÉRIFIENT.
+	//
+	// Stalwart déclare `requireAudience: stalwart-webui` sur son annuaire
+	// OIDC : il refuse tout jeton dont l'audience ne correspond pas. Keycloak,
+	// lui, ne met JAMAIS le clientId appelant dans `aud` de sa propre
+	// initiative — la revue de ses propres changements le dit noir sur blanc :
+	// « the RP client id is never on the aud list ». Sans mapper explicite, le
+	// claim est absent, et Stalwart renvoie vers son formulaire local après
+	// une connexion Keycloak pourtant réussie.
+	//
+	// LA BOUCLE EST DONC FERMÉE : ce n'est pas un défaut d'authentification,
+	// c'est un claim manquant. Le symptôme ne le dit pas — l'utilisateur voit
+	// une page de connexion là où il vient de s'authentifier.
+	if c.audience {
+		if err := assurerMapperAudience(ctx, uuid, c.id); err != nil {
+			return err
+		}
+	}
+
 	if c.public {
 		return nil
 	}
@@ -414,5 +439,39 @@ func SupprimerClientOIDC(ctx context.Context, clientID string) error {
 	// NO MORE KUBERNETES SECRET TO REMOVE: the client lives in the vault, at
 	// kv/ceffio/<component>/oidc. Nothing to erase here — and above all not the
 	// vault, which must survive the deletion of a client we may recreate.
+	return nil
+}
+
+// assurerMapperAudience adds the audience mapper that puts the client's own id
+// into the token's `aud` claim.
+//
+// IDEMPOTENT: an existing mapper is left alone. We look for it by name rather
+// than by id, because the id is Keycloak's to choose and re-creating the mapper
+// on every run would add a duplicate that multiplies the claim.
+func assurerMapperAudience(ctx context.Context, uuid, clientID string) error {
+	nom := "audience-" + clientID
+
+	sortie, err := runKcadm(ctx, "get", "clients/"+uuid+"/protocol-mappers/models",
+		"--fields", "name")
+	if err != nil {
+		return fmt.Errorf("reading the mappers of %s: %w", clientID, err)
+	}
+	if strings.Contains(sortie, nom) {
+		return nil
+	}
+
+	if _, err := runKcadm(ctx, "create", "clients/"+uuid+"/protocol-mappers/models",
+		"-s", "name="+nom,
+		"-s", "protocol=openid-connect",
+		"-s", "protocolMapper=oidc-audience-mapper",
+		"-s", `config."included.client.audience"=`+clientID,
+		"-s", `config."access.token.claim"=true`,
+		// L'ID TOKEN N'EST PAS CONCERNÉ : c'est le jeton d'accès que le
+		// vérificateur présente, et ajouter l'audience aux deux ne servirait
+		// qu'à élargir ce qui circule.
+		"-s", `config."id.token.claim"=false`); err != nil {
+		return fmt.Errorf("audience mapper for %s: %w", clientID, err)
+	}
+	fmt.Printf("  ∙ audience mapper for %s (the token now carries aud=%s)\n", clientID, clientID)
 	return nil
 }
