@@ -31,7 +31,7 @@ const (
 	// Bump MANDATORY on every change of the console page or code:
 	// buildAndImportImage skips the rebuild if the tag already exists in
 	// containerd. Without a bump, the old image keeps being served.
-	imageTag = "1.33.5"
+	imageTag = "1.35.7"
 	imageRef = imageName + ":" + imageTag
 )
 
@@ -507,6 +507,8 @@ kind: ClusterRole
 metadata:
   name: ceffio-admin
 rules:
+# LECTURE, au niveau cluster : l'onglet Overview, les certificats et
+# l'infrastructure lisent pods, ingress et certificates de TOUS les namespaces.
 - apiGroups: [""]
   resources: [pods, namespaces]
   verbs: [get, list, watch]
@@ -519,6 +521,123 @@ rules:
 - apiGroups: [cert-manager.io]
   resources: [certificates]
   verbs: [get, list, watch]
+---
+# LA CONSOLE ADMINISTRE TOUTE LA PLATEFORME, PAS SEULEMENT DEUX NAMESPACES.
+#
+# Le déploiement de la plateforme, la lecture de l'état, les certificats, les
+# applications Nextcloud, les ExApp : tout passe par cette console. Un droit
+# limité à ceffio-exapps et ceffio-system l'empêchait d'administrer ce
+# qu'elle est censée administrer, et l'erreur remontait sous forme de refus RBAC
+# au moment du clic :
+#
+#   User "system:serviceaccount:ceffio-system:ceffio-admin" cannot create
+#   resource "namespaces" …
+#
+# LE PÉRIMÈTRE EST CELUI DES NAMESPACES DE LA PLATEFORME, et il est délibérément
+# plus étroit qu'un cluster-admin :
+#
+#   - un ClusterRole pour les ressources qui n'appartiennent à aucun namespace
+#     (namespaces eux-mêmes, et les définitions de rôles) ;
+#   - un RoleBinding dans chaque namespace ceffio-* et ceffio-exapps,
+#     qui donne l'écriture là où la plateforme vit ;
+#   - AUCUN droit sur kube-system, longhorn-system ou cert-manager : ce sont les
+#     briques d'infrastructure, elles ne se pilotent pas depuis cette console.
+#
+# Le namespace est le seul objet cluster-wide, et c'est inévitable : en créer un
+# n'appartient à aucun namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ceffio-admin
+rules:
+# Lecture sur tout le cluster : l'onglet Infrastructure et la page Certificats
+# listent pods, ingress et certificates de l'ensemble de la plateforme.
+- apiGroups: [""]
+  resources: [pods, namespaces]
+  verbs: [get, list, watch]
+- apiGroups: ["apps"]
+  resources: [deployments]
+  verbs: [get, list, watch]
+- apiGroups: [networking.k8s.io]
+  resources: [ingresses]
+  verbs: [get, list, watch]
+- apiGroups: [cert-manager.io]
+  resources: [certificates]
+  verbs: [get, list, watch]
+# Écriture sur les objets qui n'appartiennent à aucun namespace.
+# create et update, PAS delete : l'installation crée le namespace et le
+# déployeur n'y touche plus ensuite. « Remove » retire les charges et les
+# volumes, jamais le namespace — il appartient à la plateforme, pas à la
+# console. Retirer delete réduit le droit au strict nécessaire.
+- apiGroups: [""]
+  resources: [namespaces]
+  verbs: [create, update, patch]
+# PAS DE DROIT SUR clusterroles, ET C'EST UNE RÈGLE DE SÉCURITÉ, PAS UN CHOIX.
+#
+# La console avait ce droit et s'en servait pour créer le ClusterRole dont elle
+# avait besoin — ce que Kubernetes refuse :
+#
+#	attempting to grant RBAC permissions not currently held
+#
+# Un compte ne peut pas s'accorder ce qu'il ne détient pas : c'est la protection
+# contre l'élévation de privilèges. Tous les droits RBAC sont donc posés par le
+# DÉPLOYEUR, qui tourne avec un kubeconfig administrateur, et la console ne fait
+# que les consommer. Retirer ce droit rend l'erreur impossible plutôt que de la
+# corriger après coup.
+---
+# Un RoleBinding par namespace de la plateforme. Générés ici plutôt qu'écrits à
+# la main : la liste des namespaces évolue avec le produit, et un binding oublié
+# se traduirait par un refus RBAC au moment d'une action, sans lien visible avec
+# le déploiement.
+` + roleBindingsNamespaces() + `
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ceffio-admin
+subjects:
+- kind: ServiceAccount
+  name: ceffio-admin
+  namespace: ` + deployNS + `
+roleRef:
+  kind: ClusterRole
+  name: ceffio-admin
+  apiGroup: rbac.authorization.k8s.io
+---
+# ÉCRITURE DANS LES NAMESPACES DE LA PLATEFORME.
+#
+# Un RoleBinding par namespace, pas un droit cluster-wide : Kubernetes n'offre
+# pas de « tous les namespaces sauf ceux-là », donc la liste est explicite — et
+# être explicite est ici un avantage, parce qu'elle montre ce qui est administré
+# et ce qui ne l'est pas.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ceffio-admin-namespaces
+rules:
+# Le cœur de la plateforme : charges, configuration, secrets applicatifs,
+# services, Ingress, volumes.
+- apiGroups: [""]
+  resources: [pods, services, configmaps, secrets, persistentvolumeclaims, serviceaccounts]
+  verbs: [get, list, watch, create, update, patch, delete]
+- apiGroups: [""]
+  resources: [pods/exec, pods/log]
+  verbs: [get, create]
+- apiGroups: ["apps"]
+  resources: [deployments, statefulsets, replicasets]
+  verbs: [get, list, watch, create, update, patch, delete]
+- apiGroups: ["networking.k8s.io"]
+  resources: [ingresses]
+  verbs: [get, list, watch, create, update, patch, delete]
+- apiGroups: ["cert-manager.io"]
+  resources: [certificates, certificaterequests]
+  verbs: [get, list, watch, create, update, patch, delete]
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: [roles, rolebindings]
+  verbs: [get, list, watch, create, update, patch, delete]
+- apiGroups: ["postgresql.cnpg.io"]
+  resources: ["*"]
+  verbs: [get, list, watch, create, update, patch, delete]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -649,9 +768,63 @@ spec:
 	return cmd.Run()
 }
 
+// namespacesPlateforme: les namespaces que la console administre.
+//
+// LA LISTE EST EXPLICITE, et c'est volontaire. Kubernetes n'offre pas de
+// « tous les namespaces sauf ceux-là » : accorder l'écriture au niveau cluster
+// donnerait aussi kube-system, longhorn-system et cert-manager — les briques
+// d'infrastructure, qui ne se pilotent pas depuis cette console.
+//
+// Un namespace absent de cette liste ne casse rien : le RoleBinding est créé
+// pour un namespace qui peut ne pas exister encore, et Kubernetes l'accepte. Il
+// prend effet dès que le namespace apparaît.
+var namespacesPlateforme = []string{
+	"ceffio-system",
+	"ceffio-files",
+	"ceffio-identity",
+	"ceffio-office",
+	"ceffio-video",
+	"ceffio-mail",
+	"ceffio-data",
+	"ceffio-vault",
+	"ceffio-observability",
+	// Les ExApp vivent ici : HaRP y déploie le conteneur de chaque application
+	// demandée depuis Nextcloud.
+	"ceffio-exapps",
+}
+
+// roleBindingsNamespaces builds one RoleBinding per platform namespace,
+// referencing the shared ClusterRole above.
+//
+// UN SEUL ClusterRole, PLUSIEURS RoleBindings : c'est la forme idiomatique
+// pour accorder les mêmes droits dans plusieurs namespaces. Dupliquer le Role
+// dans chacun créerait dix copies d'une même liste de règles, et dix endroits
+// où oublier une nouvelle règle.
+func roleBindingsNamespaces() string {
+	var sb strings.Builder
+	for _, ns := range namespacesPlateforme {
+		fmt.Fprintf(&sb, `apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ceffio-admin
+  namespace: %s
+subjects:
+- kind: ServiceAccount
+  name: ceffio-admin
+  namespace: %s
+roleRef:
+  kind: ClusterRole
+  name: ceffio-admin-namespaces
+  apiGroup: rbac.authorization.k8s.io
+---
+`, ns, deployNS)
+	}
+	return sb.String()
+}
+
 func waitConsoleReady(ctx context.Context) error {
 	fmt.Println("∙ waiting for console pod Ready...")
-	return k8s.Command(ctx, "kubectl", "rollout", "status", "deploy/ceffio-admin", "-n", deployNS, "--timeout=180s").Run()
+	return k8s.Command(ctx, "kubectl", "rollout", "status", "deploy/ceffio-admin", "-n", deployNS, "--timeout=600s").Run()
 }
 
 // genSecret is reused (same convention as the other layers).
