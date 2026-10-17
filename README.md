@@ -207,8 +207,64 @@ a shared token in a file.
 A web interface for daily operations: service states, certificates with their
 expiry dates, SSO account management. It reads the cluster's real state — it
 does not guess it. See [`internal/console/README.md`](internal/console/README.md)
-and the image repository
-[`ceffio-suite/ceffio-console`](https://github.com/ceffio-suite/ceffio-console).
+and the "Console image" section below.
+
+## Console image
+
+The console runs as a container image, built and published **by this
+repository** (the `release.yml` workflow, job `console-image`): every release
+tag `vX.Y.Z` publishes `ghcr.io/ceffio-suite/ceffio-console:X.Y.Z` for
+`linux/amd64` and `linux/arm64`. `latest` follows stable versions only —
+never an `-rc` candidate. The image embeds the **exact binaries of the
+release** (byte for byte, verified against `checksums.txt`), never a separate
+recompilation. The former separate repository
+[`ceffio-suite/ceffio-console`](https://github.com/ceffio-suite/ceffio-console)
+is archived.
+
+The image is `FROM scratch`: no shell, no package manager — the static binary
+plus the certificate authorities. It is normally deployed **inside the
+cluster** by `ceffio install` (phase 11), which pulls it from GHCR. To run it
+manually (for example against a cluster reachable through your kubeconfig):
+
+```bash
+docker run --rm -p 8088:8088 \
+  -v ~/.kube/config:/kubeconfig:ro -e KUBECONFIG=/kubeconfig \
+  ghcr.io/ceffio-suite/ceffio-console:X.Y.Z \
+  console --domain example.com --addr :8088
+```
+
+The entrypoint is the `ceffio` binary; the arguments above replace the default
+`CMD` (`console --addr :8088`) to pass the required `--domain`. The
+administration key can be supplied with `--key` or the `CEFFIO_KEY`
+environment variable (generated and printed at startup otherwise); inside the
+cluster it comes from the OpenBao vault via the agent injector.
+
+### Permissions required in the cluster
+
+Stated plainly, because an earlier document claimed the console only reads —
+that was false. The console's `ServiceAccount` (`ceffio-admin`, created by
+`ceffio install`) holds, per the RBAC deployed by
+[`internal/console/deploy.go`](internal/console/deploy.go):
+
+- **cluster-wide reads**: pods, namespaces, deployments, ingresses,
+  cert-manager certificates — what the dashboard and the certificates page
+  show;
+- **writes inside the `ceffio-*` platform namespaces only** (never
+  `kube-system`, never `cert-manager`, never `longhorn-system`): pods,
+  services, configmaps, secrets, PVCs, service accounts, deployments,
+  statefulsets, ingresses, certificates, roles/rolebindings, CloudNativePG
+  clusters — this is what installing HaRP and the live-transcription ExApp
+  from the console requires;
+- **`pods/exec` limited to `ceffio-files`** (Role `ceffio-console-occ`): to
+  run `occ` in the Nextcloud pod for the system settings the OCS API does not
+  expose (SMTP, local account password). Keycloak, for its part, is driven
+  through its Admin REST API, not through exec;
+- **no right over cluster roles and no `delete` on namespaces**: RBAC is
+  granted by the installer, never by the console itself.
+
+In short: the console **does write to the cluster** — within the platform
+namespaces, with the perimeter above — while full (re)deployment remains the
+CLI's business (`ceffio install`).
 
 ## Media and firewall
 
