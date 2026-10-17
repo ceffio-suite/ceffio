@@ -48,6 +48,7 @@ func Synthese(ctx context.Context, domain string) {
 	fmt.Println("══════════════════════════════════════════════════════════════════")
 	fmt.Println()
 
+	afficherCompteAdmin(ctx, domain)
 	afficherServices(ctx, domain)
 	afficherCertificats(ctx)
 	afficherCles(ctx, domain)
@@ -213,4 +214,50 @@ func cheminUtilitaire(nom string) string {
 		return "absent"
 	}
 	return chemin
+}
+
+// afficherCompteAdmin shows the administrator account and its password, ONCE.
+//
+// POURQUOI LE MOT DE PASSE EST AFFICHÉ ICI ET NON STOCKÉ POUR ÊTRE RELU : c'est
+// la seule fenêtre où l'opérateur en a besoin, et c'est le seul moment où il
+// peut le noter sans dépendre d'un système qui fonctionne. Après, il reste dans
+// le coffre — la rotation depuis la console existe précisément pour en créer un
+// nouveau sans jamais relire l'ancien.
+//
+// SI LE COMPTE N'A PAS PU ÊTRE CRÉÉ, ON LE DIT ET ON N'INVENTE RIEN. Un mot de
+// passe affiché pour un compte inexistant ferait perdre plus de temps qu'un
+// avertissement honnête.
+//
+// SÉPARATEUR ASCII : CE N'EST PAS DÉCORATIF. Le reste de la synthèse en utilise
+// parce qu'il est lu sur un terminal ; celui-ci est le seul bloc que l'opérateur
+// recopie ailleurs, et un cadre de caractères le rend repérable d'un coup d'œil
+// dans un défilement de plusieurs centaines de lignes.
+func afficherCompteAdmin(ctx context.Context, domain string) {
+	const identifiant = "adminceffio"
+
+	coffre := secrets.DepuisEnvironnement()
+	if coffre == nil || !coffre.Dispo() {
+		return
+	}
+	entree, err := secrets.LireEntreeCoffre(ctx, coffre, "sso", "adminceffio")
+	if err != nil || entree["password"] == "" {
+		fmt.Println("  ADMINISTRATEUR")
+		fmt.Println("  ─────────────────────────────────────────────────────────────────")
+		fmt.Println("    compte non créé — utilisez la page Administration de la console")
+		fmt.Println()
+		return
+	}
+
+	fmt.Println("  ADMINISTRATEUR")
+	fmt.Println("  ─────────────────────────────────────────────────────────────────")
+	fmt.Printf("    identifiant : %s\n", identifiant)
+	fmt.Printf("    adresse     : %s\n", entree["email"])
+	fmt.Println()
+	fmt.Printf("    mot de passe : %s\n", entree["password"])
+	fmt.Println()
+	fmt.Println("    Notez-le maintenant : il ne sera plus affiché.")
+	fmt.Println("    Il sert partout — console, Nextcloud, messagerie — sous la même")
+	fmt.Println("    forme. Le changer depuis la console le change partout.")
+	fmt.Println()
+	_ = domain
 }

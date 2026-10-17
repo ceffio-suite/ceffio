@@ -947,13 +947,44 @@ path "auth/*" { capabilities = ["create","read","update","delete","list"] }
 path "auth/token/create" { capabilities = ["create","update","sudo"] }
 path "sys/health" { capabilities = ["read"] }`},
 	}
+	// ON ATTEND QU'OPENBAO ACCEPTE D'ÉCRIRE, ET C'EST LE CŒUR DU CORRECTIF.
+	//
+	// MESURÉ sur une machine vierge, et c'est le from scratch qui l'a révélé :
+	// la toute première écriture de politique échouait avec
+	//
+	//	URL: PUT .../v1/sys/policies/acl/ceffio-admin
+	//	Code: 500. Errors: * internal error
+	//
+	// et dans les journaux d'OpenBao, la vraie cause :
+	//
+	//	[ERROR] audit: backend failed to log request: backend=fichier/
+	//	error="error fetching salt: failed to persist salt"
+	//	[ERROR] core: failed to audit request: path=sys/policies/acl/ceffio-admin
+	//
+	// OpenBao refuse une opération dont il ne peut pas écrire la trace d'audit,
+	// et il lui faut quelques secondes après le déscellement pour établir le
+	// sel de ce journal. CE N'EST PAS UNE POLITIQUE MAL FORMÉE : elle passe
+	// parfaitement une fois ce délai écoulé, et l'erreur ne se reproduit plus.
+	//
+	// CE DÉFAUT NE SE VOYAIT PAS SUR UNE MACHINE RÉINSTALLÉE : le sel existe
+	// déjà dans le volume, donc la première écriture réussit. Sur un volume
+	// neuf, elle échoue — et le déploiement abandonnait pour une condition
+	// temporaire.
+	//
+	// POURQUOI ON RÉESSAIE PLUTÔT QUE D'ATTENDRE EN AVEUGLE : un délai fixe
+	// serait arbitraire, et trop court sur un disque lent. Réessayer sonde
+	// l'état RÉEL : la première tentative qui passe prouve que le sel est prêt.
+	// On réessaie aussi les politiques suivantes, parce que la première peut
+	// avoir réussi et la troisième échouer si le sel a été recréé entre-temps.
+	attendreEcritureVault(ctx, cli, pod, inst)
+
 	for _, p := range politiques {
 		script := fmt.Sprintf("cat > /tmp/p.hcl <<'FIN_POLITIQUE'\n%s\nFIN_POLITIQUE\n", p.regle)
 		if _, err := cli.Executer(ctx, ns, pod, "openbao", "sh", "-c", script); err != nil {
 			return "", fmt.Errorf("writing policy %s: %w", p.nom, err)
 		}
-		if _, err := baoAvecJeton(ctx, cli, inst, "policy", "write", p.nom, "/tmp/p.hcl"); err != nil {
-			return "", fmt.Errorf("policy %s: %w", p.nom, err)
+		if err := ecrirePolitique(ctx, cli, inst, p); err != nil {
+			return "", err
 		}
 	}
 
@@ -1085,7 +1116,12 @@ func configurerAuthKubernetes(ctx context.Context, cli *k8sapi.Client) error {
 		// HaRP. The ServiceAccount name and namespace MUST match what
 		// internal/exapps creates and what its RoleBinding names — a mismatch
 		// makes every vault request answer 403, and the pod starts anyway.
-		{nom: "exapps-harp", sa: "appapi-harp", ns: "ceffio-system", politique: "ceffio-exapps-harp"},
+		//
+		// THE NAMESPACE IS ceffio-exapps, WHERE THE POD RUNS SINCE the daemon
+		// was moved out of ceffio-system (see nsHarp in internal/exapps).
+		// Bound to both namespaces so a cluster that still runs the old HaRP
+		// deployment keeps authenticating while the new one comes up.
+		{nom: "exapps-harp", sa: "appapi-harp", ns: "ceffio-exapps,ceffio-system", politique: "ceffio-exapps-harp"},
 	}
 	for _, r := range roles {
 		if _, err := baoAvecJeton(ctx, cli, adm,
@@ -1478,4 +1514,72 @@ func baoAvecJeton(ctx context.Context, cli *k8sapi.Client, jeton string, args ..
 		time.Sleep(time.Duration(3*(i+1)) * time.Second)
 	}
 	return sortie, err
+}
+
+// attendreEcritureVault attend qu'OpenBao accepte une écriture, en sondant
+// jusqu'à ce que son journal d'audit soit opérationnel.
+//
+// POURQUOI SONDER AVEC UNE VRAIE ÉCRITURE, ET PAS AVEC /sys/health : l'état
+// qui nous intéresse n'est pas « le serveur répond » mais « le serveur accepte
+// de modifier quelque chose ». Un OpenBao déscellé et sain répond très bien à
+// /sys/health pendant que son audit échoue encore, et refuserait l'écriture.
+// On teste donc EXACTEMENT l'opération qui doit réussir.
+//
+// L'ÉCRITURE EST SANS EFFET DE BORD : on écrit une politique jetable, dans un
+// chemin où personne ne lit. Une sonde qui modifierait l'état réel laisserait
+// une trace à chaque installation.
+//
+// Silence si la sonde ne peut pas aboutir : l'appelant enchaîne sur les vraies
+// politiques et rapportera l'erreur avec le nom de celle qui a échoué, ce qui
+// est plus utile qu'un message sur une sonde.
+func attendreEcritureVault(ctx context.Context, cli *k8sapi.Client, pod, jeton string) {
+	const limite = 60 * time.Second
+	fin := time.Now().Add(limite)
+	premier := true
+	for time.Now().Before(fin) {
+		script := "cat > /tmp/sonde.hcl <<'FIN_SONDE'\npath \"sys/health\" { capabilities = [\"read\"] }\nFIN_SONDE\n"
+		if _, err := cli.Executer(ctx, ns, pod, "openbao", "sh", "-c", script); err != nil {
+			return
+		}
+		if _, err := baoAvecJeton(ctx, cli, jeton, "policy", "write", "ceffio-sonde", "/tmp/sonde.hcl"); err == nil {
+			if !premier {
+				fmt.Println("  ∙ vault ready to write")
+			}
+			return
+		} else if premier {
+			premier = false
+			fmt.Println("  ∙ waiting for the vault audit device")
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// ecrirePolitique écrit une politique, en réessayant sur erreur transitoire.
+//
+// LA SONDE CI-DESSUS COUVRE LE CAS NORMAL ; CE RÉESSAI COUVRE LE RESTE. Une
+// écriture peut encore échouer si la connexion au pod tombe, si le sel est
+// recréé, ou si le vault redémarre entre deux politiques. Traiter ces cas comme
+// fatals ferait échouer une installation pour une condition qui se résout
+// seule en deux secondes.
+func ecrirePolitique(ctx context.Context, cli *k8sapi.Client, jeton string, p struct {
+	nom, regle string
+}) error {
+	var dernier error
+	for essai := 0; essai < 6; essai++ {
+		_, err := baoAvecJeton(ctx, cli, jeton, "policy", "write", p.nom, "/tmp/p.hcl")
+		if err == nil {
+			return nil
+		}
+		dernier = err
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
+	return fmt.Errorf("policy %s: %w", p.nom, dernier)
 }

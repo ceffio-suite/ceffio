@@ -15,6 +15,7 @@ import (
 
 	"github.com/ceffio-suite/ceffio/internal/console"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
+	"github.com/ceffio-suite/ceffio/internal/vault"
 )
 
 func newConsoleCmd() *cobra.Command {
@@ -35,6 +36,15 @@ func newConsoleCmd() *cobra.Command {
 			if err := secrets.ChargerDepuisFichier("/secrets/env"); err != nil {
 				return err
 			}
+			// VAULT ACCESS OF THE CONSOLE ITSELF. The injector renders the
+			// application secrets, NEVER vault credentials — so when the
+			// console acts as an installer (deploy HaRP, write a shared key),
+			// secrets.DepuisEnvironnement() used to find nothing and answer
+			// « no vault configured ». In-cluster, the pod authenticates with
+			// its own ServiceAccount (role "console", policy ceffio-console,
+			// 1 h token refreshed while the server runs). Outside a cluster
+			// this is a no-op and the CLI's resoudreCoffre stays in charge.
+			vault.MaintenirJetonInCluster(c.Context())
 			if domain == "" {
 				return fmt.Errorf("--domain is required")
 			}

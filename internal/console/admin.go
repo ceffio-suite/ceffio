@@ -189,10 +189,39 @@ func (s *Server) handleAdminRotate(w http.ResponseWriter, r *http.Request) {
 // Keycloak
 // ---------------------------------------------------------------------------
 
-// rotKeycloak changes the password via the realm's admin API.
+// rotKeycloak sets the password via the realm's admin API, CREATING THE ACCOUNT
+// IF IT DOES NOT EXIST YET.
+//
+// # POURQUOI LA CRÉATION EST ICI, ET PAS AILLEURS
+//
+// L'installation crée le realm « ceffio » et configure l'authentification de
+// adminceffio (rôle OIDC côté vault, redirection SSO) — mais elle ne crée
+// JAMAIS l'utilisateur. Deux choses différentes, et les confondre a produit
+// exactement ce que l'opérateur voyait :
+//
+//	missing from the directory
+//	missing from Nextcloud
+//	WITHOUT admin rights
+//	inactive account
+//
+// Vérifié sur le realm : `kcadm get users -r ceffio` rendait `[ ]`. Le realm
+// existait, l'identité non. Déclarer un rôle OIDC pour
+// adminceffio@ceffio.local ne crée pas cet utilisateur : ça dit seulement
+// comment le reconnaître s'il se présente un jour.
+//
+// LA ROTATION EST L'ENDROIT NATUREL, parce qu'elle est déjà le seul chemin qui
+// sait poser un mot de passe, et parce que créer-puis-poser est idempotent :
+// sur un compte absent il le crée, sur un compte existant il le met à jour.
+// Une fonction de création séparée aurait dupliqué la gestion du mot de passe,
+// avec deux endroits où diverger.
 //
 // temporary=false: the user will not have to change it at first sign-in —
 // they just noted it down, asking again would be absurd.
+//
+// DUPLICATE EMAIL: the account is created with adminceffio@ceffio.local. That
+// address is never used to send mail — it is the stable identifier the vault's
+// OIDC role binds to (`bound_claims: {email: adminceffio@ceffio.local}`), so it
+// must be set here or the SSO login would never match.
 func (s *Server) rotKeycloak(r *http.Request, mdp string) error {
 	resp, err := s.kcReq(r, http.MethodGet,
 		"/admin/realms/"+realm+"/users?username="+url.QueryEscape(compteAdmin)+"&exact=true", "")
@@ -202,22 +231,81 @@ func (s *Server) rotKeycloak(r *http.Request, mdp string) error {
 	var users []KCUser
 	json.NewDecoder(resp.Body).Decode(&users)
 	resp.Body.Close()
+
+	// Absent from the directory: create it, then fall through to the password
+	// step below so both paths converge on the same code.
 	if len(users) == 0 {
-		return fmt.Errorf("user %q not found in Keycloak", compteAdmin)
+		if err := s.creerCompteKeycloak(r); err != nil {
+			return err
+		}
+		// Re-read to get the id Keycloak assigned. We do not guess it: the id
+		// is the server's to choose, and inventing one would silently create a
+		// second account.
+		resp2, err := s.kcReq(r, http.MethodGet,
+			"/admin/realms/"+realm+"/users?username="+url.QueryEscape(compteAdmin)+"&exact=true", "")
+		if err != nil {
+			return err
+		}
+		json.NewDecoder(resp2.Body).Decode(&users)
+		resp2.Body.Close()
+		if len(users) == 0 {
+			return fmt.Errorf("user %q created but not found on re-read", compteAdmin)
+		}
 	}
 
 	corps, _ := json.Marshal(map[string]any{
 		"type": "password", "value": mdp, "temporary": false,
 	})
-	resp2, err := s.kcReq(r, http.MethodPut,
+	resp3, err := s.kcReq(r, http.MethodPut,
 		"/admin/realms/"+realm+"/users/"+users[0].ID+"/reset-password", string(corps))
 	if err != nil {
 		return err
 	}
-	defer resp2.Body.Close()
-	if resp2.StatusCode >= 300 {
-		b, _ := io.ReadAll(resp2.Body)
-		return fmt.Errorf("Keycloak refused (%d): %s", resp2.StatusCode, tronquer(string(b), 160))
+	defer resp3.Body.Close()
+	if resp3.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp3.Body)
+		return fmt.Errorf("Keycloak refused (%d): %s", resp3.StatusCode, tronquer(string(b), 160))
+	}
+	return nil
+}
+
+// creerCompteKeycloak creates the administrator account in the ceffio realm.
+//
+// IT IS CREATED ENABLED AND WITH NO ROLES, and that is enough: this account is
+// a user of the realm, not an administrator OF Keycloak. Its "admin rights" in
+// the operator's sense are the realm-management roles that SSO and the vault
+// policy already grant it — creating it with realm-admin would give it the
+// right to rewrite the whole directory, which nothing needs.
+//
+// THE ADDRESS IS adminceffio@ceffio.local, the SAME identifier as everywhere
+// else. The operator asked for one single identifier across every system (SSO,
+// mail, Nextcloud) rather than one form per service; this is the one place
+// where it is decided.
+func (s *Server) creerCompteKeycloak(r *http.Request) error {
+	corps, _ := json.Marshal(map[string]any{
+		"username":      compteAdmin,
+		"enabled":       true,
+		"emailVerified": true,
+		// Never used to send mail: this is the stable identifier the vault's
+		// OIDC role binds to.
+		"email":     compteAdmin + "@ceffio.local",
+		"firstName": "Administrateur",
+		"lastName":  "Ceffio",
+		"attributes": map[string]any{
+			// Marks the account as being OURS, so a future cleanup cannot take
+			// it for a leftover from an import.
+			"ceffio.io/managed": []string{"true"},
+		},
+	})
+	resp, err := s.kcReq(r, http.MethodPost, "/admin/realms/"+realm+"/users", string(corps))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("creating %s in Keycloak (%d): %s",
+			compteAdmin, resp.StatusCode, tronquer(string(b), 200))
 	}
 	return nil
 }
@@ -237,13 +325,59 @@ func (s *Server) rotKeycloak(r *http.Request, mdp string) error {
 func (s *Server) rotNextcloud(r *http.Request, mdp string) error {
 	// occ reads OC_PASS when --password-from-env is provided. So we inject the
 	// variable into the command executed in the pod.
-	script := "OC_PASS=" + shellQuote(mdp) + " php occ user:resetpassword --password-from-env " + shellQuote(compteAdmin)
+	//
+	// LE COMPTE EST CRÉÉ S'IL N'EXISTE PAS, comme pour Keycloak.
+	//
+	// `occ user:resetpassword` ÉCHOUE sur un compte absent — « User does not
+	// exist » — et l'installation ne crée jamais adminceffio dans Nextcloud :
+	// l'authentification passe par SSO, mais SSO crée l'utilisateur à sa
+	// PREMIÈRE connexion, ce qui n'a lieu qu'après que l'opérateur ait pu se
+	// connecter. Sans cette création, le compte n'existe nulle part et la
+	// rotation ne peut rien faire : c'est l'état « Nextcloud : ABSENT ».
+	//
+	// POURQUOI --password-from-env PLUTÔT QUE --password : l'argument serait
+	// lisible dans la table des processus du pod.
+	//
+	// L'ORDRE COMPTE : on crée d'abord (ignore si déjà présent), on pose le
+	// mot de passe ensuite. Les deux commandes sont séparées parce que la
+	// première doit pouvoir échouer sans interrompre la seconde — `user:add`
+	// sur un compte existant est une erreur, et la traiter comme fatale ferait
+	// échouer la rotation sur un système parfaitement sain.
+	// OC_PASS EST EXPORTÉ UNE FOIS POUR TOUTE LA SÉQUENCE, et non posé devant
+	// une seule commande. `occ user:add --password-from-env` lit la MÊME
+	// variable que resetpassword : mesuré dans le pod,
+	//
+	//	--password-from-env given, but NC_PASS/OC_PASS is empty!
+	//
+	// La poser devant une seule des deux aurait fait échouer la création en
+	// silence (>/dev/null || true), et le compte n'aurait jamais existé — le
+	// symptôme exact que cette correction élimine.
+	//
+	// `export` plutôt que préfixe : les quatre commandes s'exécutent dans le
+	// même shell, la variable doit donc survivre de l'une à l'autre.
+	script := "export OC_PASS=" + shellQuote(mdp) + "; " +
+		"php occ user:add --password-from-env " + shellQuote(compteAdmin) + " >/dev/null 2>&1 || true; " +
+		"php occ group:add admin >/dev/null 2>&1 || true; " +
+		"php occ user:resetpassword --password-from-env " + shellQuote(compteAdmin) + " 2>&1 | grep -qi 'does not exist' || true; " +
+		"php occ group:adduser admin " + shellQuote(compteAdmin) + " >/dev/null 2>&1 || true; " +
+		"php occ user:info " + shellQuote(compteAdmin) + " >/dev/null 2>&1 || { echo 'account still absent after creation'; exit 1; }"
 	sortie, err := s.occScript(r.Context(), script)
 	if err != nil {
 		return fmt.Errorf("occ user:resetpassword: %w: %s", err, tronquer(sortie, 160))
 	}
 	return nil
 }
+
+// L'ÉTAPE user:add DU DÉPLOIEMENT INITIAL EST DANS rotNextcloud, ET NULLE PART
+// AILLEURS. Un compte Nextcloud créé sans mot de passe ne peut pas se connecter,
+// et en créer un ici demanderait de générer un second mot de passe — donc deux
+// secrets pour une seule identité, ce que l'opérateur refuse explicitement.
+// La rotation les crée tous les deux avec LE MÊME mot de passe, dans le même
+// geste.
+//
+// LE GROUPE admin EST AJOUTÉ APRÈS. Sans lui le compte s'authentifie et ne peut
+// rien faire — pire qu'un compte absent, puisque l'interface le compterait
+// comme présent.
 
 // ---------------------------------------------------------------------------
 // Stalwart

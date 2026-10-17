@@ -40,7 +40,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"github.com/ceffio-suite/ceffio/internal/k8sapi"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"github.com/ceffio-suite/ceffio/internal/vault"
@@ -53,12 +52,24 @@ const (
 	// Separate from ceffio-files on purpose: ExApps are third-party code, and
 	// keeping them in their own namespace means a Role scoped to it cannot
 	// reach anything of ours.
-	nsExapps = "nextcloud-exapps"
+	nsExapps = "ceffio-exapps"
 
-	// Where the HaRP pod itself runs. It could live in the ExApp namespace,
-	// but keeping it with the rest of the platform means its own permissions
-	// (reading its config) do not sit next to the workloads it creates.
-	nsHarp = "ceffio-system"
+	// HARP VIT DANS LE NAMESPACE DES EXAPP, PAS DANS ceffio-system.
+	//
+	// Il y était, et c'était une erreur de conception : HaRP EST le déployeur
+	// d'ExApp. Il crée les Deployments, Services, Ingress et volumes DANS
+	// ceffio-exapps, et son rôle doit donc y être défini.
+	//
+	// L'argument inverse — « garder ses permissions à l'écart des charges qu'il
+	// crée » — se retourne contre lui-même : un déployeur séparé de ce qu'il
+	// déploie a besoin de droits PLUS larges, pas plus étroits. Un Role dans
+	// ceffio-exapps suffit, et il n'a alors aucun accès à ceffio-system, où
+	// vivent la console, OpenBao et les autres composants de la plateforme.
+	//
+	// MESURÉ : le déployeur tournait dans ceffio-system pendant que les
+	// applications s'installaient dans ceffio-exapps, et le Role de chaque
+	// ExApp devait être créé à distance, dans un namespace étranger.
+	nsHarp = nsExapps
 
 	nomHarp   = "appapi-harp"
 	imageHarp = "ghcr.io/nextcloud/nextcloud-appapi-harp:release"
@@ -81,12 +92,71 @@ const (
 //
 // It does NOT register the daemon in AppAPI: that is a Nextcloud-side action,
 // done with occ once HaRP answers. See the note in the returned instructions.
-func Deploy(ctx context.Context, domain string) error {
-	fmt.Println("\nDeploying the ExApp deploy daemon (HaRP)...")
-
+//
+// Preparer creates the ExApp namespace WITHOUT deploying HaRP.
+//
+// # WHAT IT IS FOR, AND WHY IT IS SEPARATE FROM Deploy
+//
+// `ceffio install` used to deploy HaRP unconditionally. That put the deploy
+// daemon — a namespace, a workload, and a permanent right for Nextcloud to
+// start containers — on every installation, whether or not the operator ever
+// wanted it. Installing it is now an explicit action, taken from the
+// administration console.
+//
+// This function keeps what the installation still needs: the namespace, because
+// the console's write permissions live in it, and because creating it on the
+// first click would make that click slower and more fragile than it needs to
+// be.
+//
+// Idempotent: on a re-run, an existing namespace is left alone.
+func Preparer(ctx context.Context) error {
 	if err := creerNamespace(ctx); err != nil {
 		return err
 	}
+	fmt.Println("✓ ExApp namespace ready (deploy daemon not installed — use the console)")
+	return nil
+}
+
+func Deploy(ctx context.Context, domain string) error {
+	fmt.Println("\nDeploying the ExApp deploy daemon (HaRP)...")
+
+	// ON ATTEND QUE LE NAMESPACE SOIT LÀ, PAS QU'IL DISPARAISSE.
+	//
+	// J'avais écrit ici l'inverse — AttendreDisparition au lieu d'AttendreExistence —
+	// et le résultat était un déploiement qui ne faisait RIEN : la fonction
+	// attendait la disparition d'un namespace qui existait déjà, jusqu'à son
+	// délai de deux minutes, puis échouait. Mesuré : sept minutes sans qu'aucune
+	// ressource ne soit créée, et un journal qui s'arrêtait sur
+	//
+	//	Deploying the ExApp deploy daemon (HaRP)...
+	//
+	// L'intention était de gérer l'enchaînement « Remove » puis « Deploy », où
+	// le namespace est encore en Terminating. Cela demande d'attendre son
+	// EXISTENCE stable — pas son absence.
+	if err := creerNamespace(ctx); err != nil {
+		return err
+	}
+	cliNs, err := k8sapi.Nouveau()
+	if err != nil {
+		return err
+	}
+	if err := cliNs.AttendrePret(ctx, nsExapps, 3*time.Minute); err != nil {
+		return err
+	}
+
+	// RBAC FOR HARP ITSELF, NOT FOR THE CONSOLE.
+	//
+	// The only RBAC objects created here are the ServiceAccount, Role and
+	// RoleBinding of the deploy daemon, all scoped to ceffio-exapps. Creating
+	// them is PERMITTED: the console already holds those namespace-scoped
+	// rights (serviceaccounts, roles, rolebindings) through the
+	// ceffio-admin-namespaces ClusterRole, bound in every platform namespace by
+	// the console's own manifest at installation time. A Role granting no more
+	// than what its creator already holds is not an escalation.
+	//
+	// The console must NOT create cluster-scoped RBAC (ClusterRole /
+	// ClusterRoleBinding): that would be privilege escalation, and it is
+	// exactly what the previous code did here and what Kubernetes refused.
 	if err := creerRBAC(ctx); err != nil {
 		return err
 	}
@@ -458,11 +528,22 @@ spec:
 // right", only "the daemon is up".
 func attendrePret(ctx context.Context) error {
 	fmt.Println("∙ waiting for HaRP to be ready...")
+
+	// THROUGH THE API, NOT `kubectl`. This function runs inside the console
+	// container, which is built from scratch: no shell, no kubectl binary. The
+	// previous version failed with
+	//
+	//	applying: exec: "kubectl": executable file not found in $PATH
+	//
+	// on a click of "Deploy the deployer", while the same code worked from the
+	// CLI where kubectl exists. See internal/k8sapi for the rule.
+	cli, err := k8sapi.Nouveau()
+	if err != nil {
+		return fmt.Errorf("Kubernetes API access: %w", err)
+	}
 	fin := time.Now().Add(180 * time.Second)
 	for time.Now().Before(fin) {
-		cmd := k8s.Command(ctx, "kubectl", "rollout", "status", "deploy/"+nomHarp,
-			"-n", nsHarp, "--timeout=10s")
-		if err := cmd.Run(); err == nil {
+		if cli.DeploiementPret(ctx, nsHarp, nomHarp) {
 			fmt.Println("  ✓ HaRP ready")
 			return nil
 		}
@@ -487,11 +568,16 @@ func genSecret(n int) (string, error) {
 }
 
 func appliquer(ctx context.Context, manifeste string) error {
-	cmd := k8s.Command(ctx, "kubectl", "apply", "-f", "-")
-	cmd.Stdin = strings.NewReader(manifeste)
-	out, err := cmd.CombinedOutput()
+	// THROUGH THE API. Same reason as attendrePret: this runs in a container
+	// with no binaries at all. The error message the click showed —
+	// « applying: exec: "kubectl": executable file not found in $PATH » — came
+	// from this line.
+	cli, err := k8sapi.Nouveau()
 	if err != nil {
-		return fmt.Errorf("applying: %w: %s", err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("Kubernetes API access: %w", err)
+	}
+	if err := cli.Appliquer(ctx, manifeste); err != nil {
+		return fmt.Errorf("applying: %w", err)
 	}
 	return nil
 }
@@ -520,9 +606,8 @@ func NomsHarp() (nom, namespace string) { return nomHarp, nsHarp }
 //     so a daemon removal that runs first fails with a message about ExApps.
 //  2. then the daemon registration.
 //  3. then the Kubernetes resources: HaRP, its Service, its Ingress, its RBAC.
-//  4. and finally the namespace, which holds the ExApp volumes. Removing it
-//     frees the downloaded models; keeping it would silently retain gigabytes
-//     that nothing references any more.
+//  4. then the ExApp volumes. The namespace itself is left in place (see
+//     below).
 func Remove(ctx context.Context) error {
 	fmt.Println("\nRemoving the ExApp deploy daemon (HaRP)...")
 
@@ -550,26 +635,80 @@ func Remove(ctx context.Context) error {
 		_, _ = execOcc(ctx, cli, pod, "app_api:daemon:unregister", nomHarp)
 	}
 
-	// 3. the Kubernetes resources
-	for _, doc := range []string{
-		fmt.Sprintf("deployment/%s", nomHarp),
-		fmt.Sprintf("service/%s", nomHarp),
-		fmt.Sprintf("ingress/%s", nomHarp),
-		fmt.Sprintf("serviceaccount/%s", nomHarp),
-		fmt.Sprintf("role/%s", nomHarp),
-		fmt.Sprintf("rolebinding/%s", nomHarp),
-	} {
-		_ = k8s.Command(ctx, "kubectl", "delete", doc, "-n", nsHarp,
-			"--ignore-not-found").Run()
+	// 3. the Kubernetes resources, THROUGH THE API.
+	//
+	// Best effort: each deletion is independent, and one that fails (a Kind the
+	// cluster does not know, a resource already gone) must not stop the others.
+	//
+	// LE NAMESPACE N'EST PAS SUPPRIMÉ, et c'est délibéré.
+	//
+	// Il est créé par l'installation et il lui appartient : le supprimer ici
+	// ferait dépendre sa survie d'un clic dans la console, alors que la console
+	// n'est qu'un client de la plateforme et non son propriétaire.
+	//
+	// Ce que « Remove » doit rendre, c'est ce que le déployeur a apporté :
+	// sa charge de travail, son Service, son Ingress, son compte de service,
+	// ses rôles. On les supprime, on libère les volumes, et le namespace reste
+	// — vide, prêt pour un prochain déploiement.
+	//
+	// LA CONSÉQUENCE PRATIQUE EST AUSSI UNE SIMPLIFICATION : les droits
+	// d'écriture de la console vivent dans ce namespace. Le détruire les
+	// emportait avec lui (supprimer un namespace supprime ses RoleBindings), et
+	// le déploiement suivant devait les reposer avant de pouvoir travailler.
+	// Un namespace stable supprime cette classe entière de pannes.
+	cliSupp, err := k8sapi.Nouveau()
+	if err == nil {
+		for _, forme := range []string{
+			"Deployment/" + nomHarp,
+			"Service/" + nomHarp,
+			"Ingress/" + nomHarp,
+			"ServiceAccount/" + nomHarp,
+			"Role/harp-exapps",
+			"RoleBinding/harp-exapps",
+		} {
+			_ = cliSupp.SupprimerEfface(ctx, nsHarp, forme)
+		}
 	}
 
-	// 4. the namespace, which carries the ExApp volumes
-	if err := k8s.Command(ctx, "kubectl", "delete", "namespace", nsExapps,
-		"--ignore-not-found", "--wait=false").Run(); err != nil {
-		return fmt.Errorf("deleting the ExApp namespace %s: %w", nsExapps, err)
+	// Les volumes des applications, eux, doivent disparaître : ils portent des
+	// données téléchargées (les modèles de transcription pèsent plusieurs
+	// gigaoctets) et les garder ferait survivre un composant qu'on vient de
+	// désinstaller.
+	if err := supprimerPVC(ctx, nsExapps); err != nil {
+		return err
 	}
 
-	fmt.Println("✓ ExApp deploy daemon removed (namespace and ExApp volumes freed)")
+	fmt.Println("✓ ExApp deploy daemon removed (namespace kept, ExApp volumes freed)")
+	return nil
+}
+
+// supprimerPVC removes the ExApp volumes, which is what actually frees disk.
+//
+// POURQUOI LES VOLUMES ET PAS LE NAMESPACE : c'est le volume qui porte les
+// données, et un namespace vide ne coûte rien. Supprimer le namespace emportait
+// aussi les RoleBindings de la console, qu'il fallait ensuite reposer — pour un
+// gain nul. On supprime donc exactement ce qui a un coût.
+//
+// UN ÉCHEC N'EST PAS FATAL : un volume déjà absent est le cas normal au second
+// clic, et un volume encore attaché à une charge en cours de suppression le
+// sera aussi une seconde plus tard. On rapporte ce qu'on a pu faire plutôt que
+// d'interrompre le reste du nettoyage.
+func supprimerPVC(ctx context.Context, ns string) error {
+	cli, err := k8sapi.Nouveau()
+	if err != nil {
+		return fmt.Errorf("Kubernetes client: %w", err)
+	}
+	volumes, err := cli.ListerPVC(ctx, ns)
+	if err != nil {
+		return fmt.Errorf("listing the volumes of %s: %w", ns, err)
+	}
+	for _, v := range volumes {
+		if err := cli.SupprimerEfface(ctx, ns, "PersistentVolumeClaim/"+v); err != nil {
+			fmt.Printf("  ∙ volume %s non supprimé : %v\n", v, err)
+			continue
+		}
+		fmt.Printf("  ✓ volume %s supprimé (espace disque libéré)\n", v)
+	}
 	return nil
 }
 

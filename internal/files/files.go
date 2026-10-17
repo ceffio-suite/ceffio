@@ -280,8 +280,30 @@ spec:
 
 func waitNextcloudReady(ctx context.Context) error {
 	fmt.Println("∙ waiting for Nextcloud Ready + installation...")
+	// 900 SECONDES, ET CE N'EST PAS UNE MARGE DE SÉCURITÉ : c'est une mesure.
+	//
+	// MESURÉ sur un disque neuf, et c'est le from scratch qui l'a montré :
+	// Nextcloud a mis 6 min 4 s à devenir Ready (12:29:43 → 12:35:47). Les
+	// 300 s d'origine expiraient donc avant, l'installation s'arrêtait sur
+	//
+	//	error: timed out waiting for the condition
+	//	ceffio: nextcloud not ready: exit status 1
+	//
+	// alors que Nextcloud était parfaitement installé — vérifié juste après :
+	// `php occ status` répondait installed: true, version 34.0.3.2.
+	//
+	// L'essentiel de ces six minutes est l'ATTACHEMENT DU VOLUME LONGHORN :
+	// sur un volume neuf, il faut provisionner la réplique, formater, puis
+	// attacher. Sur une machine réinstallée, le volume existe déjà et
+	// l'attachement est immédiat — ce qui explique que le défaut ne se voyait
+	// pas avant de tester sur du vide.
+	//
+	// Le même relèvement est appliqué aux autres couches qui attendent un pod
+	// adossé à un volume (identity, data, console, ingress, mail) : la cause
+	// est identique et un délai plus court à un seul endroit recréerait le
+	// problème au composant suivant.
 	cmd := k8s.Command(ctx, "kubectl", "rollout", "status",
-		"deployment/nextcloud", "-n", ns, "--timeout=300s")
+		"deployment/nextcloud", "-n", ns, "--timeout=900s")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -429,7 +451,29 @@ func ConfigureOIDC(ctx context.Context, domain string) error {
 	const envSecret = "CEFFIO_OIDC_SECRET"
 	out, err := runOccOutputPodEnv(ctx, pod, envSecret, clientSecret,
 		"user_oidc:provider", nomProvider,
-		"-c", clientID, "-d", discovery, "--clientsecret-env="+envSecret)
+		"-c", clientID, "-d", discovery, "--clientsecret-env="+envSecret,
+		// L'IDENTIFIANT DU COMPTE EST CELUI DE KEYCLOAK, PAS UN UUID.
+		//
+		// user_oidc utilise le claim `sub` par défaut, et `uniqueUid` vaut 1 :
+		// la première connexion SSO créait donc un SECOND compte, nommé d'après
+		// l'UUID Keycloak, à côté du compte local adminceffio :
+		//
+		//	adminceffio        groupes: [admin, everyone]        ← le bon, admin
+		//	1dbf6e678875d9...  groupes: [everyone]              ← le compte SSO
+		//
+		// L'utilisateur se connectait avec le second, qui n'est pas
+		// administrateur, et Nextcloud répondait « Le compte connecté doit être
+		// un administrateur » — un message qui accuse les droits alors que le
+		// sujet est l'identité du compte.
+		//
+		// Ce n'est pas cosmétique : c'est l'exigence de l'opérateur, un seul
+		// identifiant identique dans TOUS les systèmes. Deux comptes pour une
+		// même personne obligent à se souvenir de deux formes, et les droits
+		// accordés à l'une ne valent pas pour l'autre.
+		"--mapping-uid=preferred_username",
+		"--unique-uid=0",
+		"--mapping-display-name=name",
+		"--mapping-email=email")
 	if err != nil && !strings.Contains(out, "already") {
 		return fmt.Errorf("user_oidc:provider: %w: %s", err, out)
 	}

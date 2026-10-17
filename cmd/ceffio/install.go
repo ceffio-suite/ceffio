@@ -243,7 +243,25 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 		os.Setenv("BAO_MOTEUR", "kv")
 		fmt.Printf("∙ vault published for the following steps: %s (token not shown)\n", coffreBao.Adresse)
 	} else {
-		fmt.Println("∙ vault unavailable: secrets will stay in Kubernetes (expected behavior)")
+		// CE N'EST PAS UN REPLI NEUTRE, et le dire ainsi était trompeur.
+		//
+		// Le message annonçait « secrets will stay in Kubernetes (expected
+		// behavior) », ce qui laisse croire que la suite s'accommode d'un vault
+		// absent. Elle ne s'en accommode PAS : la couche identity refuse de
+		// démarrer sans lui, et l'opérateur découvrait plus loin
+		//
+		//	vault unreadable for keycloak/db: no vault configured
+		//
+		// Une erreur qui accuse une configuration absente alors que le sujet
+		// est un vault qui n'a pas démarré.
+		//
+		// ON CONTINUE QUAND MÊME, parce que le déploiement de la plateforme
+		// (namespaces, ingress, StorageClass) n'a pas besoin du coffre et qu'il
+		// vaut mieux laisser la suite le tenter : une installation partielle
+		// mais diagnostiquable vaut mieux qu'un arrêt immédiat. Ce qui change,
+		// c'est que le message dit maintenant ce qui va se passer.
+		fmt.Println("  ⚠ vault unavailable — the identity layer will fail without it")
+		fmt.Println("    check `kubectl -n ceffio-vault get pods` and the openbao logs")
 	}
 
 	// 7. Identity / SSO (Phase 4) — depends on the PostgreSQL database.
@@ -266,6 +284,27 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	}
 	if err := runParallel(ctx, appTasks...); err != nil {
 		return err
+	}
+
+	// 10bis. THE LOCAL NEXTCLOUD ACCOUNT, and it belongs HERE rather than in the
+	// identity layer.
+	//
+	// L'ORDRE N'EST PAS UN DÉTAIL : la couche identity (Phase 4) crée le realm
+	// et le compte Keycloak, mais Nextcloud n'existe qu'à partir de la ligne
+	// ci-dessus. Créé trop tôt, le compte Nextcloud échouait et la plateforme
+	// démarrait avec une seule des deux portes d'entrée.
+	//
+	// CE COMPTE EST LE CHEMIN DE SECOURS : il permet de se connecter en direct
+	// si Keycloak est indisponible. Une plateforme dont l'unique accès est une
+	// dépendance est une plateforme qu'une panne de cette dépendance enferme.
+	//
+	// Idempotent : un compte présent est laissé tel quel, mot de passe compris.
+	if err := identity.EnsureCompteNextcloud(ctx); err != nil {
+		// Non bloquant, et rapporté : Keycloak est ce que l'interface utilise,
+		// et interrompre une installation réussie pour le chemin de secours
+		// serait un mauvais échange. La console peut le créer plus tard.
+		fmt.Printf("  ⚠ compte Nextcloud non créé : %v\n", err)
+		fmt.Println("    (créable depuis la page Administration de la console)")
 	}
 
 	// 11. Office (Phase 6) — AFTER files: the ONLYOFFICE connector is
@@ -362,14 +401,23 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 		return err
 	}
 
-	// 12quater. ExApp deploy daemon (HaRP). LAST, and that is deliberate: it
-	// gives Nextcloud the ability to INSTALL more components, so it belongs
-	// after everything we install ourselves. Nothing depends on it yet, and if
-	// it fails the rest of the platform stays up.
+	// 12quater. THE EXAPP DEPLOY DAEMON IS NOT INSTALLED HERE, ON PURPOSE.
 	//
-	// It needs the vault (its shared key is stored there and read by the
-	// injector), which is why it cannot run before this point in the sequence.
-	if err := exapps.Deploy(ctx, o.domain); err != nil {
+	// HaRP lets Nextcloud install components ON ITS OWN. Deploying it at
+	// installation would make it present on every machine, whether or not the
+	// operator ever wants that — and it is not free: it adds a namespace, a
+	// workload, and a permanent right for Nextcloud to start containers.
+	//
+	// It is now installed from the administration console, where it belongs:
+	// the Applications page has a "Deploy the deployer" button, and the same
+	// page installs live transcription right after. An operator who wants
+	// neither never deploys it.
+	//
+	// THE NAMESPACE IS STILL CREATED HERE, because it is cheap, because the
+	// console's write permissions live in it, and because waiting for it to
+	// exist before the first click is a better first experience than creating
+	// it on demand.
+	if err := exapps.Preparer(ctx); err != nil {
 		return err
 	}
 

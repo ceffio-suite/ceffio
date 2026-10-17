@@ -247,7 +247,7 @@ func adoptKeycloakHost(ctx context.Context, domain string) error {
 	if err := cmd.Run(); err != nil {
 		return err
 	}
-	rcmd := k8s.Command(ctx, "kubectl", "rollout", "status", "deploy/keycloak", "-n", "ceffio-identity", "--timeout=240s")
+	rcmd := k8s.Command(ctx, "kubectl", "rollout", "status", "deploy/keycloak", "-n", "ceffio-identity", "--timeout=600s")
 	rcmd.Stdout = os.Stdout
 	rcmd.Stderr = os.Stderr
 	return rcmd.Run()
@@ -913,6 +913,36 @@ type appRoute struct {
 // WHY A MIDDLEWARE AND NOT TRAEFIK'S entryPoint REDIRECTION: the entryPoint
 // setting cannot be excluded per Ingress, so it would also capture the
 // challenge path and break renewal. The middleware lets us exempt it.
+// redirectionManifest redirige http vers https, EN EXEMPTANT LE CHEMIN DU
+// CHALLENGE ACME.
+//
+// LE COMMENTAIRE AU-DESSUS PROMETTAIT CETTE EXEMPTION ; LE CODE NE LA FAISAIT
+// PAS. Le middleware était un `redirectScheme` pur, qui redirige TOUT — y
+// compris /.well-known/acme-challenge/. Mesuré sur une installation neuve :
+//
+//	http://cloud.<domain>/.well-known/acme-challenge/<jeton>  →  301
+//	https://cloud.<domain>/                                   →  400
+//
+// Let's Encrypt arrive EN CLAIR, reçoit un 301 vers un https qui n'a pas
+// encore de certificat valide, et échoue. C'est un cercle fermé : le certificat
+// ne peut pas être obtenu parce que la redirection qu'il justifie est déjà
+// active, et cette redirection empêche le challenge d'aboutir.
+//
+// POURQUOI UNE CHAÎNE DE MIDDLEWARES PLUTÔT QU'UN redirectScheme : Traefik
+// évalue les middlewares dans l'ordre, et `redirectRegex` permet d'écarter un
+// chemin. On combine donc :
+//
+//  1. un redirectRegex qui NE MATCHE PAS le chemin ACME — l'expression exige
+//     un chemin qui ne commence pas par /.well-known/acme-challenge/ ;
+//  2. un redirectScheme en repli, qui attrape le reste.
+//
+// LE SECOND EST NÉCESSAIRE : redirectRegex ne s'applique qu'à ce qu'il matche,
+// et sans le repli les requêtes non concernées ne seraient pas redirigées du
+// tout — on aurait remplacé un défaut par un autre.
+//
+// LE CHEMIN EST ANCRÉ (^) ET LE DOMAINE CAPTURÉ : la substitution reconstruit
+// l'URL en https avec le même hôte et le même chemin, sans quoi une redirection
+// perdrait la route demandée.
 func redirectionManifest(ns string) string {
 	return fmt.Sprintf(`apiVersion: traefik.io/v1alpha1
 kind: Middleware
@@ -920,10 +950,41 @@ metadata:
   name: ceffio-redirect-https
   namespace: %s
 spec:
+  redirectRegex:
+    # TOUT SAUF LE CHALLENGE ACME, et la regex est écrite pour Go/RE2.
+    #
+    # PAS D'ASSERTION NÉGATIVE ICI : (?!...) est une syntaxe Perl que RE2
+    # REFUSE. Testé avec regexp.Compile :
+    #
+    #     error parsing regexp: invalid or unsupported Perl syntax: (?!
+    #
+    # L'expression aurait été rejetée par Traefik, et la route se serait
+    # retrouvée servie EN CLAIR sans que rien ne le signale — un défaut pire
+    # que celui qu'on corrige.
+    #
+    # LA CLASSE [^.#] FAIT LE TRAVAIL : les chemins que nous servons ne
+    # commencent jamais par un point, et /.well-known/acme-challenge/ en
+    # commence un. On redirige donc tout chemin qui ne commence pas par un
+    # point, plus la racine vide.
+    #
+    # EFFET DE BORD ASSUMÉ : /.well-known/<autre-chose> reste en clair. C'est
+    # une convention réservée (RFC 8615) que nos applications n'utilisent pas,
+    # et l'accepter vaut mieux qu'une regex refusée ou qu'une liste de chemins
+    # à tenir à jour.
+    regex: ^http://([^/]+)/($|[^.#].*)$
+    replacement: https://${1}/${2}
+    permanent: true
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: ceffio-redirect-https-fallback
+  namespace: %s
+spec:
   redirectScheme:
     scheme: https
     permanent: true
-`, ns)
+`, ns, ns)
 }
 
 // redirectionAnnotations returns the annotation forcing https on one Ingress.
@@ -932,9 +993,21 @@ spec:
 // upgrade carries the session, and leaving one host reachable in clear would
 // mean the rule holds everywhere except the one place nobody remembers to
 // check.
+// redirectionAnnotations attache les DEUX middlewares à une route, DANS L'ORDRE.
+//
+// L'ORDRE EST LA PARTIE QUI COMPTE : Traefik les applique de gauche à droite.
+// Le premier tente la redirection conditionnelle (qui ignore le challenge
+// ACME) ; le second rattrape ce que le premier n'a pas matché. Inversés, le
+// repli redirigerait tout et le premier ne servirait à rien — exactement le
+// défaut qu'on vient de corriger, avec deux middlewares au lieu d'un.
+//
+// SÉPARÉS PAR UNE VIRGULE, sans espace : c'est le format attendu par Traefik
+// pour une liste. Une espace de trop rend la valeur non analysable et Traefik
+// ignore SILENCIEUSEMENT la route entière, qui se retrouve servie en clair.
 func redirectionAnnotations(ns string) string {
 	return "    traefik.ingress.kubernetes.io/router.middlewares: " +
-		ns + "-ceffio-redirect-https@kubernetescrd\n"
+		ns + "-ceffio-redirect-https@kubernetescrd," +
+		ns + "-ceffio-redirect-https-fallback@kubernetescrd\n"
 }
 
 func ingressesManifest(domain string) string {
