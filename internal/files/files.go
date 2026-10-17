@@ -280,8 +280,30 @@ spec:
 
 func waitNextcloudReady(ctx context.Context) error {
 	fmt.Println("∙ waiting for Nextcloud Ready + installation...")
+	// 900 SECONDES, ET CE N'EST PAS UNE MARGE DE SÉCURITÉ : c'est une mesure.
+	//
+	// MESURÉ sur un disque neuf, et c'est le from scratch qui l'a montré :
+	// Nextcloud a mis 6 min 4 s à devenir Ready (12:29:43 → 12:35:47). Les
+	// 300 s d'origine expiraient donc avant, l'installation s'arrêtait sur
+	//
+	//	error: timed out waiting for the condition
+	//	ceffio: nextcloud not ready: exit status 1
+	//
+	// alors que Nextcloud était parfaitement installé — vérifié juste après :
+	// `php occ status` répondait installed: true, version 34.0.3.2.
+	//
+	// L'essentiel de ces six minutes est l'ATTACHEMENT DU VOLUME LONGHORN :
+	// sur un volume neuf, il faut provisionner la réplique, formater, puis
+	// attacher. Sur une machine réinstallée, le volume existe déjà et
+	// l'attachement est immédiat — ce qui explique que le défaut ne se voyait
+	// pas avant de tester sur du vide.
+	//
+	// Le même relèvement est appliqué aux autres couches qui attendent un pod
+	// adossé à un volume (identity, data, console, ingress, mail) : la cause
+	// est identique et un délai plus court à un seul endroit recréerait le
+	// problème au composant suivant.
 	cmd := k8s.Command(ctx, "kubectl", "rollout", "status",
-		"deployment/nextcloud", "-n", ns, "--timeout=300s")
+		"deployment/nextcloud", "-n", ns, "--timeout=900s")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

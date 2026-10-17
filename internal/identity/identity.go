@@ -32,6 +32,12 @@ const (
 	dbName    = "keycloak"
 	dbUser    = "keycloak"
 	dbService = "ceffio-pg-rw.ceffio-data.svc"
+
+	// Nextcloud vit dans son propre namespace. Le confondre avec celui de
+	// PostgreSQL a produit « deployments.apps "nextcloud" not found », une
+	// erreur qui accuse un déploiement absent alors que le sujet est un
+	// namespace.
+	nsFiles = "ceffio-files"
 )
 
 // Deploy installs the identity layer (Phase 4), idempotently:
@@ -61,6 +67,26 @@ func Deploy(ctx context.Context) error {
 		return err
 	}
 	if err := verifyRealm(ctx); err != nil {
+		return err
+	}
+
+	// THE ADMINISTRATOR ACCOUNT ITSELF, created HERE and not from the console.
+	//
+	// POURQUOI À L'INSTALLATION : le realm et le compte sont deux choses, et
+	// seule la première était faite. L'opérateur se retrouvait avec un realm
+	// vide — vérifié, `kcadm get users -r ceffio` rendait `[ ]` — et une
+	// interface qui affichait
+	//
+	//	missing from the directory
+	//	missing from Nextcloud
+	//	WITHOUT admin rights
+	//	inactive account
+	//
+	// La rotation depuis la console savait poser un mot de passe mais pas créer
+	// le compte, ce qui supposait que l'installation l'ait fait. Elle ne le
+	// faisait pas. Une plateforme fraîchement installée doit être utilisable
+	// sans qu'on ait à cliquer sur un bouton pour que son administrateur existe.
+	if err := ensureCompteAdmin(ctx); err != nil {
 		return err
 	}
 
@@ -252,7 +278,7 @@ spec:
 func waitKeycloakReady(ctx context.Context) error {
 	fmt.Println("∙ waiting for Keycloak Ready...")
 	cmd := k8s.Command(ctx, "kubectl", "rollout", "status",
-		"deployment/keycloak", "-n", ns, "--timeout=300s")
+		"deployment/keycloak", "-n", ns, "--timeout=600s")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -393,4 +419,324 @@ func apply(ctx context.Context, manifest string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// ---------------------------------------------------------------------------
+// Administrator account
+// ---------------------------------------------------------------------------
+
+// compteAdminIdentifiant is the single identifier used everywhere: Keycloak,
+// Nextcloud, the mail server and the console.
+//
+// ONE FORM, EVERYWHERE. The operator asked for this explicitly: no
+// adminceffio@local here and adminceffio@domain elsewhere, because that forces
+// remembering two shapes of the same account. The mail domain is a real domain
+// and the address is never used to send mail — OpenBao's OIDC role binds to it
+// as a STABLE CLAIM.
+const (
+	compteAdminIdentifiant = "adminceffio"
+	compteAdminEmail       = "adminceffio@ceffio.local"
+	compteAdminGroupe      = "admin"
+
+	// The names Keycloak requires at first sign-in. They are not the operator's
+	// real name — we do not know it — but a filled value, so the platform is
+	// usable IMMEDIATELY after installation instead of blocking on a form.
+	// Changeable from the account page afterwards.
+	compteAdminPrenom = "Administrateur"
+	compteAdminNom    = "Ceffio"
+)
+
+// ensureCompteAdmin creates the platform administrator, in the directory AND in
+// Nextcloud, with THE SAME password.
+//
+// IT IS IDEMPOTENT BY CONSTRUCTION: an account that already exists is left
+// alone and its password is NOT regenerated. That matters because this function
+// runs on every `ceffio install`, including re-runs on a live platform — and
+// rotating the administrator's password because someone re-ran the installer
+// would lock them out of their own interface without warning.
+//
+// THE PASSWORD IS STORED IN THE VAULT, unlike the rotation button which only
+// keeps a fingerprint. The difference is deliberate: here the operator has just
+// installed and has nothing yet, so the password must be shown once and be
+// recoverable from the summary; the rotation button exists precisely to make a
+// password that is NOT kept.
+func ensureCompteAdmin(ctx context.Context) error {
+	fmt.Println("∙ administrator account (" + compteAdminIdentifiant + ")")
+
+	coffre := secrets.DepuisEnvironnement()
+	if coffre == nil || !coffre.Dispo() {
+		return fmt.Errorf("the vault is required to create the administrator account")
+	}
+
+	// ALREADY DONE? The vault entry is the marker: it is written only when the
+	// account is created, so its presence means a previous run succeeded.
+	// Reading the account from Keycloak instead would be guessing — the account
+	// could have been deleted by hand while the password stayed in the vault.
+	// LE COMPTE EXISTE DÉJÀ : on ne régénère PAS le mot de passe, mais on ne
+	// sort pas non plus.
+	//
+	// SORTIR ICI ÉTAIT UN DÉFAUT : les champs obligatoires de Keycloak
+	// (firstName, lastName) ne sont pas remplis par `create users` d'une
+	// version antérieure, et un `return` immédiat rendait impossible la
+	// réparation d'un realm déjà provisionné. L'opérateur restait bloqué sur
+	// « Please specify this field. » à la première connexion, sans aucun moyen
+	// de s'en sortir par une réinstallation.
+	//
+	// La réparation est donc TOUJOURS exécutée : elle est idempotente, et sur
+	// un compte sain elle ne change rien.
+	entree, err := secrets.LireEntreeCoffre(ctx, coffre, "sso", "adminceffio")
+	existant := err == nil && entree["password"] != ""
+	if existant {
+		fmt.Println("  ∙ account already created, password left unchanged")
+	}
+
+	mdp := ""
+	if existant {
+		mdp = entree["password"]
+	} else {
+		var errGen error
+		mdp, errGen = motDePasseAdmin()
+		if errGen != nil {
+			return fmt.Errorf("generating the administrator password: %w", errGen)
+		}
+	}
+
+	// 1. KEYCLOAK FIRST: it is the source of identity, and its failure must stop
+	//    everything rather than leave a password in the vault for an account
+	//    that does not exist. It also REPAIRS an existing account's mandatory
+	//    fields.
+	if err := creerCompteKeycloak(ctx, mdp); err != nil {
+		return err
+	}
+
+	// 2. NEXTCLOUD: the local account, so direct sign-in works when SSO is
+	//    unavailable. A platform whose only way in is a dependency is a platform
+	//    that can be locked out by that dependency.
+	if err := creerCompteNextcloud(ctx, mdp); err != nil {
+		// Not fatal, and reported: Keycloak is what the interface uses, and
+		// failing the whole installation over the fallback path would be a bad
+		// trade. The console can create it later.
+		fmt.Printf("  ⚠ Nextcloud account not created: %v\n", err)
+		fmt.Println("    (the console can create it later from Administration)")
+	}
+
+	// 3. THE VAULT LAST, as the completion marker. Written before the accounts
+	//    existed, a crash in between would leave a password for nothing.
+	// On n'écrit que si le compte vient d'être créé : réécrire une entrée
+	// identique créerait une version de plus dans l'historique du coffre à
+	// chaque réinstallation, sans rien apporter.
+	if !existant {
+		if err := secrets.EcrireDansCoffre(ctx, coffre, "sso", "adminceffio", map[string]string{
+			"username": compteAdminIdentifiant,
+			"email":    compteAdminEmail,
+			"password": mdp,
+		}); err != nil {
+			return fmt.Errorf("storing the administrator password: %w", err)
+		}
+		fmt.Println("  ✓ administrator created (password shown in the summary)")
+	} else {
+		fmt.Println("  ✓ administrator fields repaired (name, email)")
+	}
+	return nil
+}
+
+// motDePasseAdmin generates a password suited to being typed BY A HUMAN.
+//
+// The alphabet has no ambiguous pair (0/O, 1/l/I): the operator reads this once
+// off a terminal and types it into a browser, and an unreadable character turns
+// a successful installation into a support call.
+func motDePasseAdmin() (string, error) {
+	const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%&*"
+	out := make([]byte, 0, 24)
+	for len(out) < 24 {
+		b := make([]byte, 1)
+		if _, err := rand.Read(b); err != nil {
+			return "", err
+		}
+		out = append(out, alphabet[int(b[0])%len(alphabet)])
+	}
+	return string(out), nil
+}
+
+// creerCompteKeycloak creates the administrator user in the ceffio realm.
+//
+// IT GOES THROUGH kcadm, like creerRealm, and for the same reason: the admin
+// credentials live in the vault and are read HERE, on the installation machine,
+// then passed on standard input — never as a command-line argument, which the
+// process table would expose.
+//
+// CREATED WITH NO REALM ROLE, deliberately. This account is a USER of the realm,
+// not an administrator OF Keycloak: its rights in the operator's sense come from
+// the SSO configuration and from OpenBao's policy. Granting realm-admin would
+// let it rewrite the entire directory, and nothing needs that.
+//
+// THE EMAIL IS NOT DECORATION: OpenBao's OIDC role binds to
+// adminceffio@ceffio.local as a claim. Without it the SSO login would
+// authenticate against a realm that does not recognise this identity, and the
+// vault would refuse the connection.
+func creerCompteKeycloak(ctx context.Context, mdp string) error {
+	coffre := secrets.DepuisEnvironnement()
+	entree, err := secrets.LireEntreeCoffre(ctx, coffre, "keycloak", "admin")
+	if err != nil {
+		return fmt.Errorf("Keycloak admin credentials unreadable in the vault: %w", err)
+	}
+	utilisateur, motdepasse := entree["username"], entree["password"]
+	if utilisateur == "" || motdepasse == "" {
+		return fmt.Errorf("incomplete keycloak/admin vault entry")
+	}
+	if len(mdp) == 0 {
+		return fmt.Errorf("empty administrator password")
+	}
+
+	// The account is created with `create users`, and the PASSWORD IS SET IN A
+	// SECOND PASS: kcadm refuses to create a user with a credential in one call.
+	//
+	// idempotent: `create users` fails if the account exists, and that failure
+	// is ignored — this function runs on re-installs, where the account is
+	// already there and only the password matters.
+	// FIRST NAME AND LAST NAME ARE REQUIRED BY KEYCLOAK, and omitting them is
+	// not a cosmetic detail: the first sign-in shows an "Update Account
+	// Information" form that DEMANDS both, with "Please specify this field."
+	// under each — the operator cannot reach the platform until they fill in
+	// something the installation could have set.
+	//
+	// `kcadm create users -s key=value` accepts these fields; they were simply
+	// not passed. Verified on the live realm: the created account had id,
+	// username, email, enabled and emailVerified, and NOTHING else.
+	//
+	// THE UPDATE PASS IS NOT REDUNDANT: `create users` fails silently on an
+	// existing account (its output is discarded, `|| true`), so a realm
+	// provisioned by an earlier version would keep its empty names forever.
+	// The explicit `update users` repairs those, which is what makes this
+	// function correct on a re-install and not only on a fresh machine.
+	script := `IFS= read -r motdepasse; IFS= read -r mdpadmin; ` +
+		`/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master ` +
+		`--user '` + strings.ReplaceAll(utilisateur, "'", `'\''`) + `' --password "$motdepasse" >/dev/null && ` +
+		`(/opt/keycloak/bin/kcadm.sh create users -r ceffio ` +
+		`-s username=` + compteAdminIdentifiant + ` -s enabled=true -s emailVerified=true ` +
+		`-s "email=` + compteAdminEmail + `" ` +
+		`-s "firstName=` + compteAdminPrenom + `" -s "lastName=` + compteAdminNom + `" ` +
+		`>/dev/null 2>&1 || true) && ` +
+		// L'IDENTIFIANT TECHNIQUE DOIT ÊTRE RÉCUPÉRÉ, PAS DEVINÉ : `kcadm
+		// update` attend l'UUID, et lui passer le nom d'utilisateur répond
+		//
+		//	Resource not found for url: .../users/adminceffio
+		//
+		// Mesuré sur le realm vivant. L'échec était avalé par le `|| true`
+		// destiné à rendre l'étape idempotente, donc l'installation annonçait
+		// « administrator fields repaired » sans que rien ne soit réparé — le
+		// pire des états, puisqu'il décourage d'aller vérifier.
+		//
+		// On extrait l'id de la réponse JSON, en shell, sans dépendre d'un
+		// outil qui pourrait manquer dans l'image Keycloak.
+		`id=$(/opt/keycloak/bin/kcadm.sh get users -r ceffio -q username=` + compteAdminIdentifiant +
+		` --fields id --format csv --noquotes 2>/dev/null | tr -d "\r" | tail -1) && ` +
+		`if [ -n "$id" ]; then ` +
+		`/opt/keycloak/bin/kcadm.sh update users/"$id" -r ceffio ` +
+		`-s "firstName=` + compteAdminPrenom + `" -s "lastName=` + compteAdminNom + `" ` +
+		`-s "email=` + compteAdminEmail + `" -s emailVerified=true -s enabled=true; ` +
+		`else echo "administrator id not found in realm ceffio" >&2; exit 1; fi && ` +
+		// LE MOT DE PASSE N'EST POSÉ QUE S'IL Y EN A UN.
+		//
+		// Sur un compte existant, la fonction reçoit le mot de passe DÉJÀ
+		// stocké — elle ne le régénère pas. Mais si cette lecture échouait et
+		// rendait une chaîne vide, `set-password --new-password ""` EFFACERAIT
+		// le mot de passe du compte : l'opérateur se retrouverait sans aucun
+		// moyen de se connecter, sur une plateforme pourtant installée.
+		//
+		// Le test est dans le shell et non en Go, parce que c'est là que la
+		// valeur existe.
+		`if [ -n "$mdpadmin" ]; then ` +
+		`/opt/keycloak/bin/kcadm.sh set-password -r ceffio --username ` + compteAdminIdentifiant +
+		` --new-password "$mdpadmin"; fi`
+
+	cmd := k8s.Command(ctx, "kubectl", "exec", "-i", "-n", ns, "deploy/keycloak", "-c", "keycloak",
+		"--", "sh", "-c", script)
+	cmd.Stdin = strings.NewReader(motdepasse + "\n" + mdp + "\n")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("creating the administrator in Keycloak: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// creerCompteNextcloud creates the local administrator account, so direct
+// sign-in keeps working when Keycloak is unavailable.
+//
+// occ CANNOT SET A PASSWORD WITHOUT ONE, and --password-from-env needs OC_PASS
+// exported in the SAME shell — measured, `user:add --password-from-env` with an
+// empty OC_PASS answers "--password-from-env given, but NC_PASS/OC_PASS is
+// empty!" and creates nothing.
+//
+// THE admin GROUP IS ADDED AFTER THE PASSWORD, and the order matters: adding a
+// member to a group that does not exist yet fails, and the account would then
+// exist without its rights — present but powerless, which the interface reports
+// as healthy.
+func creerCompteNextcloud(ctx context.Context, mdp string) error {
+	// ON ATTEND QUE LE POD RÉPONDE, et c'est le point qui a échoué au premier
+	// essai : le déploiement peut exister et son pod ne pas être prêt — une
+	// image en cours de téléchargement, un init-container en cours. `kubectl
+	// exec` répond alors « not found », ce qui laisse croire à un déploiement
+	// absent alors que le sujet est un délai.
+	//
+	// On ne rend PAS cette attente bloquante pour l'installation : elle est
+	// bornée, et son échec est rapporté par l'appelant, qui peut le traiter
+	// comme non fatal.
+	attente := k8s.Command(ctx, "kubectl", "rollout", "status",
+		"deployment/nextcloud", "-n", nsFiles, "--timeout=600s")
+	if err := attente.Run(); err != nil {
+		return fmt.Errorf("Nextcloud not ready: %w", err)
+	}
+
+	script := `export OC_PASS=` + shellQuote(mdp) + `; ` +
+		`php occ group:add ` + compteAdminGroupe + ` >/dev/null 2>&1 || true; ` +
+		`php occ user:add --password-from-env ` + compteAdminIdentifiant + ` >/dev/null 2>&1 || true; ` +
+		`php occ group:adduser ` + compteAdminGroupe + ` ` + compteAdminIdentifiant + ` >/dev/null 2>&1 || true; ` +
+		`php occ user:info ` + compteAdminIdentifiant + ` >/dev/null 2>&1 || { echo "account absent after creation"; exit 1; }`
+
+	cmd := k8s.Command(ctx, "kubectl", "exec", "-n", nsFiles, "deploy/nextcloud", "-c", "nextcloud",
+		"--", "sh", "-c", script)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("creating the administrator in Nextcloud: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// EnsureCompteNextcloud creates the local Nextcloud administrator, reading the
+// password from the vault.
+//
+// EXPORTED BECAUSE THE CALLER IS NOT IN THIS PACKAGE, and because the ordering
+// constraint lives there: the identity layer runs before Nextcloud exists, so
+// this step is driven from the installation sequence, right after the files
+// layer. The password is NOT regenerated — it was decided once, when the
+// Keycloak account was created, so both doors accept the SAME one.
+//
+// Idempotent: an existing account is left alone.
+func EnsureCompteNextcloud(ctx context.Context) error {
+	coffre := secrets.DepuisEnvironnement()
+	if coffre == nil || !coffre.Dispo() {
+		return fmt.Errorf("the vault is required to read the administrator password")
+	}
+	entree, err := secrets.LireEntreeCoffre(ctx, coffre, "sso", "adminceffio")
+	if err != nil {
+		return fmt.Errorf("administrator password unreadable in the vault: %w", err)
+	}
+	mdp := entree["password"]
+	if mdp == "" {
+		return fmt.Errorf("no administrator password in the vault")
+	}
+	return creerCompteNextcloud(ctx, mdp)
+}
+
+// shellQuote wraps a value in single quotes for `sh -c`, escaping any single
+// quote inside it.
+//
+// A PASSWORD CONTAINS PUNCTUATION BY CONSTRUCTION — the generated alphabet
+// includes ! @ # $ % & * — and unquoted it would be interpreted by the shell:
+// `$` would expand, `!` and `*` would be substituted, and the password APPLIED
+// would not be the one DISPLAYED. The operator would then be locked out by a
+// password they read correctly.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

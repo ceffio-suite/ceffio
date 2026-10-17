@@ -373,8 +373,32 @@ func replicasPourLeCluster(ctx context.Context) int {
 func verifierReplicasClasse(ctx context.Context) error {
 	voulu := strconv.Itoa(replicasPourLeCluster(ctx))
 
+	// 60 SECONDES ÉTAIENT TROP COURT, ET LE DÉLAI ÉTAIT LE VRAI SUJET.
+	//
+	// MESURÉ sur une machine vierge : l'installation échouait sur
+	//
+	//	the longhorn StorageClass did not appear within 60s after the helm
+	//	install
+	//
+	// alors que Longhorn était parfaitement sain — le `longhorn-driver-deployer`
+	// était en Init:0/1, c'est-à-dire EN TRAIN DE TÉLÉCHARGER SON IMAGE. C'est
+	// lui qui crée la StorageClass, donc tant qu'il n'a pas démarré, elle
+	// n'existe pas, et aucune attente de la StorageClass ne peut réussir.
+	//
+	// Sur un serveur vierge, ce téléchargement prend plusieurs minutes (le
+	// cache d'images est vide, et l'agent CSI comme le manager pèsent lourd).
+	// Sur une machine réinstallée il est instantané, ce qui explique que le
+	// défaut ne se voyait pas : c'est EXACTEMENT le cas que le from scratch
+	// existe pour révéler.
+	//
+	// Dix minutes et un message d'attente : assez large pour un registre lent,
+	// assez court pour ne pas faire attendre indéfiniment devant une panne
+	// réelle.
+	const limite = 10 * time.Minute
+	fin := time.Now().Add(limite)
 	var obtenu string
-	for essai := 0; essai < 30; essai++ {
+	dernier := ""
+	for time.Now().Before(fin) {
 		sortie, err := k8s.Command(ctx, "kubectl", "get", "storageclass", "longhorn",
 			"-o", "jsonpath={.parameters.numberOfReplicas}").Output()
 		if err == nil {
@@ -383,16 +407,31 @@ func verifierReplicasClasse(ctx context.Context) error {
 				break
 			}
 		}
+
+		// On rapporte POURQUOI on attend, plutôt que de laisser l'opérateur
+		// devant un silence : un deployer en Init signale un téléchargement,
+		// un deployer absent signale un problème de chart.
+		etat, _ := k8s.Command(ctx, "kubectl", "get", "pods", "-n", "longhorn-system",
+			"-l", "app=longhorn-driver-deployer",
+			"-o", "jsonpath={.items[0].status.phase}/{.items[0].status.containerStatuses[0].state}").Output()
+		courant := strings.TrimSpace(string(etat))
+		if courant != dernier {
+			fmt.Printf("  ∙ waiting for the longhorn StorageClass (driver-deployer: %s)\n", courant)
+			dernier = courant
+		}
+
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(2 * time.Second):
+		case <-time.After(5 * time.Second):
 		}
 	}
 
 	if obtenu == "" {
-		return fmt.Errorf("the longhorn StorageClass did not appear within 60s after " +
-			"the helm install — check `kubectl get sc` and the longhorn-manager logs")
+		return fmt.Errorf("the longhorn StorageClass did not appear within %s after "+
+			"the helm install (driver-deployer was %q) — check `kubectl get sc`, "+
+			"`kubectl -n longhorn-system get pods` and the longhorn-manager logs",
+			limite, dernier)
 	}
 	if obtenu != voulu {
 		return fmt.Errorf("the longhorn StorageClass requests %s replicas, expected %s "+

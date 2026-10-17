@@ -179,8 +179,29 @@ func waitCertManagerReady(ctx context.Context) error {
 	return nil
 }
 
+// applyClusterIssuers crée le ClusterIssuer auto-signé qui AMORCE la chaîne de
+// confiance interne.
+//
+// CE N'EST PAS UNE BÉQUILLE DE DÉVELOPPEMENT, et le message le disait à tort.
+//
+//	∙ ClusterIssuer ceffio-selfsigned (dev)     ← l'ancien message
+//
+// Ce « (dev) » faisait croire à un mode dégradé. Vérifié en lisant la suite :
+// cet issuer est un MAILLON OBLIGATOIRE. Il signe le certificat de la CA
+// interne (ceffio-ca), qui devient à son tour l'issuer ceffio-ca-issuer — et
+// c'est celui-ci qui signe les certificats des domaines privés et des services
+// internes. Sans lui, pas de ceffio-ca, donc pas d'autorité interne du tout,
+// y compris sur une plateforme entièrement publique.
+//
+// Il coexiste avec les issuers Let's Encrypt, qui signent les domaines publics.
+// Les deux chaînes vivent ensemble : c'est voulu, parce qu'un domaine public et
+// un nom interne ne se valident pas de la même façon, et qu'une plateforme n'a
+// jamais l'un sans l'autre (spreed.<domain> est public, les services .svc sont
+// internes).
+//
+// LE MESSAGE DIT MAINTENANT CE QUE LA CHOSE EST : un amorçage, pas un mode.
 func applyClusterIssuers(ctx context.Context) error {
-	fmt.Println("∙ ClusterIssuer ceffio-selfsigned (dev)")
+	fmt.Println("∙ internal trust anchor (ClusterIssuer ceffio-selfsigned → ceffio-ca)")
 	issuer := `apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:

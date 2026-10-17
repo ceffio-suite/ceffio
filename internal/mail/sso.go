@@ -154,7 +154,7 @@ func ConfigurerSSO(ctx context.Context, domaineMessagerie string, o SSO) error {
 	// deploy/stalwart` may reach it — the verification below then failed on a
 	// refused connection.
 	if out, err := k8s.Command(ctx, "kubectl", "-n", ns, "rollout", "status",
-		"deployment/stalwart", "--timeout=240s").CombinedOutput(); err != nil {
+		"deployment/stalwart", "--timeout=600s").CombinedOutput(); err != nil {
 		return fmt.Errorf("waiting for the restart: %w: %s", err, tronquer(string(out), 200))
 	}
 	if err := waitReady(ctx); err != nil {
