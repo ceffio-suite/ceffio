@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright © MANDEM
 
-// Package modules n'abrite aucune logique : il existe uniquement pour que Go
-// exécute les init() de chaque module.
+// Package modules hosts no logic: it exists only so that Go runs the init()
+// of each module.
 //
-// POURQUOI CE FICHIER EXISTE : chaque module s'enregistre lui-même dans le
-// registre global depuis un func init() dans son propre package. Or Go
-// n'exécute les init() que des packages réellement importés par le binaire —
-// un module que personne n'importe ne s'enregistrerait JAMAIS, et son absence
-// serait totalement silencieuse (pas d'erreur, juste un module introuvable).
-// Ces imports blank (« _ ») forcent l'exécution des init() sans référencer
-// aucun symbole ; les deux frontaux (CLI, console) n'ont plus qu'à importer
-// ce package unique pour voir tout le catalogue.
+// WHY THIS FILE EXISTS: each module registers itself into the global
+// registry from a func init() in its own package. But Go only runs the init()
+// of packages actually imported by the binary — a module nobody imports would
+// NEVER register, and its absence would be completely silent (no error, just
+// a module that cannot be found). These blank imports ("_") force the init()
+// to run without referencing any symbol; both frontends (CLI, console) then
+// only have to import this single package to see the whole catalog.
 //
-// Le test all_test.go est le garde-fou : il vérifie que tout package appelant
-// module.Register figure bien ici.
+// The all_test.go test is the guardrail: it verifies that every package
+// calling module.Register is listed here.
 package modules
 
 import (

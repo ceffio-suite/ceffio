@@ -17,9 +17,9 @@ import (
 
 const cheminModule = "github.com/ceffio-suite/ceffio"
 
-// racineDepot remonte depuis CE fichier jusqu'à la racine du dépôt (celle qui
-// contient go.mod). On l'identifie par go.mod plutôt que par un nombre de
-// « .. » figé : déplacer ce test ne le casserait pas silencieusement.
+// racineDepot walks up from THIS file to the repository root (the one
+// containing go.mod). It is identified by go.mod rather than by a fixed
+// number of "..": moving this test would not break it silently.
 func racineDepot(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
@@ -38,14 +38,14 @@ func racineDepot(t *testing.T) string {
 	}
 }
 
-// packagesQuiEnregistrent parcourt toutes les sources Go du dépôt (hors
-// fichiers _test.go : le registre y manipule des modules factices) et renvoie
-// le chemin d'import de chaque package qui appelle module.Register.
+// packagesQuiEnregistrent walks every Go source of the repository (excluding
+// _test.go files: the registry handles fake modules there) and returns the
+// import path of each package that calls module.Register.
 //
-// POURQUOI go/parser ET PAS UN GREP : un grep sur « module.Register »
-// attraperait les commentaires, les chaînes et les homonymes ; l'AST, lui,
-// ne retient que les appels réels, avec l'alias d'import réellement utilisé
-// (qui peut ne pas être « module »).
+// WHY go/parser AND NOT A GREP: a grep on "module.Register" would catch
+// comments, strings and homonyms; the AST, on the other hand, only keeps the
+// real calls, with the import alias actually used (which may not be
+// "module").
 func packagesQuiEnregistrent(t *testing.T, racine string) map[string]bool {
 	t.Helper()
 	trouves := map[string]bool{}
@@ -56,7 +56,7 @@ func packagesQuiEnregistrent(t *testing.T, racine string) map[string]bool {
 		}
 		if d.IsDir() {
 			nom := d.Name()
-			// Ni les dépendances, ni les artefacts : seuls nos sources.
+			// Neither dependencies nor artifacts: only our sources.
 			if nom == "vendor" || nom == "bin" || nom == ".git" || nom == "node_modules" {
 				return filepath.SkipDir
 			}
@@ -72,8 +72,8 @@ func packagesQuiEnregistrent(t *testing.T, racine string) map[string]bool {
 			t.Errorf("parsing %s: %v", chemin, err)
 			return nil
 		}
-		// Le nom local sous lequel internal/module est importé dans CE
-		// fichier (« module », ou un alias).
+		// The local name under which internal/module is imported in THIS
+		// file ("module", or an alias).
 		nomLocal := ""
 		for _, imp := range fichier.Imports {
 			if imp.Path.Value == `"`+cheminModule+`/internal/module"` {
@@ -87,7 +87,7 @@ func packagesQuiEnregistrent(t *testing.T, racine string) map[string]bool {
 			return nil
 		}
 
-		// Il faut maintenant le fichier COMPLET pour parcourir les appels.
+		// We now need the COMPLETE file to walk the calls.
 		fichier, err = parser.ParseFile(fset, chemin, nil, 0)
 		if err != nil {
 			t.Errorf("parsing %s: %v", chemin, err)
@@ -123,7 +123,7 @@ func packagesQuiEnregistrent(t *testing.T, racine string) map[string]bool {
 	return trouves
 }
 
-// importsDeAllGo renvoie les chemins importés (blank ou non) par all.go.
+// importsDeAllGo returns the paths imported (blank or not) by all.go.
 func importsDeAllGo(t *testing.T, racine string) map[string]bool {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -138,13 +138,13 @@ func importsDeAllGo(t *testing.T, racine string) map[string]bool {
 	return imports
 }
 
-// TestToutModuleEstImporteDansAllGo est le GARDE-FOU du registre.
+// TestToutModuleEstImporteDansAllGo is the GUARDRAIL of the registry.
 //
-// POURQUOI CE TEST EXISTE : un module qui appelle module.Register dans son
-// init() mais que personne n'importe ne s'enregistre JAMAIS — et Go ne dit
-// rien. L'oubli serait parfaitement silencieux : le module disparaîtrait du
-// CLI et de la console sans aucune erreur nulle part. Ce test rend l'oubli
-// bruyant, dès `make test`.
+// WHY THIS TEST EXISTS: a module that calls module.Register in its init()
+// but that nobody imports NEVER registers — and Go says nothing. The
+// omission would be perfectly silent: the module would disappear from the
+// CLI and the console with no error anywhere. This test makes the omission
+// loud, as early as `make test`.
 func TestToutModuleEstImporteDansAllGo(t *testing.T) {
 	racine := racineDepot(t)
 	enregistres := packagesQuiEnregistrent(t, racine)
@@ -156,7 +156,7 @@ func TestToutModuleEstImporteDansAllGo(t *testing.T) {
 
 	for chemin := range enregistres {
 		if chemin == cheminModule+"/internal/module" {
-			continue // le package du registre lui-même (définition, pas usage)
+			continue // the registry package itself (definition, not usage)
 		}
 		if !imports[chemin] {
 			t.Errorf("package %s registers a module but is not imported in internal/modules/all.go: its init() would never run", chemin)
@@ -164,9 +164,9 @@ func TestToutModuleEstImporteDansAllGo(t *testing.T) {
 	}
 }
 
-// TestLeRegistreContientLesTroisModules vérifie, par l'exécution réelle des
-// init() (ce package importe all.go, donc tous les modules), que le catalogue
-// attendu est bien là.
+// TestLeRegistreContientLesTroisModules verifies, through the actual
+// execution of the init() (this package imports all.go, hence every module),
+// that the expected catalog is there.
 func TestLeRegistreContientLesTroisModules(t *testing.T) {
 	for _, id := range []string{"exapps-daemon", "live-transcription", "recording"} {
 		if _, ok := module.Get(id); !ok {

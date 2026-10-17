@@ -8,11 +8,11 @@ import (
 	"testing"
 )
 
-// TestInfoValide vérifie le contrat d'affichage, et surtout la dépendance :
-// « live-transcription » sans « exapps-daemon » installé est une opération
-// vouée à l'échec (c'est HaRP qui déploie l'app). Si Requires perd cette
-// entrée, le registre ne peut plus griser le bouton ni ordonner
-// l'installation — d'où l'assertion dédiée.
+// TestInfoValide checks the display contract, and above all the dependency:
+// "live-transcription" without "exapps-daemon" installed is an operation
+// doomed to fail (it is HaRP that deploys the app). If Requires loses this
+// entry, the registry can no longer grey out the button nor order the
+// installation — hence the dedicated assertion.
 func TestInfoValide(t *testing.T) {
 	m := &transcriptionModule{}
 	info := m.Info()
@@ -37,8 +37,8 @@ func TestInfoValide(t *testing.T) {
 		t.Error("Info.Namespaces must not be empty: the ExApp workload lives in ceffio-exapps")
 	}
 
-	// LA DÉPENDANCE, explicite : sans elle l'app s'installe et ne s'active
-	// jamais, sans erreur qui pointe vers le déployeur absent.
+	// THE DEPENDENCY, explicit: without it the app installs and never
+	// activates, with no error pointing at the missing deployer.
 	trouve := false
 	for _, dep := range info.Requires {
 		if dep == "exapps-daemon" {
@@ -50,8 +50,8 @@ func TestInfoValide(t *testing.T) {
 	}
 }
 
-// TestLigneAppareillee couvre le seul morceau de logique propre au module :
-// la reconnaissance ligne par ligne, reprise de la console.
+// TestLigneAppareillee covers the only piece of logic specific to the
+// module: the line-by-line recognition, taken from the console.
 func TestLigneAppareillee(t *testing.T) {
 	sortie := "Command:\n  app_api:app:list\nExApps:\n  live_transcription 1.2.3 [enabled]\n"
 	if l := ligneAppareillee(sortie, "live_transcription"); l == "" {

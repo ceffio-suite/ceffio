@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright © MANDEM
 
-// Package module définit le contrat commun à toutes les fonctionnalités de la
-// suite Ceffio.
+// Package module defines the contract shared by every feature of the Ceffio
+// suite.
 //
-// POURQUOI CE PACKAGE EXISTE : le CLI et la console doivent pouvoir
-// installer, observer et retirer les mêmes fonctionnalités sans dupliquer la
-// logique ni se marcher dessus. En fixant ici une interface unique (et en
-// n'important aucun autre package interne), on garantit que n'importe quel
-// module — existant ou futur — est utilisable par les deux frontaux, et que
-// le registre ne peut jamais créer de cycle d'import.
+// WHY THIS PACKAGE EXISTS: the CLI and the console must be able to install,
+// observe and remove the same features without duplicating the logic or
+// stepping on each other. Fixing a single interface here (and importing no
+// other internal package) guarantees that any module — existing or future —
+// is usable by both frontends, and that the registry can never create an
+// import cycle.
 package module
 
 import (
@@ -23,10 +23,9 @@ import (
 // Module is a feature of the suite: something that can be installed,
 // observed and removed, by the CLI and by the console alike.
 //
-// POURQUOI une interface et non des fonctions libres : les deux frontaux
-// (CLI, console) parcourent le même registre ; chaque fonctionnalité décide
-// elle-même de SON installation, et le planificateur n'a qu'à appeler ces
-// quatre méthodes dans le bon ordre.
+// WHY an interface and not free functions: both frontends (CLI, console)
+// walk the same registry; each feature decides on ITS OWN installation, and
+// the scheduler only has to call these four methods in the right order.
 type Module interface {
 	Info() Info
 
@@ -43,12 +42,11 @@ type Module interface {
 	Uninstall(ctx context.Context, env Env) error
 }
 
-// Kind distingue ce qui appartient au socle de ce qui est à la carte.
+// Kind separates what belongs to the core product from what is opt-in.
 //
-// POURQUOI deux catégories : la séquence d'installation ne traite que les
-// modules Core (ils sont le produit) ; les Optional ne dépendent que d'une
-// demande explicite, ce qui évite d'imposer des gigaoctets de services à un
-// utilisateur qui n'en veut pas.
+// WHY two categories: the install sequence only handles Core modules (they
+// are the product); Optional ones depend on an explicit request, which
+// avoids forcing gigabytes of services on a user who does not want them.
 type Kind int
 
 const (
@@ -56,8 +54,8 @@ const (
 	Optional             // installed on request, from the CLI or the console
 )
 
-// Info décrit un module de façon statique : tout ce que les frontaux doivent
-// savoir SANS l'installer (affichage console, calcul d'ordre, prérequis).
+// Info describes a module statically: everything the frontends must know
+// WITHOUT installing it (console display, order computation, prerequisites).
 type Info struct {
 	ID          string // stable, kebab-case: "live-transcription"
 	Title       string // shown in the console
@@ -74,26 +72,25 @@ type Info struct {
 	Permissions []Permission // what the CONSOLE needs to install/uninstall it
 }
 
-// Service décrit une exposition publique du module.
+// Service describes a public exposure of the module.
 //
-// POURQUOI déclarative : la page de statut et le doctor doivent lister les
-// accès publics sans connaître les manifests internes de chaque module.
+// WHY declarative: the status page and the doctor must list the public
+// access points without knowing the internal manifests of each module.
 type Service struct {
 	Sub, Name, Role string // "cloud", "Nextcloud", "Files, sharing and collaboration"
 
-	// Technical marque un service destiné aux machines, pas aux humains :
-	// il reste visible pour le diagnostic mais n'est pas présenté comme un
-	// accès utilisateur.
+	// Technical marks a service meant for machines, not for humans: it
+	// stays visible for diagnostics but is not presented as a user-facing
+	// access point.
 	Technical   bool
 	PodPrefixes []string
 }
 
-// Permission décrit les droits RBAC que la CONSOLE (et non le CLI, qui
-// tourne en admin) doit obtenir pour gérer ce module.
+// Permission describes the RBAC rights the CONSOLE (not the CLI, which runs
+// as admin) must obtain to manage this module.
 //
-// POURQUOI par module : la console fonctionne avec un compte de service aux
-// droits minimaux ; chaque module déclare exactement ce dont il a besoin,
-// rien de plus.
+// WHY per module: the console runs under a service account with minimal
+// rights; each module declares exactly what it needs, nothing more.
 type Permission struct {
 	Namespace string
 	Rules     []rbacv1.PolicyRule // rbacv1 = k8s.io/api/rbac/v1
@@ -101,9 +98,9 @@ type Permission struct {
 
 // Status is the lifecycle position of a module, as observed on the cluster.
 //
-// POURQUOI une chaîne et non un booléen installé/pas installé : un module
-// peut être à moitié installé, dégradé, ou en cours de retrait — masquer ces
-// états ferait mentir le doctor et la page de statut.
+// WHY a string and not an installed/not-installed boolean: a module can be
+// half-installed, degraded, or being removed — hiding those states would
+// make the doctor and the status page lie.
 type Status string
 
 const (
@@ -117,24 +114,24 @@ const (
 
 // State is what a module reports about itself on the cluster.
 //
-// Les balises JSON existent parce que la console sérialise l'état vers le
-// navigateur ; le CLI l'affiche tel quel.
+// The JSON tags exist because the console serializes the state to the
+// browser; the CLI displays it as-is.
 type State struct {
 	Status Status `json:"status"`
 	Detail string `json:"detail,omitempty"`
 
-	// Blocked: non-empty = cannot be installed now, and why. C'est la
-	// réponse à « pourquoi le bouton installer est-il grisé ? » sans que la
-	// console ait à recalculer les dépendances elle-même.
+	// Blocked: non-empty = cannot be installed now, and why. It is the
+	// answer to "why is the install button greyed out?" without the console
+	// having to recompute the dependencies itself.
 	Blocked string `json:"blocked,omitempty"`
 }
 
 // Env carries everything a module needs to act on a cluster.
 //
-// POURQUOI un type client et non un kubeconfig : le CLI et la console
-// partagent déjà une connexion établie ; un module n'a pas à savoir qui
-// l'appelle, et Out lui permet de raconter sa progression dans le bon canal
-// (stdout pour le CLI, journal d'opération pour la console).
+// WHY a client type and not a kubeconfig: the CLI and the console already
+// share an established connection; a module does not have to know who calls
+// it, and Out lets it report its progress on the right channel (stdout for
+// the CLI, the operation log for the console).
 type Env struct {
 	Domain string
 	Kube   kubernetes.Interface // k8s.io/client-go/kubernetes

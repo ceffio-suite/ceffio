@@ -8,10 +8,10 @@ import (
 	"testing"
 )
 
-// TestInfoValide vérifie le contrat d'affichage : les frontaux (CLI, console)
-// montrent ces champs sans contrôle, donc une valeur vide ici deviendrait une
-// ligne blanche ou un bouton sans nom — et un ID non kebab-case serait refusé
-// par module.Register au démarrage.
+// TestInfoValide checks the display contract: the frontends (CLI, console)
+// show these fields without any check, so an empty value here would become a
+// blank line or a nameless button — and a non kebab-case ID would be
+// rejected by module.Register at startup.
 func TestInfoValide(t *testing.T) {
 	m := &harpModule{}
 	info := m.Info()
@@ -37,12 +37,13 @@ func TestInfoValide(t *testing.T) {
 	}
 }
 
-// TestEnregistre verifie que l'init() a bien place le module dans le registre
-// — sans quoi l'import blank de all.go ne servirait a rien.
+// TestEnregistre verifies that init() did place the module in the registry
+// — without which the blank import of all.go would serve no purpose.
 func TestEnregistre(t *testing.T) {
-	// Le simple fait que ce package compile et s'initialise exerce init();
-	// l'assertion reelle vit dans internal/modules/all_test.go, qui lit le
-	// registre global. Ici on verifie seulement la coherence de l'identifiant.
+	// The mere fact that this package compiles and initializes exercises
+	// init(); the real assertion lives in internal/modules/all_test.go,
+	// which reads the global registry. Here we only check the consistency
+	// of the identifier.
 	if (&harpModule{}).Info().ID != "exapps-daemon" {
 		t.Error("the registered ID must match the plan")
 	}

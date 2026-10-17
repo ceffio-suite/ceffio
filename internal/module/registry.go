@@ -12,30 +12,28 @@ import (
 	"sync"
 )
 
-// POURQUOI un registre global : les modules s'enregistrent depuis leur
-// propre package (init ou appel explicite au démarrage), et les deux frontaux
-// — CLI et console — ont besoin exactement de la même liste. Un registre
-// unique, rempli avant tout usage, évite de transmettre une liste de modules
-// à travers toute la pile d'appels.
+// WHY a global registry: modules register themselves from their own package
+// (init or an explicit call at startup), and both frontends — CLI and
+// console — need exactly the same list. A single registry, filled before any
+// use, avoids passing a module list through the entire call stack.
 var (
 	mu       sync.RWMutex
 	registry = map[string]Module{}
 )
 
-// kebabCase définit la forme autorisée des identifiants de module.
+// kebabCase defines the allowed shape of module identifiers.
 //
-// POURQUOI aussi strict : l'ID sert de clé dans le registre, apparaît dans
-// les noms de ressources Kubernetes et dans l'URL de la console ; un ID
-// fantaisiste casserait silencieusement ces trois usages. On le refuse donc
-// dès l'enregistrement, au démarrage, plutôt qu'à l'exécution.
+// WHY so strict: the ID serves as the registry key, appears in Kubernetes
+// resource names and in the console URL; a fanciful ID would silently break
+// all three uses. It is therefore rejected at registration time, at startup,
+// rather than at runtime.
 var kebabCase = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
 // Register adds a module to the global registry.
 //
-// Elle PANIQUE en cas d'ID vide, d'ID déjà pris ou d'ID non kebab-case :
-// ce sont des erreurs de programmation, détectables au démarrage ; mieux
-// vaut un échec bruyant et immédiat qu'un module introuvable ou écrasé des
-// heures plus tard.
+// It PANICS on an empty ID, an already-taken ID or a non kebab-case ID:
+// these are programming errors, detectable at startup; a loud, immediate
+// failure beats a missing or overwritten module discovered hours later.
 func Register(m Module) {
 	info := m.Info()
 	id := info.ID
@@ -68,24 +66,24 @@ func Get(id string) (Module, bool) {
 // All returns every registered module in dependency order: a module always
 // appears AFTER the modules it requires.
 //
-// Le tri est topologique et DÉTERMINISTE (les ex æquo sont départagés par
-// ordre alphabétique d'ID), pour que le CLI et la console déroulent la même
-// séquence à chaque exécution.
+// The sort is topological and DETERMINISTIC (ties are broken by
+// alphabetical ID order), so that the CLI and the console run the same
+// sequence on every execution.
 //
-// Elle PANIQUE dans deux cas, tous deux des erreurs de programmation qui
-// doivent tomber au premier appel plutôt que produire une séquence fausse :
-//   - une dépendance déclare un ID inconnu : l'ignorer silencieusement
-//     ferait installer un module avant son prérequis absent ;
-//   - les dépendances forment un cycle : aucun ordre d'installation ne peut
-//     le satisfaire, le message de panique contient le cycle lisible
-//     (ex. "a -> b -> a") pour localiser l'erreur immédiatement.
+// It PANICS in two cases, both programming errors that must fail on the
+// first call rather than produce a wrong sequence:
+//   - a dependency declares an unknown ID: silently ignoring it would
+//     install a module before its missing prerequisite;
+//   - the dependencies form a cycle: no install order can satisfy it, and
+//     the panic message contains the readable cycle (e.g. "a -> b -> a") to
+//     locate the error immediately.
 func All() []Module {
 	mu.RLock()
 	defer mu.RUnlock()
 
-	// Vérification préalable : toute dépendance doit être enregistrée. C'est
-	// fait au PREMIER appel de All (et non dans Register) parce qu'un module
-	// peut être enregistré avant sa dépendance, selon l'ordre des init.
+	// Up-front check: every dependency must be registered. This is done on
+	// the FIRST call of All (and not in Register) because a module may be
+	// registered before its dependency, depending on init order.
 	ids := make([]string, 0, len(registry))
 	for id := range registry {
 		ids = append(ids, id)
@@ -109,15 +107,15 @@ func All() []Module {
 	return out
 }
 
-// topoSort trie les IDs par ordre topologique (dépendances d'abord) via un
-// parcours DFS coloré. Les nœuds sont visités en ordre alphabétique pour
-// garantir un résultat déterministe, et le chemin DFS en cours est conservé
-// pour pouvoir nommer le cycle exact en cas de retour arrière.
+// topoSort sorts the IDs in topological order (dependencies first) via a
+// colored DFS walk. Nodes are visited in alphabetical order to guarantee a
+// deterministic result, and the current DFS path is kept so the exact cycle
+// can be named on a back edge.
 func topoSort(ids []string) []string {
 	const (
-		white = 0 // jamais visité
-		grey  = 1 // en cours de visite : sur le chemin DFS actuel
-		black = 2 // terminé : tous ses dépendants sont déjà triés
+		white = 0 // never visited
+		grey  = 1 // being visited: on the current DFS path
+		black = 2 // done: all its dependencies are already sorted
 	)
 
 	color := map[string]int{}
@@ -130,8 +128,9 @@ func topoSort(ids []string) []string {
 		case black:
 			return
 		case grey:
-			// On retombe sur un nœud du chemin courant : cycle. On extrait le
-			// cycle depuis la première occurrence pour le rendre lisible.
+			// We land back on a node of the current path: cycle. We
+			// extract the cycle from its first occurrence to make it
+			// readable.
 			start := 0
 			for i, p := range path {
 				if p == id {
@@ -146,7 +145,7 @@ func topoSort(ids []string) []string {
 		color[id] = grey
 		path = append(path, id)
 
-		// Dépendances visitées en ordre alphabétique : déterminisme.
+		// Dependencies visited in alphabetical order: determinism.
 		deps := append([]string{}, registry[id].Info().Requires...)
 		sort.Strings(deps)
 		for _, dep := range deps {
@@ -164,19 +163,19 @@ func topoSort(ids []string) []string {
 	return ordered
 }
 
-// Blocked renvoie la raison (phrase anglaise complète) pour laquelle m ne
-// peut pas être installé maintenant, ou une chaîne vide s'il peut l'être.
+// Blocked returns the reason (a full English sentence) why m cannot be
+// installed now, or an empty string if it can.
 //
-// POURQUOI interroger l'état réel et non le seul registre : une dépendance
-// « enregistrée » peut être absente ou dégradée sur le cluster ; seule sa
-// State observée dit la vérité. La raison retournée alimente directement le
-// champ State.Blocked et le message de la console.
+// WHY query the actual state and not the registry alone: a "registered"
+// dependency may be absent or degraded on the cluster; only its observed
+// State tells the truth. The returned reason feeds directly into the
+// State.Blocked field and the console message.
 func Blocked(ctx context.Context, env Env, m Module) string {
 	for _, dep := range m.Info().Requires {
 		mod, ok := Get(dep)
 		if !ok {
-			// Cas normalement déjà refusé par All ; on reste défensif car
-			// Blocked peut être appelé sur un module construit à la main.
+			// Case normally already rejected by All; we stay defensive
+			// because Blocked can be called on a hand-built module.
 			return fmt.Sprintf("required module %q is not registered", dep)
 		}
 
@@ -192,11 +191,11 @@ func Blocked(ctx context.Context, env Env, m Module) string {
 	return ""
 }
 
-// reinitialiserPourTest vide le registre global.
+// reinitialiserPourTest empties the global registry.
 //
-// Non exportée : elle n'a de sens que pour les tests de CE package, qui
-// doivent pouvoir repartir d'un registre vierge à chaque sous-test sans que
-// les enregistrements d'un test ne fuient dans le suivant.
+// Unexported: it only makes sense for the tests of THIS package, which must
+// be able to start from a clean registry on each sub-test without one
+// test's registrations leaking into the next.
 func reinitialiserPourTest() {
 	mu.Lock()
 	defer mu.Unlock()

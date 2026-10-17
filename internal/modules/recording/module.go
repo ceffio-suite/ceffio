@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright © MANDEM
 
-// Package recording enveloppe le serveur d'enregistrement des appels Talk en
-// module du registre.
+// Package recording wraps the Talk call recording server as a registry
+// module.
 //
-// POURQUOI UN ENVELOPPEMENT ET NON UNE RÉÉCRITURE : l'installation existe
-// déjà dans internal/recording (secrets, Deployment/Service, branchement de
-// Talk). La seule fonctionnalité AJOUTÉE par ce lot est la désinstallation —
-// elle n'existait nulle part ; elle est écrite dans internal/recording, au
-// plus près de l'installation dont elle est le miroir exact.
+// WHY A WRAPPER AND NOT A REWRITE: the install already exists in
+// internal/recording (secrets, Deployment/Service, Talk wiring). The only
+// feature ADDED by this batch is the uninstall — it existed nowhere; it is
+// written in internal/recording, as close as possible to the install it
+// mirrors exactly.
 package recording
 
 import (
@@ -23,22 +23,22 @@ import (
 )
 
 const (
-	// Le namespace du serveur d'enregistrement — le même que la couche
-	// Talk/signaling/Janus (internal/recording/recording.go, ns).
+	// The recording server namespace — the same as the
+	// Talk/signaling/Janus layer (internal/recording/recording.go, ns).
 	nsVideo = "ceffio-video"
 
-	// Le namespace de Nextcloud : le réglage Talk s'y écrit via occ.
+	// The Nextcloud namespace: the Talk setting is written there via occ.
 	nsNextcloud = "ceffio-files"
 )
 
-// recordingModule est le module « recording ».
+// recordingModule is the "recording" module.
 type recordingModule struct{}
 
 func init() { module.Register(&recordingModule{}) }
 
-// Info décrit le serveur d'enregistrement. Resources est vide : la charge est
-// limitée à 2 Gi de RAM (manifeste de deployRecorder) et ne télécharge aucun
-// modèle — négligeable devant les composants voisins.
+// Info describes the recording server. Resources is empty: the workload is
+// limited to 2 Gi of RAM (deployRecorder manifest) and downloads no model —
+// negligible next to the neighbouring components.
 func (m *recordingModule) Info() module.Info {
 	return module.Info{
 		ID:          "recording",
@@ -48,12 +48,13 @@ func (m *recordingModule) Info() module.Info {
 		Default:     true,
 		Namespaces:  []string{nsVideo},
 
-		// Permissions : sous-ensemble du ClusterRole ceffio-admin-namespaces
-		// (internal/console/deploy.go) déjà lié dans ceffio-video, limité à
-		// ce que le déploiement touche : le ServiceAccount, le Deployment et
-		// le Service du recorder. L'entrée ceffio-files reproduit le Role
-		// ceffio-console-occ : le branchement de Talk (config:app:set
-		// spreed recording_servers) passe par occ dans le pod Nextcloud.
+		// Permissions: a subset of the ClusterRole ceffio-admin-namespaces
+		// (internal/console/deploy.go) already bound in ceffio-video,
+		// limited to what the deployment touches: the ServiceAccount, the
+		// Deployment and the Service of the recorder. The ceffio-files
+		// entry reproduces the Role ceffio-console-occ: the Talk wiring
+		// (config:app:set spreed recording_servers) goes through occ in
+		// the Nextcloud pod.
 		Permissions: []module.Permission{
 			{
 				Namespace: nsVideo,
@@ -89,20 +90,20 @@ func (m *recordingModule) Info() module.Info {
 	}
 }
 
-// Install délègue à recording.Deploy, inchangé.
+// Install delegates to recording.Deploy, unchanged.
 func (m *recordingModule) Install(ctx context.Context, env module.Env) error {
 	return recording.Deploy(ctx, env.Domain)
 }
 
-// State lit le cluster : le Deployment prêt, et le branchement dans Talk.
+// State reads the cluster: the Deployment ready, and the wiring in Talk.
 //
-// POURQUOI DEUX LECTURES : un recorder qui tourne mais que Talk ne connaît
-// pas laisse le bouton d'enregistrement grisé — exactement le symptôme que
-// l'installation existante corrige, et que l'état doit savoir nommer.
-// (La configuration du signaling n'est PAS lue : il n'existe aucun bloc
-// [recording] dans sa configuration — voir la note détaillée de
-// internal/talk/talk.go, vérifiée contre les sources du signaling. Talk
-// appelle le recorder directement en HTTP.)
+// WHY TWO READS: a recorder that runs but that Talk does not know leaves the
+// recording button greyed out — exactly the symptom the existing install
+// fixes, and that the state must be able to name.
+// (The signaling configuration is NOT read: there is no [recording] block in
+// its configuration — see the detailed note in internal/talk/talk.go,
+// verified against the signaling sources. Talk calls the recorder directly
+// over HTTP.)
 func (m *recordingModule) State(ctx context.Context, env module.Env) module.State {
 	cli, err := k8sapi.Nouveau()
 	if err != nil {
@@ -110,16 +111,15 @@ func (m *recordingModule) State(ctx context.Context, env module.Env) module.Stat
 	}
 	pret := cli.DeploiementPret(ctx, nsVideo, "talk-recording")
 
-	// Le réglage Talk se lit via occ dans le pod Nextcloud. Un exec
-	// impossible laisse branche à false, comme pour le déployeur : on ne
-	// conclut jamais « branché » sur un échec.
+	// The Talk setting is read via occ in the Nextcloud pod. An impossible
+	// exec leaves branche at false, like for the deployer: we never
+	// conclude "wired" on a failure.
 	branche := false
 	if pod, err := cli.PodDuDeploiement(ctx, nsNextcloud, "nextcloud", "nextcloud"); err == nil {
 		if sortie, err := cli.Executer(ctx, nsNextcloud, pod, "nextcloud",
 			"php", "occ", "config:app:get", "spreed", "recording_servers"); err == nil {
-			// config:app:get renvoie une chaîne vide ou « null » quand le
-			// réglage n'a jamais été posé : ni l'une ni l'autre ne veut
-			// dire « branché ».
+			// config:app:get returns an empty string or "null" when the
+			// setting has never been set: neither one means "wired".
 			valeur := strings.TrimSpace(sortie)
 			branche = valeur != "" && valeur != "null"
 		}
@@ -143,9 +143,9 @@ func (m *recordingModule) State(ctx context.Context, env module.Env) module.Stat
 	}
 }
 
-// Uninstall délègue à recording.Remove — la fonction ÉCRITE pour ce lot,
-// miroir exact de Deploy : elle retire le réglage Talk, le Deployment, le
-// Service et le ServiceAccount.
+// Uninstall delegates to recording.Remove — the function WRITTEN for this
+// batch, the exact mirror of Deploy: it removes the Talk setting, the
+// Deployment, the Service and the ServiceAccount.
 func (m *recordingModule) Uninstall(ctx context.Context, env module.Env) error {
 	return recording.Remove(ctx)
 }

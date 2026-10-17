@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright © MANDEM
 
-// Package transcription enveloppe la transcription en direct (ExApp Talk) en
-// module du registre.
+// Package transcription wraps live transcription (Talk ExApp) as a registry
+// module.
 //
-// POURQUOI UN ENVELOPPEMENT ET NON UNE RÉÉCRITURE : l'installation
-// (enregistrement + activation + vérification) et la suppression complètes
-// existent déjà dans internal/exapps. Ce package les branche sur
-// module.Module ; la logique d'état est DÉPLACÉE ici depuis la console
-// (repondreEtatTranscription, internal/console/transcription.go) pour que le
-// CLI et la console interrogent AppAPI exactement de la même façon.
+// WHY A WRAPPER AND NOT A REWRITE: the full install (registration +
+// activation + verification) and removal already exist in internal/exapps.
+// This package plugs them into module.Module; the state logic is MOVED here
+// from the console (repondreEtatTranscription,
+// internal/console/transcription.go) so that the CLI and the console query
+// AppAPI in exactly the same way.
 package transcription
 
 import (
@@ -24,25 +24,25 @@ import (
 )
 
 const (
-	// L'identifiant de l'app, tel que Nextcloud la connaît — le même que
-	// internal/exapps/transcription.go (appTranscription, non exporté).
+	// The app identifier, as Nextcloud knows it — the same as
+	// internal/exapps/transcription.go (appTranscription, unexported).
 	appTranscription = "live_transcription"
 
-	// Les namespaces concernés : celui des ExApp (la charge de travail que
-	// HaRP y déploie) et celui de Nextcloud (l'occ qui pilote AppAPI).
+	// The namespaces involved: the ExApp one (the workload HaRP deploys
+	// there) and the Nextcloud one (the occ that drives AppAPI).
 	nsExapps    = "ceffio-exapps"
 	nsNextcloud = "ceffio-files"
 )
 
-// transcriptionModule est le module « live-transcription ».
+// transcriptionModule is the "live-transcription" module.
 type transcriptionModule struct{}
 
 func init() { module.Register(&transcriptionModule{}) }
 
-// Info décrit l'app. Resources et Warning sont repris TELS QUELS des textes
-// existants : le commentaire de internal/exapps/transcription.go (poids et
-// irréversibilité des variables d'environnement) et
-// internal/console/web/index.html (onglet Transcription).
+// Info describes the app. Resources and Warning are taken VERBATIM from the
+// existing texts: the comment of internal/exapps/transcription.go (weight
+// and irreversibility of the environment variables) and
+// internal/console/web/index.html (Transcription tab).
 func (m *transcriptionModule) Info() module.Info {
 	return module.Info{
 		ID:          "live-transcription",
@@ -51,22 +51,23 @@ func (m *transcriptionModule) Info() module.Info {
 		Kind:        module.Optional,
 		Default:     false,
 
-		// L'app ne peut pas s'installer sans le déployeur : c'est HaRP qui
-		// crée sa charge de travail. La dépendance est déclarée ici, et le
-		// registre (module.All, module.Blocked) en tire l'ordre et le
-		// blocage — la console n'a plus à recalculer.
+		// The app cannot install without the deployer: it is HaRP that
+		// creates its workload. The dependency is declared here, and the
+		// registry (module.All, module.Blocked) derives the order and the
+		// blocking from it — the console no longer has to recompute.
 		Requires:   []string{"exapps-daemon"},
 		Namespaces: []string{nsExapps},
 
 		Resources: "~9 GB disk, ~16 GB RAM",
 		Warning:   "Its settings cannot be changed once installed — the app has to be removed and installed again.",
 
-		// Permissions : l'app vit dans ceffio-exapps (charge, Service, PVC
-		// créés par HaRP — la console les liste pour l'état et le nettoyage),
-		// et son installation passe par occ dans le pod Nextcloud. Les règles
-		// reprennent le sous-ensemble du ClusterRole ceffio-admin-namespaces
-		// (internal/console/deploy.go) déjà accordé dans ces namespaces, et
-		// l'entrée ceffio-files reproduit le Role ceffio-console-occ.
+		// Permissions: the app lives in ceffio-exapps (workload, Service,
+		// PVC created by HaRP — the console lists them for state and
+		// cleanup), and its installation goes through occ in the Nextcloud
+		// pod. The rules reproduce the subset of the ClusterRole
+		// ceffio-admin-namespaces (internal/console/deploy.go) already
+		// granted in these namespaces, and the ceffio-files entry
+		// reproduces the Role ceffio-console-occ.
 		Permissions: []module.Permission{
 			{
 				Namespace: nsExapps,
@@ -102,26 +103,26 @@ func (m *transcriptionModule) Info() module.Info {
 	}
 }
 
-// Install délègue à exapps.TranscriptionDeploye, inchangé : enregistrement
-// SANS --wait-finish, activation, puis relecture de l'état.
+// Install delegates to exapps.TranscriptionDeploye, unchanged: registration
+// WITHOUT --wait-finish, activation, then a re-read of the state.
 func (m *transcriptionModule) Install(ctx context.Context, env module.Env) error {
 	return exapps.TranscriptionDeploye(ctx, env.Domain)
 }
 
-// State est la logique de repondreEtatTranscription
-// (internal/console/transcription.go), DÉPLACÉE ici telle quelle : on
-// interroge AppAPI via occ — jamais un fichier ni une supposition — et un
-// échec d'interrogation donne Unknown, PAS Absent.
+// State is the logic of repondreEtatTranscription
+// (internal/console/transcription.go), MOVED here as-is: AppAPI is queried
+// via occ — never a file, never a guess — and a failed query yields Unknown,
+// NOT Absent.
 //
-// Le blocage (déployeur indisponible) est calculé par module.Blocked : c'est
-// l'équivalent exact de l'appel à exapps.DeployeurPret que faisait la console
-// pour griser le bouton, mais exprimé à travers la dépendance déclarée.
+// The blocking (deployer unavailable) is computed by module.Blocked: it is
+// the exact equivalent of the call to exapps.DeployeurPret the console made
+// to grey out the button, but expressed through the declared dependency.
 func (m *transcriptionModule) State(ctx context.Context, env module.Env) module.State {
 	etat := module.State{Blocked: module.Blocked(ctx, env, m)}
 
-	// occ s'exécute via l'API Kubernetes (remotecommand) : le conteneur de
-	// la console est distroless, sans shell ni kubectl. k8sapi.Client est le
-	// chemin unique déjà éprouvé dans les deux contextes.
+	// occ runs through the Kubernetes API (remotecommand): the console
+	// container is distroless, with neither shell nor kubectl. k8sapi.Client
+	// is the single path already proven in both contexts.
 	cli, err := k8sapi.Nouveau()
 	if err != nil {
 		etat.Status = module.Unknown
@@ -137,9 +138,9 @@ func (m *transcriptionModule) State(ctx context.Context, env module.Env) module.
 	sortie, err := cli.Executer(ctx, nsNextcloud, pod, "nextcloud",
 		"php", "occ", "app_api:app:list")
 	if err != nil {
-		// On ne conclut PAS « absente » sur un échec : l'app tourne peut-être
-		// déjà, et proposer une installation par-dessus serait pire que de
-		// dire qu'on ne sait pas.
+		// We do NOT conclude "absent" on a failure: the app may already
+		// be running, and offering an install on top of it would be worse
+		// than saying we do not know.
 		etat.Status = module.Unknown
 		etat.Detail = "AppAPI injoignable : " + strings.TrimSpace(err.Error())
 		return etat
@@ -154,19 +155,18 @@ func (m *transcriptionModule) State(ctx context.Context, env module.Env) module.
 	return etat
 }
 
-// Uninstall délègue à exapps.TranscriptionSupprime, inchangé : désactivation,
-// désenregistrement (HaRP supprime alors charge, Service et volume), attente
-// de disparition effective.
+// Uninstall delegates to exapps.TranscriptionSupprime, unchanged:
+// deactivation, deregistration (HaRP then deletes the workload, the Service
+// and the volume), wait for the actual disappearance.
 func (m *transcriptionModule) Uninstall(ctx context.Context, env module.Env) error {
 	return exapps.TranscriptionSupprime(ctx)
 }
 
-// ligneAppareillee renvoie la première ligne qui MENTIONNE l'app, ou "".
+// ligneAppareillee returns the first line that MENTIONS the app, or "".
 //
-// Reprise de internal/console/transcription.go : on travaille ligne par ligne
-// plutôt que par un « contains » global — le nom apparaît aussi dans les
-// libellés, et un contains global déclarerait installée une app seulement
-// citée.
+// Taken from internal/console/transcription.go: we work line by line rather
+// than with a global "contains" — the name also appears in the labels, and a
+// global contains would declare installed an app that is merely mentioned.
 func ligneAppareillee(texte, app string) string {
 	for _, l := range strings.Split(texte, "\n") {
 		prop := strings.TrimSpace(l)

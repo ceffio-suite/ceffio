@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright © MANDEM
 
-// Package exappsdaemon enveloppe HaRP, le déployeur d'applications externes,
-// en module du registre.
+// Package exappsdaemon wraps HaRP, the external application deployer, as a
+// registry module.
 //
-// POURQUOI UN ENVELOPPEMENT ET NON UNE RÉÉCRITURE : l'installation et le
-// retrait existent déjà dans internal/exapps et ont été éprouvés en production
-// (RBAC, coffre, enregistrement AppAPI, ordre des suppressions). Ce package se
-// contente de les brancher sur le contrat module.Module ; la seule logique qui
-// lui est propre est l'état, DÉPLACÉE ici depuis la console
-// (repondreEtatDeployeur, internal/console/exapps.go) pour que le CLI et la
-// console lisent exactement la même vérité.
+// WHY A WRAPPER AND NOT A REWRITE: install and removal already exist in
+// internal/exapps and have been proven in production (RBAC, vault, AppAPI
+// registration, deletion order). This package only plugs them into the
+// module.Module contract; the only logic that is its own is the state, MOVED
+// here from the console (repondreEtatDeployeur, internal/console/exapps.go)
+// so that the CLI and the console read exactly the same truth.
 package exappsdaemon
 
 import (
@@ -25,23 +24,23 @@ import (
 )
 
 const (
-	// Le namespace où vivent les charges des ExApp. Repris de deploy.go
-	// (namespacesPlateforme) et du commentaire de exapps.NomsHarp.
+	// The namespace where the ExApp workloads live. Taken from deploy.go
+	// (namespacesPlateforme) and from the comment of exapps.NomsHarp.
 	nsExapps = "ceffio-exapps"
 
-	// Le namespace de Nextcloud : c'est LÀ que tourne l'occ qui enregistre le
-	// déployeur dans AppAPI, et la lecture d'état doit passer par lui.
+	// The Nextcloud namespace: THAT is where the occ that registers the
+	// deployer in AppAPI runs, and the state read must go through it.
 	nsNextcloud = "ceffio-files"
 )
 
-// harpModule est le module « exapps-daemon ».
+// harpModule is the "exapps-daemon" module.
 type harpModule struct{}
 
 func init() { module.Register(&harpModule{}) }
 
-// Info décrit le déployeur. Les textes Description et Warning sont repris
-// TELS QUELS de l'interface existante (internal/console/web/index.html,
-// onglet ExApps) : ce sont ceux que l'exploitant lit déjà.
+// Info describes the deployer. The Description and Warning texts are taken
+// VERBATIM from the existing interface (internal/console/web/index.html,
+// ExApps tab): they are the ones the operator already reads.
 func (m *harpModule) Info() module.Info {
 	return module.Info{
 		ID:          "exapps-daemon",
@@ -51,17 +50,17 @@ func (m *harpModule) Info() module.Info {
 		Default:     false,
 		Namespaces:  []string{nsExapps},
 
-		// Permissions : sous-ensemble des règles que le ClusterRole
-		// ceffio-admin-namespaces accorde déjà dans chaque namespace de la
-		// plateforme (internal/console/deploy.go), limité à ce que le
-		// déploiement de HaRP touche réellement dans ceffio-exapps :
+		// Permissions: a subset of the rules the ClusterRole
+		// ceffio-admin-namespaces already grants in every platform
+		// namespace (internal/console/deploy.go), limited to what the HaRP
+		// deployment actually touches in ceffio-exapps:
 		//   - ServiceAccount/Role/RoleBinding (creerRBAC),
 		//   - Deployment/Service/Ingress (deployerHarp),
-		//   - PVC (supprimerPVC au retrait), pods (lecture d'état).
-		// L'entrée ceffio-files reproduit EXACTEMENT le Role
-		// ceffio-console-occ de deploy.go : c'est le droit d'exécuter occ
-		// dans le pod Nextcloud, nécessaire pour enregistrer le déployeur
-		// dans AppAPI et pour lire son état.
+		//   - PVC (supprimerPVC on removal), pods (state read).
+		// The ceffio-files entry reproduces EXACTLY the Role
+		// ceffio-console-occ of deploy.go: it is the right to run occ in
+		// the Nextcloud pod, needed to register the deployer in AppAPI and
+		// to read its state.
 		Permissions: []module.Permission{
 			{
 				Namespace: nsExapps,
@@ -109,27 +108,27 @@ func (m *harpModule) Info() module.Info {
 	}
 }
 
-// Install délègue à exapps.Deploy, inchangé : il crée le namespace, le RBAC
-// du déployeur, la clé partagée dans le coffre, le pod HaRP, puis
-// l'enregistrement dans AppAPI.
+// Install delegates to exapps.Deploy, unchanged: it creates the namespace,
+// the deployer RBAC, the shared key in the vault, the HaRP pod, then the
+// registration in AppAPI.
 //
-// La progression est écrite sur stdout par exapps.Deploy lui-même ; la
-// réaiguiller vers env.Out demanderait de modifier ses signatures, ce que ce
-// lot s'interdit.
+// Progress is written to stdout by exapps.Deploy itself; rerouting it to
+// env.Out would require changing its signatures, which this batch forbids
+// itself.
 func (m *harpModule) Install(ctx context.Context, env module.Env) error {
 	return exapps.Deploy(ctx, env.Domain)
 }
 
-// State est la logique de repondreEtatDeployeur (internal/console/exapps.go),
-// DÉPLACÉE ici telle quelle : les deux lectures — le pod HaRP prêt, et
-// l'enregistrement dans AppAPI — et les quatre cas qui en découlent.
+// State is the logic of repondreEtatDeployeur (internal/console/exapps.go),
+// MOVED here as-is: the two reads — the HaRP pod ready, and the registration
+// in AppAPI — and the four cases that follow from them.
 //
-// POURQUOI k8sapi ET PAS env.Kube : la vérification de l'enregistrement passe
-// par un exec SPDY dans le pod Nextcloud, qui exige un *rest.Config — pas
-// seulement un kubernetes.Interface. k8sapi.Client exporte déjà exactement les
-// trois briques nécessaires (DeploiementPret, PodDuDeploiement, Executer) et
-// résout la configuration dans les deux contextes (in-cluster pour la console,
-// kubeconfig pour le CLI). Rien à exporter de plus.
+// WHY k8sapi AND NOT env.Kube: the registration check goes through a SPDY
+// exec in the Nextcloud pod, which requires a *rest.Config — not just a
+// kubernetes.Interface. k8sapi.Client already exports exactly the three
+// building blocks needed (DeploiementPret, PodDuDeploiement, Executer) and
+// resolves the configuration in both contexts (in-cluster for the console,
+// kubeconfig for the CLI). Nothing more to export.
 func (m *harpModule) State(ctx context.Context, env module.Env) module.State {
 	cli, err := k8sapi.Nouveau()
 	if err != nil {
@@ -138,9 +137,9 @@ func (m *harpModule) State(ctx context.Context, env module.Env) module.State {
 	nomHarp, nsHarp := exapps.NomsHarp()
 	installe := cli.DeploiementPret(ctx, nsHarp, nomHarp)
 
-	// L'enregistrement dans AppAPI se lit via occ dans le pod Nextcloud. Un
-	// exec impossible (pod absent) laisse enregistre à false, comme la
-	// console : on ne conclut jamais « enregistré » sur un échec.
+	// The registration in AppAPI is read via occ in the Nextcloud pod. An
+	// impossible exec (pod absent) leaves enregistre at false, like the
+	// console: we never conclude "registered" on a failure.
 	enregistre := false
 	if pod, err := cli.PodDuDeploiement(ctx, nsNextcloud, "nextcloud", "nextcloud"); err == nil {
 		if sortie, err := cli.Executer(ctx, nsNextcloud, pod, "nextcloud",
@@ -153,10 +152,10 @@ func (m *harpModule) State(ctx context.Context, env module.Env) module.State {
 	case installe && enregistre:
 		return module.State{Status: module.Installed}
 	case installe && !enregistre:
-		// Le plus sournois des quatre cas : HaRP tourne, mais Nextcloud ne
-		// le connaît pas. Les ExApp s'installent alors sans jamais
-		// s'activer, et rien dans les journaux ne pointe vers
-		// l'enregistrement. Le détail nommé ici évite la chasse.
+		// The sneakiest of the four cases: HaRP runs, but Nextcloud does
+		// not know it. ExApps then install without ever activating, and
+		// nothing in the logs points at the registration. Naming the
+		// detail here avoids the hunt.
 		return module.State{
 			Status: module.Degraded,
 			Detail: "HaRP tourne mais n'est pas enregistre dans Nextcloud : les applications s'installeraient sans jamais s'activer.",
@@ -171,15 +170,16 @@ func (m *harpModule) State(ctx context.Context, env module.Env) module.State {
 	}
 }
 
-// Uninstall délègue à exapps.Remove, inchangé : il retire d'abord les ExApp
-// attachées (AppAPI refuse de retirer un déployeur qui en porte encore), puis
-// l'enregistrement, puis les ressources Kubernetes et les volumes.
+// Uninstall delegates to exapps.Remove, unchanged: it first removes the
+// attached ExApps (AppAPI refuses to remove a deployer that still carries
+// some), then the registration, then the Kubernetes resources and the
+// volumes.
 //
-// VÉRIFIÉ : exapps.Remove NE supprime PAS le namespace ceffio-exapps — le
-// commentaire du code (« LE NAMESPACE N'EST PAS SUPPRIMÉ, et c'est
-// délibéré ») et la liste des suppressions le confirment. C'est cohérent
-// avec Preparer, qui le crée pour l'installation : le namespace appartient à
-// la plateforme, pas au déployeur.
+// VERIFIED: exapps.Remove does NOT delete the ceffio-exapps namespace — the
+// code comment ("LE NAMESPACE N'EST PAS SUPPRIMÉ, et c'est délibéré") and
+// the list of deletions confirm it. This is consistent with Preparer, which
+// creates it for the install: the namespace belongs to the platform, not to
+// the deployer.
 func (m *harpModule) Uninstall(ctx context.Context, env module.Env) error {
 	return exapps.Remove(ctx)
 }

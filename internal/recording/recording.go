@@ -58,12 +58,12 @@ var image = imageDuRegistre()
 //  2. the Deployment + Service
 //  3. the Talk setting that points Nextcloud at it
 //
-// PAS DE BLOC [recording] DANS LE SIGNALING, et c'est délibéré : ce bloc a
-// été essayé puis retiré après vérification contre les sources du signaling,
-// où « recording » ne retourne rien. Le signaling ne participe pas à
-// l'enregistrement — Talk appelle le serveur d'enregistrement directement en
-// HTTP. Le détail est dans internal/talk/talk.go. Ce commentaire annonçait
-// l'étape 2 pendant que le code ne la faisait pas.
+// NO [recording] BLOCK IN THE SIGNALING, and this is deliberate: that block
+// was tried then removed after checking against the signaling sources, where
+// grepping for "recording" returns NOTHING. The signaling takes no part in
+// recording — Talk calls the recording server directly over HTTP. The detail
+// is in internal/talk/talk.go. That comment used to announce step 2 while the
+// code did not perform it.
 func Deploy(ctx context.Context, domain string) error {
 	fmt.Println("\nDeploying the call recording server (Phase 14)...")
 

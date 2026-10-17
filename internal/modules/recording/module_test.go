@@ -10,7 +10,7 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/module"
 )
 
-// TestInfoValide vérifie le contrat d'affichage du module.
+// TestInfoValide checks the display contract of the module.
 func TestInfoValide(t *testing.T) {
 	m := &recordingModule{}
 	info := m.Info()
@@ -35,9 +35,9 @@ func TestInfoValide(t *testing.T) {
 		t.Error("Info.Namespaces must not be empty: the recorder lives in ceffio-video")
 	}
 
-	// Le plan impose Optional ET installé par défaut : `ceffio install` le
-	// pose, `--without recording` l'écarte. Une inversion ici changerait
-	// silencieusement ce que reçoit chaque installation.
+	// The plan requires Optional AND installed by default: `ceffio install`
+	// lays it down, `--without recording` sets it aside. Flipping this here
+	// would silently change what every installation receives.
 	if info.Kind != module.Optional {
 		t.Errorf("Kind = %v, expected module.Optional", info.Kind)
 	}

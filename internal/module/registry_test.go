@@ -10,9 +10,9 @@ import (
 	"testing"
 )
 
-// fauxModule est un module factice minimal pour tester le registre sans
-// toucher au cluster. Son état est figé (etat) pour que Blocked soit
-// testable de façon déterministe.
+// fauxModule is a minimal fake module to test the registry without touching
+// the cluster. Its state is frozen (etat) so that Blocked is testable
+// deterministically.
 type fauxModule struct {
 	info Info
 	etat State
@@ -26,18 +26,18 @@ func (f *fauxModule) State(context.Context, Env) State { return f.etat }
 
 func (f *fauxModule) Uninstall(context.Context, Env) error { return nil }
 
-// nouveauFaux construit un module factice avec le strict nécessaire.
+// nouveauFaux builds a fake module with the strict minimum.
 func nouveauFaux(id string, requires ...string) *fauxModule {
 	return &fauxModule{info: Info{ID: id, Requires: requires}}
 }
 
-// envFactice fournit un Env inutilisable côté cluster mais suffisant pour
-// les tests de Blocked, qui n'appellent jamais Kube.
+// envFactice provides an Env that is unusable on the cluster side but
+// sufficient for the Blocked tests, which never call Kube.
 func envFactice() Env {
 	return Env{Domain: "test.local", Kube: nil, Out: io.Discard}
 }
 
-// capturePanic exécute fn et renvoie le message de panique éventuel.
+// capturePanic runs fn and returns the panic message, if any.
 func capturePanic(fn func()) (msg string, panicked bool) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -130,7 +130,7 @@ func TestRegistry(t *testing.T) {
 	t.Run("all returns topological order", func(t *testing.T) {
 		reinitialiserPourTest()
 
-		// Enregistrement dans le désordre : c'est All qui doit rétablir l'ordre.
+		// Registered out of order: it is All that must restore the order.
 		Register(nouveauFaux("talk", "identity"))
 		Register(nouveauFaux("live-transcription", "talk", "identity"))
 		Register(nouveauFaux("identity"))
@@ -158,9 +158,9 @@ func TestRegistry(t *testing.T) {
 	t.Run("all is deterministic", func(t *testing.T) {
 		reinitialiserPourTest()
 
-		// Trois modules indépendants enregistrés en désordre : les maps Go
-		// étant non ordonnées, seul le tri alphabétique garantit un ordre
-		// stable d'un appel à l'autre.
+		// Three independent modules registered out of order: Go maps being
+		// unordered, only the alphabetical sort guarantees a stable order
+		// from one call to the next.
 		Register(nouveauFaux("zeta"))
 		Register(nouveauFaux("alpha"))
 		Register(nouveauFaux("mid"))
@@ -270,7 +270,7 @@ func TestBlocked(t *testing.T) {
 	})
 
 	t.Run("reason when dependency not registered", func(t *testing.T) {
-		// Cas défensif : Blocked appelé sur un module jamais passé par All.
+		// Defensive case: Blocked called on a module that never went through All.
 		m := nouveauFaux("orphelin", "fantome")
 
 		reason := Blocked(context.Background(), envFactice(), m)
