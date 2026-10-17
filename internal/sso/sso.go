@@ -44,6 +44,11 @@ type client struct {
 	// clientId in `aud` on its own: without an explicit mapper the claim is
 	// simply absent, and a relying party that checks it refuses every token.
 	audience bool
+	// postLogout lists the addresses allowed as a return target AFTER A
+	// SIGN-OUT. Keycloak keeps this list SEPARATE from redirectUris: filling
+	// one does not fill the other, and the sign-out then fails on
+	// "Invalid redirect uri" while the login works perfectly.
+	postLogout string
 }
 
 // clientsOIDC builds the client list with the CURRENT domain.
@@ -110,7 +115,12 @@ func clientsOIDC(domain string) []client {
 			id:        "stalwart-webui",
 			audience:  true,
 			redirects: fmt.Sprintf("https://mail.%s/account/oauth/callback,https://mail.%s/admin/oauth/callback", domain, domain),
-			public:    true,
+			// L'INTERFACE REVIENT SUR SA PAGE DE CONNEXION APRÈS DÉCONNEXION.
+			// Les deux espaces, comme pour les redirections : le chemin de
+			// retour dépend de l'espace qu'on quitte, et n'en déclarer qu'un
+			// ferait échouer la déconnexion de l'autre.
+			postLogout: fmt.Sprintf("https://mail.%s/account/login,https://mail.%s/admin/login", domain, domain),
+			public:     true,
 		},
 		// NB: no "jitsi" client — Jitsi is in free access (SSO removed on
 		// 2026-10-09, see internal/media/sans_sso.go). Existing installations
@@ -149,7 +159,7 @@ func EnsureOIDCClients(ctx context.Context, domain string) error {
 // standalone vault deployment. Copying these four steps would have been enough
 // for the two paths to diverge at the first fix.
 func assurerUnClient(ctx context.Context, c client) error {
-	uuid, err := ensureClient(ctx, c.id, c.redirects, c.public)
+	uuid, err := ensureClient(ctx, c.id, c.redirects, c.postLogout, c.public)
 	if err != nil {
 		return fmt.Errorf("OIDC client %s: %w", c.id, err)
 	}
@@ -269,36 +279,74 @@ func AssurerClientCoffre(ctx context.Context, domain string) error {
 	return fmt.Errorf("OIDC client \"openbao\" absent from the list: the vault cannot authenticate")
 }
 
-func ensureClient(ctx context.Context, clientID, redirects string, public bool) (string, error) {
+func ensureClient(ctx context.Context, clientID, redirects, postLogout string, public bool) (string, error) {
 	uuid, err := clientUUID(ctx, clientID)
-	if err == nil && uuid != "" {
-		return uuid, nil
-	}
-	args := []string{"create", "clients",
-		"-s", "clientId=" + clientID,
+
+	// LES PROPRIÉTÉS SONT POSÉES DANS LES DEUX CAS, création ET MISE À JOUR.
+	//
+	// La version précédente rendait la main dès que le client existait, ce qui
+	// rendait toute propriété ajoutée plus tard INAPPLICABLE : un client déjà
+	// présent — sur toute installation existante — n'aurait jamais reçu sa
+	// liste de redirections de déconnexion, et le défaut serait resté visible
+	// après le correctif censé le réparer.
+	//
+	// C'est exactement le piège que ce fichier documente ailleurs : une fonction
+	// idempotente doit comparer ce qui est déclaré à ce qui est posé, pas
+	// supposer que l'existence suffit.
+	corps := []string{
 		"-s", "enabled=true",
 		"-s", "protocol=openid-connect",
 		"-s", fmt.Sprintf("publicClient=%t", public),
-		"-s", `redirectUris=["` + strings.ReplaceAll(redirects, ",", `","`) + `"]`}
+		"-s", `redirectUris=["` + strings.ReplaceAll(redirects, ",", `","`) + `"]`,
+	}
+	// LA LISTE DE DÉCONNEXION EST DISTINCTE, et c'est la source du défaut : un
+	// client dont on a rempli les redirections de connexion peut malgré tout
+	// refuser de revenir où que ce soit après un sign-out.
+	// KEYCLOAK 26 N'A PLUS DE CHAMP postLogoutRedirectUris : c'est devenu un
+	// ATTRIBUT, et le poser comme champ est refusé —
+	//
+	//	Unrecognized field "postLogoutRedirectUris"
+	//
+	// Le séparateur est ## et non une virgule : c'est la convention de Keycloak
+	// pour les listes stockées dans un attribut. Une virgule y serait lue comme
+	// un seul chemin contenant une virgule, et la déconnexion échouerait
+	// toujours sur « Invalid redirect uri ».
+	if postLogout != "" {
+		corps = append(corps,
+			"-s", `attributes."post.logout.redirect.uris"=`+
+				strings.ReplaceAll(postLogout, ",", "##"))
+	}
 	// PKCE IS MANDATORY FOR A PUBLIC CLIENT, not an optimisation: without it
-	// the authorization code could be intercepted and replayed, and Keycloak
-	// warns about it. Stalwart's WebUI sends its own code_challenge, so the
-	// method simply has to be declared as it uses it.
+	// the authorization code could be intercepted and replayed.
 	if public {
-		args = append(args,
+		corps = append(corps,
 			"-s", "standardFlowEnabled=true",
 			"-s", "directAccessGrantsEnabled=false",
 			"-s", `attributes."pkce.code.challenge.method"=S256`)
 	}
-	out, err := runKcadm(ctx, args...)
-	if err != nil {
+
+	// LE CLIENT N'EXISTE PAS ENCORE : on le crée avec les mêmes propriétés,
+	// puis on s'arrête. Une seule définition de ce qu'un client doit être,
+	// plutôt que deux listes d'arguments à tenir synchronisées.
+	if err != nil || uuid == "" {
+		out, err := runKcadm(ctx, append([]string{"create", "clients",
+			"-s", "clientId=" + clientID}, corps...)...)
+		if err != nil {
+			return "", err
+		}
+		id := parseID(out)
+		if id == "" {
+			return "", fmt.Errorf("client creation %s without id: %s", clientID, out)
+		}
+		return id, nil
+	}
+
+	// IL EXISTE : on lui repose ses propriétés, pour que les corrections
+	// suivantes atteignent aussi les installations déjà en place.
+	if _, err := runKcadm(ctx, append([]string{"update", "clients/" + uuid}, corps...)...); err != nil {
 		return "", err
 	}
-	id := parseID(out)
-	if id == "" {
-		return "", fmt.Errorf("client creation %s without id: %s", clientID, out)
-	}
-	return id, nil
+	return uuid, nil
 }
 
 func clientUUID(ctx context.Context, clientID string) (string, error) {
