@@ -22,21 +22,53 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"github.com/ceffio-suite/ceffio/internal/vault"
+	"github.com/ceffio-suite/ceffio/internal/version"
 )
 
+// MÉCANISME DE L'IMAGE CONSOLE — UN SEUL MANIFESTE, EN LIGNE COMME HORS LIGNE.
+//
+// La référence d'image est unique et calculée : imageRepo + le tag dérivé de
+// la version du BINAIRE en cours d'exécution (version.ImageTag()). Plus aucun
+// tag n'est écrit à la main : un tag oublié faisait tourner l'ancienne image
+// indéfiniment (buildAndImportImage saute la reconstruction si le tag existe
+// déjà dans containerd).
+//
+// POURQUOI ghcr.io ET PLUS localhost/ : avec localhost/, l'image n'existait
+// que construite sur place, et le manifeste du pod différait selon que la
+// machine pouvait ou non joindre un registre. Avec la référence GHCR, le
+// Deployment appliqué est le MÊME dans les deux cas (imagePullPolicy:
+// IfNotPresent) : si l'image est déjà dans containerd — importée localement
+// ou tirée plus tôt — le kubelet la sert sans réseau ; sinon il tire la
+// version publiée depuis GHCR. Une installation en ligne et une installation
+// hors ligne convergent donc vers le même manifeste.
+//
+// Ordre de décision dans buildAndImportImage :
+//  1. l'image est déjà présente dans containerd → ne rien faire ;
+//  2. version de RELEASE (tag ne commençant pas par "dev-") → tenter un
+//     `crictl pull` de l'image publiée ; en cas d'échec (machine hors
+//     ligne), construire et importer localement ;
+//  3. version de DÉVELOPPEMENT (tag "dev-…", jamais publié) → construire
+//     et importer localement, sans tentative de pull.
 const (
 	deployNS   = "ceffio-system"
 	deployName = "ceffio-admin"
-	imageName  = "localhost/ceffio-console"
-	// Bump MANDATORY on every change of the console page or code:
-	// buildAndImportImage skips the rebuild if the tag already exists in
-	// containerd. Without a bump, the old image keeps being served.
-	imageTag = "1.35.7"
-	imageRef = imageName + ":" + imageTag
+	// imageRepo : dépôt public des images console publiées par la CI.
+	imageRepo = "ghcr.io/ceffio-suite/ceffio-console"
 )
 
+// imageRef est l'UNIQUE référence d'image utilisée par la console (build,
+// import, manifeste du Deployment, vérifications).
+//
+// Variable de package initialisée une fois, et non une constante : le tag
+// vient de version.ImageTag(), qui est une fonction — interdite dans une
+// const Go. L'initialiser une seule fois évite aussi de re-hacher le binaire
+// (~40 Mo) à chaque appel, ImageTag() calculant le hachage du binaire pour
+// les builds de développement.
+var imageRef = imageRepo + ":" + version.ImageTag()
+
 // Deploy installs the administration console IN the cluster (Phase 11):
-//   - local OCI image (binary + embedded web page) imported into containerd
+//   - console image (published on GHCR, or built locally + imported into
+//     containerd — same reference either way, see file header)
 //   - ceffio-admin Deployment + ServiceAccount + Role (read pods/ingress/certs)
 //   - ceffio-console-key Secret (persisted admin key) + env KC_ADMIN
 //   - ClusterIP Service + admin.<domain> Ingress + certificate
@@ -72,8 +104,12 @@ func Deploy(ctx context.Context, domain string) error {
 	return nil
 }
 
-// buildAndImportImage builds the console OCI image and imports it into
-// containerd k3s. Idempotent: skips if the image is already present.
+// buildAndImportImage guarantees the console image in containerd k3s.
+// Idempotent: skips if the image is already present.
+//
+// Trois chemins, dans l'ordre (voir l'en-tête du fichier pour le pourquoi) :
+// image déjà présente → rien ; release → crictl pull, sinon construction
+// locale ; développement → construction locale uniquement.
 //
 // Design constraints (learned from scratch builds) — the target machine is a
 // PRODUCTION server, not a dev workstation:
@@ -85,13 +121,33 @@ func Deploy(ctx context.Context, domain string) error {
 //     imported into the k3s containerd via ctr. Requiring `docker build`/`save`
 //     is unjustifiable on a K3s host.
 func buildAndImportImage(ctx context.Context) error {
+	// 1. Déjà présente dans containerd : ne rien faire. C'est le cas normal
+	//    d'un redéploiement, et aussi celui d'une machine en ligne où le
+	//    kubelet a déjà tiré l'image depuis GHCR.
 	if imagePresent(ctx) {
 		fmt.Println("∙ console image already present (" + imageRef + ")")
 		return nil
 	}
+
+	// 2. Version de RELEASE : l'image est publiée sur GHCR, on tente d'abord
+	//    de la tirer. En cas d'échec (machine hors ligne, registre
+	//    injoignable), on retombe sur la construction locale — le manifeste
+	//    reste le même grâce à imagePullPolicy: IfNotPresent.
+	if !strings.HasPrefix(version.ImageTag(), "dev-") {
+		fmt.Println("∙ release build: pulling console image " + imageRef)
+		if pullImage(ctx) {
+			return nil
+		}
+		fmt.Println("∙ pull failed (offline?): falling back to local build + import")
+	}
+
+	// 3. Version de DÉVELOPPEMENT : le tag "dev-<hachage>" n'est jamais
+	//    publié, la construction locale est le seul chemin possible.
 	fmt.Println("∙ building + importing console image " + imageRef)
 
-	// 1. Binary to embed: the running one (already a Ceffio executable).
+	// Construction locale, en quatre temps (a à d) :
+
+	// a. Binary to embed: the running one (already a Ceffio executable).
 	self, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("current binary not found: %w", err)
@@ -103,7 +159,7 @@ func buildAndImportImage(ctx context.Context) error {
 		return fmt.Errorf("current binary unreadable (%s): %v", self, err)
 	}
 
-	// 2. Minimal OCI assembly (Dockerfile FROM scratch equivalent), WITHOUT Docker:
+	// b. Minimal OCI assembly (Dockerfile FROM scratch equivalent), WITHOUT Docker:
 	//    config + tar.gz layer containing /usr/local/bin/ceffio and the CAs.
 	tmp, err := os.MkdirTemp("", "ceffio-console-oci-*")
 	if err != nil {
@@ -120,7 +176,7 @@ func buildAndImportImage(ctx context.Context) error {
 		return err
 	}
 
-	// 3. Import into the k3s containerd. Two mechanisms, in order:
+	// c. Import into the k3s containerd. Two mechanisms, in order:
 	//    a) `k3s ctr images import` (supported path: handles the full OCI index
 	//       and records the reference in the k8s.io namespace);
 	//    b) fallback to the raw containerd import.
@@ -137,7 +193,7 @@ func buildAndImportImage(ctx context.Context) error {
 		return fmt.Errorf("containerd import: %w", err)
 	}
 
-	// 4. Verification: the image must be VISIBLE to the CRI, otherwise the pod
+	// d. Verification: the image must be VISIBLE to the CRI, otherwise the pod
 	//    would stay in ImagePullBackOff (the historical "resolver" bug).
 	if !imagePresent(ctx) {
 		return fmt.Errorf("image %s imported but not resolved by the CRI — "+
@@ -335,9 +391,39 @@ func sha256Hex(b []byte) string {
 }
 
 func imagePresent(ctx context.Context) bool {
+	// On compare sur la référence COMPLÈTE (dépôt + tag), pas sur un
+	// fragment : "ceffio-console" seul matcherait n'importe quelle autre
+	// image du même dépôt, et "ghcr.io" d'autres images Ceffio.
 	out, err := exec.CommandContext(ctx, "sh", "-c",
 		"sudo ctr -n k8s.io -a /run/k3s/containerd/containerd.sock images ls -q | grep -F '"+imageRef+"'").CombinedOutput()
-	return err == nil && strings.Contains(string(out), imageName)
+	return err == nil && strings.Contains(string(out), imageRef)
+}
+
+// pullImage tente de tirer l'image publiée depuis GHCR via crictl.
+// Retourne true si l'image est visible du CRI après le pull.
+//
+// POURQUOI crictl ET PAS ctr : le pull doit atterrir dans le namespace
+// k8s.io avec le résolveur du kubelet (authentification, miroirs), sinon le
+// pod resterait en ImagePullBackOff malgré une image « présente ». crictl
+// parle au CRI exactement comme le kubelet.
+//
+// L'échec n'est PAS une erreur : une machine hors ligne doit pouvoir
+// déployer, l'appelant retombe alors sur la construction locale.
+func pullImage(ctx context.Context) bool {
+	// Même approche que le reste du fichier : `sh -c` avec `command -v`
+	// pour tester la disponibilité, et sudo car le socket containerd
+	// n'est lisible que par root. k3s fournit son propre crictl
+	// (`k3s crictl`) quand aucun crictl système n'est installé.
+	pull := k8s.Command(ctx, "sh", "-c", strings.Join([]string{
+		"(command -v crictl >/dev/null && sudo crictl pull " + imageRef + ") ||",
+		"(command -v k3s >/dev/null && sudo k3s crictl pull " + imageRef + ")",
+	}, " "))
+	pull.Stdout = os.Stdout
+	pull.Stderr = os.Stderr
+	if err := pull.Run(); err != nil {
+		return false
+	}
+	return imagePresent(ctx)
 }
 
 // ensureConsoleKey guarantees the administration key IN THE VAULT, and nowhere else.
