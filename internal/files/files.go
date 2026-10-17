@@ -451,7 +451,29 @@ func ConfigureOIDC(ctx context.Context, domain string) error {
 	const envSecret = "CEFFIO_OIDC_SECRET"
 	out, err := runOccOutputPodEnv(ctx, pod, envSecret, clientSecret,
 		"user_oidc:provider", nomProvider,
-		"-c", clientID, "-d", discovery, "--clientsecret-env="+envSecret)
+		"-c", clientID, "-d", discovery, "--clientsecret-env="+envSecret,
+		// L'IDENTIFIANT DU COMPTE EST CELUI DE KEYCLOAK, PAS UN UUID.
+		//
+		// user_oidc utilise le claim `sub` par défaut, et `uniqueUid` vaut 1 :
+		// la première connexion SSO créait donc un SECOND compte, nommé d'après
+		// l'UUID Keycloak, à côté du compte local adminceffio :
+		//
+		//	adminceffio        groupes: [admin, everyone]        ← le bon, admin
+		//	1dbf6e678875d9...  groupes: [everyone]              ← le compte SSO
+		//
+		// L'utilisateur se connectait avec le second, qui n'est pas
+		// administrateur, et Nextcloud répondait « Le compte connecté doit être
+		// un administrateur » — un message qui accuse les droits alors que le
+		// sujet est l'identité du compte.
+		//
+		// Ce n'est pas cosmétique : c'est l'exigence de l'opérateur, un seul
+		// identifiant identique dans TOUS les systèmes. Deux comptes pour une
+		// même personne obligent à se souvenir de deux formes, et les droits
+		// accordés à l'une ne valent pas pour l'autre.
+		"--mapping-uid=preferred_username",
+		"--unique-uid=0",
+		"--mapping-display-name=name",
+		"--mapping-email=email")
 	if err != nil && !strings.Contains(out, "already") {
 		return fmt.Errorf("user_oidc:provider: %w: %s", err, out)
 	}
