@@ -26,6 +26,11 @@ Reads the state directly from the cluster (no inventory file to maintain):
 if a layer is missing or broken, the command says so, which stays true even
 after a manual modification of the cluster.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// The layers come from the module registry, not from the
+			// hardcoded stack.Layers table: every namespace the suite
+			// declares is shown, including ceffio-mail and
+			// ceffio-exapps which the old table missed.
+			useRegistryLayers()
 			st := stack.Collect(cmd.Context())
 			if asJSON {
 				enc := json.NewEncoder(os.Stdout)

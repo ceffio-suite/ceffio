@@ -178,9 +178,13 @@ Prerequisites:
 
 | Command | Role |
 |---|---|
-| `ceffio install` | deploy the full stack |
+| `ceffio install` | deploy the full stack — optional modules via `--with`/`--without` (catalog generated from the registry) |
 | `ceffio status` | state of the deployed services |
 | `ceffio doctor` | diagnostics (prerequisites, coherence, health) |
+| `ceffio module list` | every module of the registry with its state |
+| `ceffio module install <id>` | install an optional module and its dependencies |
+| `ceffio module remove <id>` | remove an optional module (`--yes` to skip confirmation) |
+| `ceffio module status <id>` | detailed state of a module (status, detail, blocked) |
 | `ceffio backup` | backup (databases, secrets, volumes) |
 | `ceffio restore` | restore from a backup |
 | `ceffio upgrade --plan` | show what would change, before changing it |
