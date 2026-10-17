@@ -117,7 +117,7 @@ jobs:
           mkdir -p dist
           for ARCH in amd64 arm64; do
             GOARCH=$ARCH go build -trimpath \
-              -ldflags "-s -w -X main.version=${TAG} -X main.commit=${COMMIT} -X main.date=${DATE}" \
+              -ldflags "-s -w -X github.com/ceffio-suite/ceffio/internal/version.Binary=${TAG} -X github.com/ceffio-suite/ceffio/internal/version.Commit=${COMMIT} -X github.com/ceffio-suite/ceffio/internal/version.Date=${DATE}" \
               -o "dist/ceffio-linux-$ARCH" ./cmd/ceffio
           done
           ( cd dist && sha256sum ceffio-linux-* > checksums.txt )

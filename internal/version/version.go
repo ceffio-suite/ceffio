@@ -18,10 +18,81 @@
 package version
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
+	"os"
+	"regexp"
 	"sort"
 	"strings"
 )
+
+// Binary, Commit et Date décrivent le binaire lui-même. Elles sont injectées
+// à la compilation par les workflows CI/release via
+// -ldflags "-X github.com/ceffio-suite/ceffio/internal/version.Binary=...".
+//
+// POURQUOI ICI ET PAS DANS package main : ces valeurs doivent être lisibles
+// par le code interne (ImageTag pour construire les références d'images),
+// pas seulement par cobra pour `--version`. Les garder dans main les rendait
+// invisibles du reste du programme et obligeaient les ldflags à viser un
+// symbole que personne d'autre ne pouvait atteindre.
+var (
+	Binary = "0.0.0-dev"
+	Commit = ""
+	Date   = ""
+)
+
+// reRelease reconnaît un tag de release (`v0.6.0`, `v0.6.0-rc.1`) : seule
+// une version de release peut servir de tag d'image tel quel, un build de
+// développement doit être identifié par le contenu du binaire.
+var reRelease = regexp.MustCompile(`^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$`)
+
+// cheminExecutable est une variable de package plutôt qu'un appel direct à
+// os.Executable pour que les tests puissent la remplacer : sans cela, le tag
+// de développement dépendrait du vrai binaire de test en cours d'exécution,
+// donc de la machine qui lance `go test` — impossible à vérifier
+// déterministiquement.
+var cheminExecutable = os.Executable
+
+// ImageTag retourne le tag d'image Docker correspondant au binaire en cours.
+//
+// POURQUOI CE DOUBLE RÉGIME : un binaire de release porte une version
+// publique (v0.6.0 → tag 0.6.0). Un build de développement n'a pas de
+// version fiable — deux développeurs peuvent avoir le même "0.0.0-dev" avec
+// du code différent. On identifie alors le binaire par le hachage de son
+// contenu : même binaire, même tag ; binaire différent, tag différent.
+//
+// La valeur retournée ne doit JAMAIS être vide : elle devient un tag
+// d'image Docker, et une référence `registry/image:` (tag vide) est
+// invalide — le déploiement échouerait avec un message qui ne dirait pas
+// d'où vient le problème.
+func ImageTag() string {
+	if reRelease.MatchString(Binary) {
+		return strings.TrimPrefix(Binary, "v")
+	}
+
+	chemin, err := cheminExecutable()
+	if err != nil {
+		// Impossible de localiser le binaire : on retourne un tag fixe
+		// plutôt qu'une chaîne vide (voir commentaire de la fonction).
+		return "dev-inconnu"
+	}
+
+	f, err := os.Open(chemin)
+	if err != nil {
+		return "dev-inconnu"
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "dev-inconnu"
+	}
+	// 12 caractères hexadécimaux : assez long pour éviter les collisions
+	// pratiques, assez court pour rester lisible dans `kubectl get pods`.
+	return "dev-" + hex.EncodeToString(h.Sum(nil))[:12]
+}
 
 // Composant describes a deployed element and its pinned version.
 type Composant struct {

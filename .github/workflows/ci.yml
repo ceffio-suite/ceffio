@@ -103,7 +103,7 @@ jobs:
           COMMIT="$(git rev-parse --short HEAD)"
           DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           go build -trimpath \
-            -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
+            -ldflags "-s -w -X github.com/ceffio-suite/ceffio/internal/version.Binary=${VERSION} -X github.com/ceffio-suite/ceffio/internal/version.Commit=${COMMIT} -X github.com/ceffio-suite/ceffio/internal/version.Date=${DATE}" \
             -o "bin/ceffio-${VERSION}-linux-${GOARCH}" ./cmd/ceffio
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
