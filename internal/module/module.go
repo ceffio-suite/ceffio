@@ -61,9 +61,17 @@ type Info struct {
 	Title       string // shown in the console
 	Description string // one or two sentences, shown in the console
 	Kind        Kind
-	Default     bool     // Optional only: installed by `ceffio install` unless --without
-	Requires    []string // module IDs that must be installed first
-	Namespaces  []string // where its pods live: status, doctor, uninstall
+	// Default dit si `ceffio install` pose le module sans demande explicite.
+	//
+	// POURQUOI ce champ existe aussi pour les Core : un Core est TOUJOURS
+	// installé par la séquence (c'est la définition de Kind) — Default y
+	// vaut donc toujours true, et un frontal qui filtre la liste sur
+	// Default (la console, `install --without …`) obtient le même résultat
+	// qu'en passant par Kind, sans avoir à connaître la distinction. Pour
+	// un Optional, Default=false signifie « sur demande uniquement ».
+	Default    bool
+	Requires   []string // module IDs that must be installed first
+	Namespaces []string // where its pods live: status, doctor, uninstall
 
 	Services  []Service // public exposures, for the status page
 	Resources string    // "~9 GB disk, ~16 GB RAM", empty when negligible
@@ -78,6 +86,17 @@ type Info struct {
 // access points without knowing the internal manifests of each module.
 type Service struct {
 	Sub, Name, Role string // "cloud", "Nextcloud", "Files, sharing and collaboration"
+
+	// SSO dit si l'accès au service passe par l'authentification unique
+	// (Keycloak).
+	//
+	// POURQUOI ce champ existe : la page de statut l'affiche déjà
+	// (ServicePublic.SSO, alimenté par catalogueServices dans
+	// internal/console/status.go) ; sans lui dans le registre, la console
+	// ne pourrait pas reproduire la réponse actuelle de /api/status à
+	// partir des seuls modules. Keycloak lui-même vaut false : c'est la
+	// porte d'entrée, elle ne passe pas par elle-même.
+	SSO bool
 
 	// Technical marks a service meant for machines, not for humans: it
 	// stays visible for diagnostics but is not presented as a user-facing

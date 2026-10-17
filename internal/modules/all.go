@@ -17,7 +17,17 @@
 package modules
 
 import (
+	_ "github.com/ceffio-suite/ceffio/internal/modules/console"
+	_ "github.com/ceffio-suite/ceffio/internal/modules/data"
 	_ "github.com/ceffio-suite/ceffio/internal/modules/exappsdaemon"
+	_ "github.com/ceffio-suite/ceffio/internal/modules/files"
+	_ "github.com/ceffio-suite/ceffio/internal/modules/identity"
+	_ "github.com/ceffio-suite/ceffio/internal/modules/ingress"
+	_ "github.com/ceffio-suite/ceffio/internal/modules/mail"
+	_ "github.com/ceffio-suite/ceffio/internal/modules/office"
+	_ "github.com/ceffio-suite/ceffio/internal/modules/platform"
 	_ "github.com/ceffio-suite/ceffio/internal/modules/recording"
+	_ "github.com/ceffio-suite/ceffio/internal/modules/talk"
 	_ "github.com/ceffio-suite/ceffio/internal/modules/transcription"
+	_ "github.com/ceffio-suite/ceffio/internal/modules/vault"
 )
