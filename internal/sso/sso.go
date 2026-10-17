@@ -34,6 +34,11 @@ type client struct {
 	app       string
 	id        string
 	redirects string
+	// public marks a browser-side application, which cannot keep a secret and
+	// generates its own PKCE challenge. Deliberately NOT a default: a client
+	// that can hold a secret should hold one, and only the interfaces that
+	// cannot are declared public.
+	public bool
 }
 
 // clientsOIDC builds the client list with the CURRENT domain.
@@ -62,6 +67,44 @@ func clientsOIDC(domain string) []client {
 			redirects: fmt.Sprintf(
 				"https://bao.%s/ui/vault/auth/oidc/oidc/callback,https://bao.%s/vault/auth/oidc/oidc/callback,http://localhost:8250/oidc/callback",
 				domain, domain),
+		},
+		{
+			// THE MAIL WEB INTERFACE, and the client was simply missing.
+			//
+			// internal/mail/sso.go configures Stalwart to REQUIRE this client
+			// on its side — it writes `oauthClientId: stalwart-webui` into the
+			// application object. Nothing ever created it in Keycloak, so the
+			// login ended on the provider's own error page:
+			//
+			//	We are sorry... Client not found.
+			//	clientId="stalwart-webui" error="client_not_found"
+			//
+			// The two halves of a single configuration lived in two packages,
+			// and only one of them was done. Declaring the client here puts
+			// both sides of the same handshake in the same place.
+			//
+			// THE RETURN ADDRESS IS THE WEBUI'S OWN CALLBACK PATH, on the
+			// public mail host — Stalwart serves it, and the address has to
+			// match what it sends or Keycloak refuses the redirect.
+			// LE CLIENT DE L'INTERFACE WEB EST PUBLIC, ET ELLE GÉNÈRE SON PROPRE PKCE.
+			//
+			// Ce n'est PAS un client confidentiel comme nextcloud ou openbao : le
+			// WebUI de Stalwart est une application navigateur, elle ne peut pas
+			// garder un secret. Elle ouvre l'échange authorization-code avec un
+			// client id et un code_verifier, sans secret.
+			//
+			// Le déclarer confidentiel produit exactement le refus qu'on a vu :
+			// le navigateur arrive sur la page d'erreur du fournisseur, alors que
+			// côté Stalwart tout est configuré.
+			//
+			// LES DEUX CHEMINS DE RETOUR SONT /account ET /admin : l'interface
+			// construite dynamiquement `{origine}{chemin}/oauth/callback`, et elle
+			// sert les deux espaces. Les lister tous les deux évite un refus de
+			// redirection selon la page d'où l'on vient.
+			app:       "stalwart-webui",
+			id:        "stalwart-webui",
+			redirects: fmt.Sprintf("https://mail.%s/account/oauth/callback,https://mail.%s/admin/oauth/callback", domain, domain),
+			public:    true,
 		},
 		// NB: no "jitsi" client — Jitsi is in free access (SSO removed on
 		// 2026-10-09, see internal/media/sans_sso.go). Existing installations
@@ -100,9 +143,23 @@ func EnsureOIDCClients(ctx context.Context, domain string) error {
 // standalone vault deployment. Copying these four steps would have been enough
 // for the two paths to diverge at the first fix.
 func assurerUnClient(ctx context.Context, c client) error {
-	uuid, err := ensureClient(ctx, c.id, c.redirects)
+	uuid, err := ensureClient(ctx, c.id, c.redirects, c.public)
 	if err != nil {
 		return fmt.Errorf("OIDC client %s: %w", c.id, err)
+	}
+
+	// UN CLIENT PUBLIC N'A PAS DE SECRET, ET ON S'ARRÊTE LÀ.
+	//
+	// Toute la suite de cette fonction consiste à générer un secret, à le poser
+	// dans Keycloak et à le stocker dans le coffre pour que l'application le
+	// lise. Un client public n'en a aucun : le WebUI de Stalwart est une
+	// application navigateur, il s'authentifie par PKCE.
+	//
+	// Continuer malgré tout écrirait un secret dans le coffre et sur un client
+	// qui refuse les secrets — l'installation annoncerait un client prêt, et la
+	// connexion échouerait sans que rien ne relie les deux.
+	if c.public {
+		return nil
 	}
 	// Reuses the existing secret (the apps point at it), otherwise generates one.
 	//
@@ -187,17 +244,28 @@ func AssurerClientCoffre(ctx context.Context, domain string) error {
 	return fmt.Errorf("OIDC client \"openbao\" absent from the list: the vault cannot authenticate")
 }
 
-func ensureClient(ctx context.Context, clientID, redirects string) (string, error) {
+func ensureClient(ctx context.Context, clientID, redirects string, public bool) (string, error) {
 	uuid, err := clientUUID(ctx, clientID)
 	if err == nil && uuid != "" {
 		return uuid, nil
 	}
-	out, err := runKcadm(ctx, "create", "clients",
-		"-s", "clientId="+clientID,
+	args := []string{"create", "clients",
+		"-s", "clientId=" + clientID,
 		"-s", "enabled=true",
 		"-s", "protocol=openid-connect",
-		"-s", "publicClient=false",
-		"-s", `redirectUris=["`+strings.ReplaceAll(redirects, ",", `","`)+`"]`)
+		"-s", fmt.Sprintf("publicClient=%t", public),
+		"-s", `redirectUris=["` + strings.ReplaceAll(redirects, ",", `","`) + `"]`}
+	// PKCE IS MANDATORY FOR A PUBLIC CLIENT, not an optimisation: without it
+	// the authorization code could be intercepted and replayed, and Keycloak
+	// warns about it. Stalwart's WebUI sends its own code_challenge, so the
+	// method simply has to be declared as it uses it.
+	if public {
+		args = append(args,
+			"-s", "standardFlowEnabled=true",
+			"-s", "directAccessGrantsEnabled=false",
+			"-s", `attributes."pkce.code.challenge.method"=S256`)
+	}
+	out, err := runKcadm(ctx, args...)
 	if err != nil {
 		return "", err
 	}

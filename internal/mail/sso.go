@@ -73,6 +73,34 @@ func ConfigurerSSO(ctx context.Context, domaineMessagerie string, o SSO) error {
 	}
 	fmt.Println("∙ single sign-on (Keycloak)")
 
+	// --- 0. NO BAN OF THE CLUSTER'S OWN NETWORK -------------------------------
+	//
+	// STALWART BANNED TRAEFIK, PERMANENTLY, AND NOTHING SAID SO.
+	//
+	// Its auto-ban protection counts connection attempts and blocks the
+	// source address when a threshold is crossed. Traefik opens a connection
+	// per request, and a burst of them reads as "port scanning". Measured:
+	//
+	//	{"address":"10.42.0.70","reason":"portScanning","expiresAt":null}
+	//
+	// 10.42.0.70 IS Traefik. The result was a 502 on the mail address while
+	// Stalwart ran perfectly and answered /healthz/live from every other pod —
+	// the diagnosis pointed at routing, TLS and the ingress, none of which had
+	// anything to do with it.
+	//
+	// `expiresAt: null` MEANS FOREVER. No page in the interface reports it,
+	// and the only way out is to delete the entry AND restart the server: the
+	// ban is cached in memory, so removing the record alone leaves the address
+	// still refused. That is what took `mail.<domain>` down.
+	//
+	// The cluster's own pod network is therefore declared trusted BEFORE
+	// anything else. It is not a weakening of the protection: a pod network is
+	// never an attacker, and this rule only prevents Stalwart from mistaking
+	// the platform's own traffic for one.
+	if err := assurerReseauInterneAutorise(ctx); err != nil {
+		return fmt.Errorf("declaring the cluster network as trusted: %w", err)
+	}
+
 	// --- 1. the OIDC directory ------------------------------------------------
 	// It must exist BEFORE the domains: each one references it.
 	idAnnuaire, err := assurerAnnuaireOIDC(ctx, o)
@@ -541,4 +569,40 @@ func attendreStabilite(ctx context.Context) error {
 	case <-time.After(3 * time.Second):
 		return nil
 	}
+}
+
+// assurerReseauInterneAutorise declares the cluster pod network as trusted, so
+// Stalwart's auto-ban can never block the platform's own traffic.
+//
+// WHY THE WHOLE POD NETWORK AND NOT JUST TRAEFIK: the address of an ingress
+// controller is not stable across a restart, and listing it alone would mean
+// rewriting the rule every time the pod moves — with the failure only showing
+// up as a 502 nobody can explain. The pod network is a range the cluster owns.
+//
+// IDEMPOTENT: an existing rule is left alone. We read what is declared first,
+// because re-creating the same address would either fail or add a duplicate,
+// and neither is useful.
+func assurerReseauInterneAutorise(ctx context.Context) error {
+	// Le reseau des pods. k3s l'attribue depuis ce bloc, et il est interne au
+	// cluster : aucun paquet venant de l'exterieur ne peut porter une de ces
+	// adresses sources.
+	const reseauPods = "10.42.0.0/16"
+
+	existantes, err := lireChamps(ctx, "x:AllowedIp/get", "address")
+	if err != nil {
+		return fmt.Errorf("reading the trusted addresses: %w", err)
+	}
+	for _, adresse := range existantes {
+		if adresse == reseauPods {
+			return nil
+		}
+	}
+
+	if _, err := creerObjet(ctx, "x:AllowedIp/set", map[string]any{
+		"address": reseauPods,
+	}); err != nil {
+		return fmt.Errorf("declaring %s as trusted: %w", reseauPods, err)
+	}
+	fmt.Printf("  ∙ cluster network %s trusted (auto-ban cannot block the platform)\n", reseauPods)
+	return nil
 }
