@@ -39,7 +39,7 @@ func estCompteProtege(identifiant string) bool {
 }
 
 // ---------------------------------------------------------------------------
-// Client REST Keycloak Admin (realm master → token ; admin/realms/ceffio).
+// Keycloak Admin REST client (master realm → token ; admin/realms/ceffio).
 
 var (
 	kcTokMu   sync.Mutex
@@ -235,20 +235,20 @@ func (s *Server) createUser(r *http.Request, username, email, password string) (
 		}
 	}
 
-	// LE COMPTE EXISTE AUSSI DANS NEXTCLOUD, sinon il ne peut pas se connecter.
+	// THE ACCOUNT ALSO EXISTS IN NEXTCLOUD, otherwise it cannot sign in.
 	//
-	// Cette fonction ne créait l'utilisateur QUE dans Keycloak. L'opérateur
-	// voyait son compte dans la page Users, le SSO l'authentifiait — puis
-	// Nextcloud refusait, parce qu'il n'avait aucun compte local correspondant.
+	// This function used to create the user ONLY in Keycloak. The operator
+	// saw their account on the Users page, SSO authenticated them — then
+	// Nextcloud refused, because it had no matching local account.
 	//
-	// Le chemin de secours est le même raisonnement que pour l'administrateur :
-	// le SSO est la porte principale, le compte local permet d'entrer quand
-	// Keycloak est indisponible. Un compte qui n'existe que côté annuaire
-	// dépend entièrement de la disponibilité de l'annuaire.
+	// The fallback path follows the same reasoning as for the administrator:
+	// SSO is the main door, the local account lets you in when Keycloak is
+	// unavailable. An account that only exists on the directory side depends
+	// entirely on the directory's availability.
 	//
-	// NON BLOQUANT, ET RAPPORTÉ : le compte Keycloak est déjà créé à ce
-	// stade, et une erreur côté Nextcloud ne doit pas faire croire à un échec
-	// total — la console peut réessayer.
+	// NON-BLOCKING, AND REPORTED: the Keycloak account is already created at
+	// this stage, and an error on the Nextcloud side must not look like a
+	// total failure — the console can retry.
 	if err := s.creerCompteNextcloud(r.Context(), username, password); err != nil {
 		fmt.Printf("  ⚠ %s created in Keycloak but not in Nextcloud: %v\n", username, err)
 	}
@@ -259,15 +259,14 @@ func (s *Server) createUser(r *http.Request, username, email, password string) (
 // creerCompteNextcloud creates the local account, so it can sign in directly
 // when Keycloak is unavailable.
 //
-// L'IDENTIFIANT EST LE MÊME QUE DANS KEYCLOAK, et ce n'est pas un détail : le
-// SSO de Nextcloud est configuré pour mapper `preferred_username`, donc c'est
-// sous cette forme que l'utilisateur se présentera. Un compte local nommé
-// autrement serait un compte de plus, avec des droits distincts, et
-// l'utilisateur se connecterait tantôt à l'un, tantôt à l'autre selon la porte
-// empruntée.
+// THE IDENTIFIER IS THE SAME AS IN KEYCLOAK, and that is not a detail: the
+// Nextcloud SSO is configured to map `preferred_username`, so that is the
+// form under which the user will show up. A local account named differently
+// would be one account too many, with distinct rights, and the user would
+// sign in to one or the other depending on the door taken.
 //
-// Idempotent : `user:add` sur un compte existant échoue, et cette erreur est
-// ignorée — c'est l'état voulu au second appel.
+// Idempotent: `user:add` on an existing account fails, and that error is
+// ignored — it is the desired state on the second call.
 func (s *Server) creerCompteNextcloud(ctx context.Context, identifiant, mdp string) error {
 	script := "export OC_PASS=" + shellQuote(mdp) + "; " +
 		"php occ user:add --password-from-env " + shellQuote(identifiant) + " >/dev/null 2>&1 || true; " +

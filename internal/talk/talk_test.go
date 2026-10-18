@@ -9,9 +9,9 @@ import (
 	"testing"
 )
 
-// L'ENREGISTREMENT DE CETTE CLE EST UN CORRECTIF, PAS UNE PREFERENCE.
+// THE RECORDING OF THIS KEY IS A FIX, NOT A PREFERENCE.
 //
-// Talk lit $server['server'] et non $server['url'] :
+// Talk reads $server['server'] and not $server['url']:
 //
 //	getAllServerUrlsForCSP() {
 //	    foreach ($this->getSignalingServers() as $server) {
@@ -19,13 +19,12 @@ import (
 //	    }
 //	}
 //
-// et getWebSocketDomainForSignalingServer() prend un string NON NULLABLE. Une
-// cle nommee "url" laisse donc le champ null et Talk leve une TypeError a
-// CHAQUE chargement de page — c'est le dashboard entier qui tombe, pas
-// seulement Talk.
+// and getWebSocketDomainForSignalingServer() takes a NON NULLABLE string. A key
+// named "url" therefore leaves the field null and Talk raises a TypeError on
+// EVERY page load — it is the whole dashboard that goes down, not only Talk.
 //
-// Ce test echouerait si quelqu'un « corrigeait » la cle vers le nom qui semble
-// naturel.
+// This test would fail if someone "fixed" the key towards the name that seems
+// natural.
 func TestSignalingServersUtiliseLaCleServer(t *testing.T) {
 	reglage := reglageSignaling("https://spreed.example.test/standalone-signaling", "secret-de-test")
 
@@ -37,22 +36,21 @@ func TestSignalingServersUtiliseLaCleServer(t *testing.T) {
 	}
 }
 
-// LA PRESENCE D'UN PREFIXE DE CHEMIN EST UN PIEGE, pas un detail de style.
+// THE PRESENCE OF A PATH PREFIX IS A TRAP, not a style detail.
 //
-// Le signaling ecoute sur 0.0.0.0:8081 et sert son point d'entree WebSocket
-// directement sur /spreed ([http] de server.conf, aucun prefixe). Une URL
-// annoncee avec un prefixe fait donc composer a Talk un chemin que le serveur
-// ne sert pas :
+// The signaling server listens on 0.0.0.0:8081 and serves its WebSocket entry
+// point directly on /spreed ([http] of server.conf, no prefix). A URL announced
+// with a prefix therefore makes Talk compose a path the server does not serve:
 //
-//	https://spreed.<domaine>                        -> /spreed                     OK
-//	https://spreed.<domaine>/standalone-signaling   -> /standalone-signaling/spreed 404
+//	https://spreed.<domain>                        -> /spreed                     OK
+//	https://spreed.<domain>/standalone-signaling   -> /standalone-signaling/spreed 404
 //
-// "/standalone-signaling" est le chemin de Nextcloud AIO, ou un reverse proxy
-// RETIRE le prefixe avant de transmettre. Le recopier sans cette regle donne un
-// client qui frappe un chemin inexistant : Talk affiche « connexion au serveur
-// de signalement perdue », et ni l'un ni l'autre journal ne nomme le chemin.
+// "/standalone-signaling" is the path of Nextcloud AIO, where a reverse proxy
+// REMOVES the prefix before forwarding. Copying it without that rule yields a
+// client that hits a nonexistent path: Talk displays "connection to the
+// signaling server lost", and neither log names the path.
 //
-// Ce test echouerait si quelqu'un rajoutait un prefixe en s'inspirant d'AIO.
+// This test would fail if someone added a prefix, taking inspiration from AIO.
 func TestSignalingSansPrefixeDeChemin(t *testing.T) {
 	url := urlSignaling("ceffio.mandem-it.com")
 
@@ -71,13 +69,13 @@ func TestSignalingServersEstUnJsonValide(t *testing.T) {
 		t.Fatalf("le reglage n'est pas un JSON valide: %v", err)
 	}
 
-	// getSignalingServers() renvoie [] si la cle "servers" est absente.
+	// getSignalingServers() returns [] if the "servers" key is absent.
 	servers, ok := d["servers"].([]any)
 	if !ok || len(servers) == 0 {
 		t.Fatalf("la cle \"servers\" est absente ou vide: getSignalingServers() renverrait []")
 	}
 
-	// getSignalingSecret() lit "secret" a la racine de l'objet.
+	// getSignalingSecret() reads "secret" at the root of the object.
 	if d["secret"] != "secret-de-test" {
 		t.Errorf("secret = %v, attendu \"secret-de-test\"", d["secret"])
 	}

@@ -103,7 +103,7 @@ jobs:
           COMMIT="$(git rev-parse --short HEAD)"
           DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           go build -trimpath \
-            -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
+            -ldflags "-s -w -X github.com/ceffio-suite/ceffio/internal/version.Binary=${VERSION} -X github.com/ceffio-suite/ceffio/internal/version.Commit=${COMMIT} -X github.com/ceffio-suite/ceffio/internal/version.Date=${DATE}" \
             -o "bin/ceffio-${VERSION}-linux-${GOARCH}" ./cmd/ceffio
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
@@ -146,3 +146,61 @@ jobs:
           path: bin/ceffio-*-linux-*
           if-no-files-found: error
           retention-days: 90
+
+  console-image:
+    # LE DOCKERFILE EST VÉRIFIÉ À CHAQUE PULL REQUEST, SANS RIEN POUSSER.
+    # Un Dockerfile cassé ne doit pas se découvrir le jour de la release :
+    # ce job construit l'image multi-architecture exactement comme le fait
+    # release.yml, mais sans --push. L'image « from scratch » n'exécute aucune
+    # instruction au build (pas de RUN) : les deux architectures se
+    # construisent sur le runner amd64 sans émulation.
+    #
+    # Les binaires viennent des artefacts du job `binary` — comme dans
+    # release.yml, l'image n'est jamais construite à partir d'une compilation
+    # séparée qui pourrait diverger de ce qui est publié.
+    name: build the console image (no push)
+    runs-on: ubuntu-24.04
+    needs: binary
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: ceffio-linux-amd64
+          path: tmp/amd64
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: ceffio-linux-arm64
+          path: tmp/arm64
+
+      - name: Lay the binaries out as the Dockerfile expects
+        # Le Dockerfile copie dist/ceffio-linux-${TARGETARCH} : les artefacts
+        # de CI portent un nom versionné (ceffio-<VERSION>-linux-<arch>), on
+        # les remet en place sous le nom canonique. `find` plutôt qu'un chemin
+        # en dur : upload-artifact stocke les fichiers relativement à l'ancêtre
+        # commun des correspondances, la présence du préfixe `bin/` n'est donc
+        # pas garantie.
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find tmp/amd64 -type f -name 'ceffio-*-linux-amd64' -exec cp {} dist/ceffio-linux-amd64 \;
+          find tmp/arm64 -type f -name 'ceffio-*-linux-arm64' -exec cp {} dist/ceffio-linux-arm64 \;
+          test -f dist/ceffio-linux-amd64
+          test -f dist/ceffio-linux-arm64
+          chmod +x dist/ceffio-linux-amd64 dist/ceffio-linux-arm64
+          ls -la dist/
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the image for both architectures
+        # PAS DE --push : ce job n'a même pas `packages: write`, l'erreur
+        # serait structurelle et non accidentelle. Le tag local suffit à
+        # prouver que le build aboutit pour chaque plateforme.
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            -f build/console/Dockerfile \
+            -t ceffio-console:ci \
+            .

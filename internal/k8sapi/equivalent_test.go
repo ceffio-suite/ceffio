@@ -9,16 +9,16 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-// LE TEST QUI COMPTE : un objet identique à son manifeste ne doit déclencher
-// AUCUNE écriture.
+// THE TEST THAT COUNTS: an object identical to its manifest must
+// trigger NO write.
 //
-// Le clic « Deploy the deployer » échouait sur
+// The "Deploy the deployer" click failed on
 //
 //	updating Namespace/ceffio-exapps: namespaces is forbidden:
 //	User "…:ceffio-admin" cannot update resource "namespaces"
 //
-// alors que le namespace existait déjà, avec les bons labels. Le code écrivait
-// sans comparer, et l'API refusait une opération qui ne changeait rien.
+// while the namespace already existed, with the right labels. The code
+// wrote without comparing, and the API refused an operation that changed nothing.
 func TestObjetIdentiqueNeDeclenchePasDEcriture(t *testing.T) {
 	actuel := &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "v1",
@@ -29,8 +29,8 @@ func TestObjetIdentiqueNeDeclenchePasDEcriture(t *testing.T) {
 				"app.kubernetes.io/part-of": "ceffio",
 				"ceffio.io/role":            "exapps",
 			},
-			// Champs ajoutés par l'API, absents du manifeste : ils ne doivent
-			// PAS faire croire à une différence.
+			// Fields added by the API, absent from the manifest: they must NOT
+			// make one believe in a difference.
 			"resourceVersion": "12345",
 			"uid":             "abc-def",
 		},
@@ -54,8 +54,8 @@ func TestObjetIdentiqueNeDeclenchePasDEcriture(t *testing.T) {
 	}
 }
 
-// Un vrai changement doit être détecté : sinon le correctif serait pire que le
-// bug, en rendant le déploiement incapable de mettre à jour quoi que ce soit.
+// A real change must be detected: otherwise the fix would be worse
+// than the bug, by making the deployment incapable of updating anything.
 func TestChangementDetecte(t *testing.T) {
 	actuel := &unstructured.Unstructured{Object: map[string]interface{}{
 		"metadata": map[string]interface{}{
@@ -85,9 +85,9 @@ func TestChangementDetecte(t *testing.T) {
 	}
 }
 
-// Les listes sont comparées sans tenir compte de l'ordre : l'API réordonne
-// certains tableaux, et une comparaison par index signalerait une différence
-// là où le contenu est identique.
+// Lists are compared without regard to order: the API reorders some
+// arrays, and an index-based comparison would report a difference
+// where the content is identical.
 func TestListesCompareesSansOrdre(t *testing.T) {
 	actuel := &unstructured.Unstructured{Object: map[string]interface{}{
 		"spec": map[string]interface{}{
@@ -110,7 +110,7 @@ func TestListesCompareesSansOrdre(t *testing.T) {
 	}
 }
 
-// Une liste plus courte ou plus longue est un vrai changement.
+// A shorter or longer list is a real change.
 func TestListeDeTailleDifferente(t *testing.T) {
 	actuel := &unstructured.Unstructured{Object: map[string]interface{}{
 		"spec": map[string]interface{}{

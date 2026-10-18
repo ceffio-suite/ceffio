@@ -179,27 +179,27 @@ func waitCertManagerReady(ctx context.Context) error {
 	return nil
 }
 
-// applyClusterIssuers crée le ClusterIssuer auto-signé qui AMORCE la chaîne de
-// confiance interne.
+// applyClusterIssuers creates the self-signed ClusterIssuer that BOOTSTRAPS
+// the internal trust chain.
 //
-// CE N'EST PAS UNE BÉQUILLE DE DÉVELOPPEMENT, et le message le disait à tort.
+// THIS IS NOT A DEVELOPMENT CRUTCH, and the message used to say so wrongly.
 //
-//	∙ ClusterIssuer ceffio-selfsigned (dev)     ← l'ancien message
+//	∙ ClusterIssuer ceffio-selfsigned (dev)     ← the old message
 //
-// Ce « (dev) » faisait croire à un mode dégradé. Vérifié en lisant la suite :
-// cet issuer est un MAILLON OBLIGATOIRE. Il signe le certificat de la CA
-// interne (ceffio-ca), qui devient à son tour l'issuer ceffio-ca-issuer — et
-// c'est celui-ci qui signe les certificats des domaines privés et des services
-// internes. Sans lui, pas de ceffio-ca, donc pas d'autorité interne du tout,
-// y compris sur une plateforme entièrement publique.
+// That « (dev) » suggested a degraded mode. Verified by reading on: this
+// issuer is a MANDATORY LINK. It signs the certificate of the internal CA
+// (ceffio-ca), which in turn becomes the ceffio-ca-issuer issuer — and
+// that one signs the certificates of private domains and internal
+// services. Without it, no ceffio-ca, hence no internal authority at all,
+// even on a fully public platform.
 //
-// Il coexiste avec les issuers Let's Encrypt, qui signent les domaines publics.
-// Les deux chaînes vivent ensemble : c'est voulu, parce qu'un domaine public et
-// un nom interne ne se valident pas de la même façon, et qu'une plateforme n'a
-// jamais l'un sans l'autre (spreed.<domain> est public, les services .svc sont
-// internes).
+// It coexists with the Let's Encrypt issuers, which sign the public
+// domains. The two chains live together: that is deliberate, because a
+// public domain and an internal name are not validated the same way, and
+// a platform never has one without the other (spreed.<domain> is public,
+// the .svc services are internal).
 //
-// LE MESSAGE DIT MAINTENANT CE QUE LA CHOSE EST : un amorçage, pas un mode.
+// THE MESSAGE NOW SAYS WHAT THE THING IS: a bootstrap, not a mode.
 func applyClusterIssuers(ctx context.Context) error {
 	fmt.Println("∙ internal trust anchor (ClusterIssuer ceffio-selfsigned → ceffio-ca)")
 	issuer := `apiVersion: cert-manager.io/v1

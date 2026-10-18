@@ -7,13 +7,13 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
-// TestValkeyLabelsValides : un label k8s n'accepte ni espace ni caractere special.
-// Ce defaut a fait echouer un deploiement reel :
+// TestValkeyLabelsValides: a k8s label accepts neither a space nor a special
+// character. This defect made a real deployment fail:
 //
 //	The Service "ceffio-redis" is invalid: metadata.labels: Invalid value:
 //	"renamed to ceffio-valkey"
 func TestValkeyLabelsValides(t *testing.T) {
-	// reproduit les labels du manifeste genere
+	// reproduces the labels of the generated manifest
 	labels := map[string]string{
 		"app.kubernetes.io/part-of": "ceffio",
 		"ceffio.io/deprecated":      "true",
@@ -23,7 +23,7 @@ func TestValkeyLabelsValides(t *testing.T) {
 			t.Errorf("label %s = %q rejected by Kubernetes: %v", k, v, errs)
 		}
 	}
-	// et la valeur fautive DOIT etre rejetee : le test attrape le defaut
+	// and the faulty value MUST be rejected: the test catches the defect
 	if errs := validation.IsValidLabelValue("renamed to ceffio-valkey"); len(errs) == 0 {
 		t.Error("the invalid value was accepted: this check would not have caught the bug")
 	} else {

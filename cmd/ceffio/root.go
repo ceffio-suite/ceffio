@@ -5,11 +5,9 @@ package main
 
 import (
 	"github.com/spf13/cobra"
-)
 
-// version is overridden at build time via -ldflags "-X main.version=...".
-// Default value for local builds.
-var version = "0.1.0-dev"
+	"github.com/ceffio-suite/ceffio/internal/version"
+)
 
 func newRootCmd() *cobra.Command {
 	c := &cobra.Command{
@@ -24,7 +22,7 @@ open source projects (Keycloak, Nextcloud, ONLYOFFICE, Talk,
 Stalwart) behind a unified install and management experience.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		Version:       version,
+		Version:       version.Binary,
 	}
 
 	c.AddCommand(
@@ -38,6 +36,7 @@ Stalwart) behind a unified install and management experience.`,
 		newFilesCmd(),
 		newStatusCmd(),
 		newDoctorCmd(),
+		newModuleCmd(),
 		newBackupCmd(),
 		newRestoreCmd(),
 		newUpgradeCmd(),

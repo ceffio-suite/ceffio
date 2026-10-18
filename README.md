@@ -162,6 +162,40 @@ Two design points that required correction under real conditions:
   (`talk.<domain>`), which survives an address change — where a hard-coded
   value would silently stop working.
 
+## Modules
+
+Every feature of the suite — the ten core layers and the optional add-ons —
+is a **module**: a Go package implementing a single interface (`Info`,
+`Install`, `State`, `Uninstall`) and registering itself in a global registry.
+The registry is the catalog every frontend reads: `ceffio install
+--with/--without`, `ceffio module list|install|remove|status`, the console's
+Modules page, the status and doctor layer lists, and the console's RBAC grant
+are all generated from it — no feature list is hardcoded anywhere. Adding a
+feature means adding a module; see
+[`docs/adding-a-module.md`](docs/adding-a-module.md).
+
+**Core modules** are the product: `platform`, `data`, `vault`, `identity`,
+`files`, `office`, `talk`, `ingress`, `mail`, `console`. `ceffio install`
+deploys them in its own sequence, and they are removed only with the cluster
+(`ceffio uninstall`) — `ceffio module remove` refuses them.
+
+**Optional modules** are chosen by the operator, at install time
+(`--with`/`--without`) or afterwards (`ceffio module install <id>`, or the
+console's Modules page):
+
+| ID | Role | Resources | Requires | Installed by default |
+|---|---|---|---|---|
+| `recording` | Records Talk calls: a hidden participant joins the room, renders it and uploads the result to Nextcloud | — (workload limited to 2 GiB RAM, no model download) | — | **yes** (`--without recording` to skip) |
+| `exapps-daemon` | HaRP runs the containers Nextcloud asks for, speaking the Kubernetes API directly — prerequisite of every external application | — | — | no |
+| `live-transcription` | Transcribes speech live during a Talk call, on this server, with open source speech models; nothing is sent to a third party | ~9 GB disk, ~16 GB RAM | `exapps-daemon` (installed automatically with it) | no |
+
+Declared dependencies are expanded by the registry: asking for
+`live-transcription` installs `exapps-daemon` first, and `ceffio module
+remove exapps-daemon` is refused while an installed module requires it.
+Recording functionally needs the Talk layer (its install reads the signaling
+secret from the vault and says so if Talk is absent), but as a `Default`
+module it ships with the standard install, where Talk is always present.
+
 ## Installation
 
 The deployment is **idempotent**: running it again breaks nothing, it updates
@@ -178,9 +212,13 @@ Prerequisites:
 
 | Command | Role |
 |---|---|
-| `ceffio install` | deploy the full stack |
+| `ceffio install` | deploy the full stack — optional modules via `--with`/`--without` (catalog generated from the registry) |
 | `ceffio status` | state of the deployed services |
 | `ceffio doctor` | diagnostics (prerequisites, coherence, health) |
+| `ceffio module list` | every module of the registry with its state |
+| `ceffio module install <id>` | install an optional module and its dependencies |
+| `ceffio module remove <id>` | remove an optional module (`--yes` to skip confirmation) |
+| `ceffio module status <id>` | detailed state of a module (status, detail, blocked) |
 | `ceffio backup` | backup (databases, secrets, volumes) |
 | `ceffio restore` | restore from a backup |
 | `ceffio upgrade --plan` | show what would change, before changing it |
@@ -207,8 +245,64 @@ a shared token in a file.
 A web interface for daily operations: service states, certificates with their
 expiry dates, SSO account management. It reads the cluster's real state — it
 does not guess it. See [`internal/console/README.md`](internal/console/README.md)
-and the image repository
-[`ceffio-suite/ceffio-console`](https://github.com/ceffio-suite/ceffio-console).
+and the "Console image" section below.
+
+## Console image
+
+The console runs as a container image, built and published **by this
+repository** (the `release.yml` workflow, job `console-image`): every release
+tag `vX.Y.Z` publishes `ghcr.io/ceffio-suite/ceffio-console:X.Y.Z` for
+`linux/amd64` and `linux/arm64`. `latest` follows stable versions only —
+never an `-rc` candidate. The image embeds the **exact binaries of the
+release** (byte for byte, verified against `checksums.txt`), never a separate
+recompilation. The former separate repository
+[`ceffio-suite/ceffio-console`](https://github.com/ceffio-suite/ceffio-console)
+is archived.
+
+The image is `FROM scratch`: no shell, no package manager — the static binary
+plus the certificate authorities. It is normally deployed **inside the
+cluster** by `ceffio install` (phase 11), which pulls it from GHCR. To run it
+manually (for example against a cluster reachable through your kubeconfig):
+
+```bash
+docker run --rm -p 8088:8088 \
+  -v ~/.kube/config:/kubeconfig:ro -e KUBECONFIG=/kubeconfig \
+  ghcr.io/ceffio-suite/ceffio-console:X.Y.Z \
+  console --domain example.com --addr :8088
+```
+
+The entrypoint is the `ceffio` binary; the arguments above replace the default
+`CMD` (`console --addr :8088`) to pass the required `--domain`. The
+administration key can be supplied with `--key` or the `CEFFIO_KEY`
+environment variable (generated and printed at startup otherwise); inside the
+cluster it comes from the OpenBao vault via the agent injector.
+
+### Permissions required in the cluster
+
+Stated plainly, because an earlier document claimed the console only reads —
+that was false. The console's `ServiceAccount` (`ceffio-admin`, created by
+`ceffio install`) holds, per the RBAC deployed by
+[`internal/console/deploy.go`](internal/console/deploy.go):
+
+- **cluster-wide reads**: pods, namespaces, deployments, ingresses,
+  cert-manager certificates — what the dashboard and the certificates page
+  show;
+- **writes inside the `ceffio-*` platform namespaces only** (never
+  `kube-system`, never `cert-manager`, never `longhorn-system`): pods,
+  services, configmaps, secrets, PVCs, service accounts, deployments,
+  statefulsets, ingresses, certificates, roles/rolebindings, CloudNativePG
+  clusters — this is what installing HaRP and the live-transcription ExApp
+  from the console requires;
+- **`pods/exec` limited to `ceffio-files`** (Role `ceffio-console-occ`): to
+  run `occ` in the Nextcloud pod for the system settings the OCS API does not
+  expose (SMTP, local account password). Keycloak, for its part, is driven
+  through its Admin REST API, not through exec;
+- **no right over cluster roles and no `delete` on namespaces**: RBAC is
+  granted by the installer, never by the console itself.
+
+In short: the console **does write to the cluster** — within the platform
+namespaces, with the perimeter above — while full (re)deployment remains the
+CLI's business (`ceffio install`).
 
 ## Media and firewall
 

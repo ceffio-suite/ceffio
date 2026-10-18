@@ -4,6 +4,9 @@
 package version
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -98,4 +101,105 @@ func TestOpenBaoDeclare(t *testing.T) {
 	if c.Module != "internal/vault" {
 		t.Errorf("module declared for openbao: %q, expected internal/vault", c.Module)
 	}
+}
+
+// avecBinary runs fn with Binary replaced, then restores the value: the
+// ImageTag tests modify a global state of the package, and a test that leaves
+// its value behind skews the following ones in the same package.
+func avecBinary(t *testing.T, valeur string, fn func()) {
+	t.Helper()
+	ancien := Binary
+	Binary = valeur
+	defer func() { Binary = ancien }()
+	fn()
+}
+
+// TestImageTagRelease verifies the "release" regime: a git tag v0.6.0 must
+// produce the image tag 0.6.0, without the "v" (Docker image tags never carry
+// it in this repository).
+func TestImageTagRelease(t *testing.T) {
+	cas := []struct{ binaire, attendu string }{
+		{"v0.6.0", "0.6.0"},
+		{"v0.6.0-rc.1", "0.6.0-rc.1"},
+		{"v12.34.56", "12.34.56"},
+	}
+	for _, c := range cas {
+		avecBinary(t, c.binaire, func() {
+			if got := ImageTag(); got != c.attendu {
+				t.Errorf("ImageTag() avec Binary=%q = %q, attendu %q", c.binaire, got, c.attendu)
+			}
+		})
+	}
+}
+
+// TestImageTagDev verifies the "development" regime: without a release
+// version, the tag is derived from the content of the binary (dev- prefix +
+// truncated SHA-256). We inject a fake path via cheminExecutable so as not to
+// depend on the real test binary.
+func TestImageTagDev(t *testing.T) {
+	// Temporary file instead of the real executable: the hash must be
+	// computed on a content that is known and stable during the test.
+	fichier := filepath.Join(t.TempDir(), "faux-binaire")
+	if err := os.WriteFile(fichier, []byte("contenu de test"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ancien := cheminExecutable
+	cheminExecutable = func() (string, error) { return fichier, nil }
+	defer func() { cheminExecutable = ancien }()
+
+	for _, dev := range []string{"0.0.0-dev", "0.1.0-dev", "feat/version-unique"} {
+		avecBinary(t, dev, func() {
+			got := ImageTag()
+			if !strings.HasPrefix(got, "dev-") {
+				t.Fatalf("ImageTag() avec Binary=%q = %q, attendu un préfixe dev-", dev, got)
+			}
+			if got == "dev-" {
+				t.Errorf("tag de développement sans hachage : %q", got)
+			}
+		})
+	}
+}
+
+// TestImageTagDevStable verifies that two successive calls give the same tag:
+// a tag that would change between the image build and its deployment would
+// reference a nonexistent image.
+func TestImageTagDevStable(t *testing.T) {
+	fichier := filepath.Join(t.TempDir(), "faux-binaire")
+	if err := os.WriteFile(fichier, []byte("contenu de test"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ancien := cheminExecutable
+	cheminExecutable = func() (string, error) { return fichier, nil }
+	defer func() { cheminExecutable = ancien }()
+
+	avecBinary(t, "0.0.0-dev", func() {
+		premier := ImageTag()
+		second := ImageTag()
+		if premier != second {
+			t.Errorf("ImageTag() non stable : %q puis %q", premier, second)
+		}
+	})
+}
+
+// TestImageTagJamaisVide verifies the function's central promise: even when
+// the binary cannot be found (nonexistent path OR os.Executable error), the
+// tag is never empty. An empty tag would produce an invalid image reference
+// and break the deployment.
+func TestImageTagJamaisVide(t *testing.T) {
+	ancien := cheminExecutable
+	defer func() { cheminExecutable = ancien }()
+
+	avecBinary(t, "0.0.0-dev", func() {
+		// Case 1: os.Executable fails.
+		cheminExecutable = func() (string, error) { return "", fmt.Errorf("executable not found") }
+		if got := ImageTag(); got == "" {
+			t.Error("ImageTag() vide quand le chemin de l'exécutable est introuvable")
+		}
+
+		// Case 2: the returned path points at no real file.
+		cheminExecutable = func() (string, error) { return "/chemin/qui/nexiste/pas", nil }
+		if got := ImageTag(); got == "" {
+			t.Error("ImageTag() vide quand le binaire est illisible")
+		}
+	})
 }

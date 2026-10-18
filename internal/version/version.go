@@ -18,10 +18,78 @@
 package version
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
+	"os"
+	"regexp"
 	"sort"
 	"strings"
 )
+
+// Binary, Commit and Date describe the binary itself. They are injected at
+// compile time by the CI/release workflows via
+// -ldflags "-X github.com/ceffio-suite/ceffio/internal/version.Binary=...".
+//
+// WHY HERE AND NOT IN package main: these values must be readable by the
+// internal code (ImageTag, to build the image references), not only by cobra
+// for `--version`. Keeping them in main made them invisible to the rest of the
+// program and forced the ldflags to target a symbol nobody else could reach.
+var (
+	Binary = "0.0.0-dev"
+	Commit = ""
+	Date   = ""
+)
+
+// reRelease recognizes a release tag (`v0.6.0`, `v0.6.0-rc.1`): only a
+// release version can serve as an image tag as-is, a development build must be
+// identified by the content of the binary.
+var reRelease = regexp.MustCompile(`^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$`)
+
+// cheminExecutable is a package variable rather than a direct call to
+// os.Executable so that tests can replace it: without that, the development
+// tag would depend on the real test binary currently running, hence on the
+// machine launching `go test` — impossible to verify deterministically.
+var cheminExecutable = os.Executable
+
+// ImageTag returns the Docker image tag corresponding to the current binary.
+//
+// WHY THIS DOUBLE REGIME: a release binary carries a public version
+// (v0.6.0 → tag 0.6.0). A development build has no reliable version — two
+// developers can have the same "0.0.0-dev" with different code. We then
+// identify the binary by the hash of its content: same binary, same tag;
+// different binary, different tag.
+//
+// The returned value must NEVER be empty: it becomes a Docker image tag, and a
+// `registry/image:` reference (empty tag) is invalid — the deployment would
+// fail with a message that would not say where the problem comes from.
+func ImageTag() string {
+	if reRelease.MatchString(Binary) {
+		return strings.TrimPrefix(Binary, "v")
+	}
+
+	chemin, err := cheminExecutable()
+	if err != nil {
+		// Cannot locate the binary: we return a fixed tag rather than an
+		// empty string (see the function's comment).
+		return "dev-inconnu"
+	}
+
+	f, err := os.Open(chemin)
+	if err != nil {
+		return "dev-inconnu"
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "dev-inconnu"
+	}
+	// 12 hexadecimal characters: long enough to avoid practical collisions,
+	// short enough to stay readable in `kubectl get pods`.
+	return "dev-" + hex.EncodeToString(h.Sum(nil))[:12]
+}
 
 // Composant describes a deployed element and its pinned version.
 type Composant struct {

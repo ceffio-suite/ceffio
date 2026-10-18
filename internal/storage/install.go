@@ -373,27 +373,28 @@ func replicasPourLeCluster(ctx context.Context) int {
 func verifierReplicasClasse(ctx context.Context) error {
 	voulu := strconv.Itoa(replicasPourLeCluster(ctx))
 
-	// 60 SECONDES ÉTAIENT TROP COURT, ET LE DÉLAI ÉTAIT LE VRAI SUJET.
+	// 60 SECONDS WAS TOO SHORT, AND THE TIMEOUT WAS THE REAL SUBJECT.
 	//
-	// MESURÉ sur une machine vierge : l'installation échouait sur
+	// MEASURED on a pristine machine: the installation failed on
 	//
 	//	the longhorn StorageClass did not appear within 60s after the helm
 	//	install
 	//
-	// alors que Longhorn était parfaitement sain — le `longhorn-driver-deployer`
-	// était en Init:0/1, c'est-à-dire EN TRAIN DE TÉLÉCHARGER SON IMAGE. C'est
-	// lui qui crée la StorageClass, donc tant qu'il n'a pas démarré, elle
-	// n'existe pas, et aucune attente de la StorageClass ne peut réussir.
+	// while Longhorn was perfectly healthy — the `longhorn-driver-deployer`
+	// was in Init:0/1, that is, STILL DOWNLOADING ITS IMAGE. It is the one
+	// that creates the StorageClass, so until it has started, the class
+	// does not exist, and no amount of waiting on the StorageClass can
+	// succeed.
 	//
-	// Sur un serveur vierge, ce téléchargement prend plusieurs minutes (le
-	// cache d'images est vide, et l'agent CSI comme le manager pèsent lourd).
-	// Sur une machine réinstallée il est instantané, ce qui explique que le
-	// défaut ne se voyait pas : c'est EXACTEMENT le cas que le from scratch
-	// existe pour révéler.
+	// On a pristine server this download takes several minutes (the image
+	// cache is empty, and the CSI agent like the manager are heavy). On a
+	// reinstalled machine it is instant, which is why the defect was
+	// invisible: this is EXACTLY the case the from-scratch run exists to
+	// reveal.
 	//
-	// Dix minutes et un message d'attente : assez large pour un registre lent,
-	// assez court pour ne pas faire attendre indéfiniment devant une panne
-	// réelle.
+	// Ten minutes and a waiting message: wide enough for a slow registry,
+	// short enough not to make anyone wait indefinitely in front of a real
+	// failure.
 	const limite = 10 * time.Minute
 	fin := time.Now().Add(limite)
 	var obtenu string
@@ -408,9 +409,9 @@ func verifierReplicasClasse(ctx context.Context) error {
 			}
 		}
 
-		// On rapporte POURQUOI on attend, plutôt que de laisser l'opérateur
-		// devant un silence : un deployer en Init signale un téléchargement,
-		// un deployer absent signale un problème de chart.
+		// We report WHY we are waiting, rather than leaving the operator in
+		// front of a silence: a deployer in Init signals a download, an
+		// absent deployer signals a chart problem.
 		etat, _ := k8s.Command(ctx, "kubectl", "get", "pods", "-n", "longhorn-system",
 			"-l", "app=longhorn-driver-deployer",
 			"-o", "jsonpath={.items[0].status.phase}/{.items[0].status.containerStatuses[0].state}").Output()

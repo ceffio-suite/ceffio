@@ -306,8 +306,10 @@ read ADDRESS < /tmp/public-address.txt || true
 # (10.42.0.0) and the cni0 bridge (10.42.0.1). coturn listens on all of them by
 # default and picks one for the relay candidates — measured: it announced
 # 192.168.1.254, the NAT address of the box in front of the host. A browser
-# outside receives that and cannot reach it, which is exactly the "un serveur
-# TURN est probablement nécessaire" failure in Talk.
+# outside receives that and cannot reach it, which is exactly the
+# "un serveur TURN est probablement nécessaire" failure in Talk (quoted
+# verbatim: it is Talk's own message, in French, and it is the symptom
+# being explained — translating it would make it unfindable).
 #
 # So we pin the LOCAL address explicitly. The default route's source is the
 # interface address the host actually uses to leave the network, which is the

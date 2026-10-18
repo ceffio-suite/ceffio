@@ -913,36 +913,36 @@ type appRoute struct {
 // WHY A MIDDLEWARE AND NOT TRAEFIK'S entryPoint REDIRECTION: the entryPoint
 // setting cannot be excluded per Ingress, so it would also capture the
 // challenge path and break renewal. The middleware lets us exempt it.
-// redirectionManifest redirige http vers https, EN EXEMPTANT LE CHEMIN DU
-// CHALLENGE ACME.
+// redirectionManifest redirects http to https, EXEMPTING THE ACME CHALLENGE
+// PATH.
 //
-// LE COMMENTAIRE AU-DESSUS PROMETTAIT CETTE EXEMPTION ; LE CODE NE LA FAISAIT
-// PAS. Le middleware était un `redirectScheme` pur, qui redirige TOUT — y
-// compris /.well-known/acme-challenge/. Mesuré sur une installation neuve :
+// THE COMMENT ABOVE PROMISED THIS EXEMPTION; THE CODE DID NOT DELIVER IT. The
+// middleware was a pure `redirectScheme`, which redirects EVERYTHING —
+// including /.well-known/acme-challenge/. Measured on a fresh installation:
 //
-//	http://cloud.<domain>/.well-known/acme-challenge/<jeton>  →  301
+//	http://cloud.<domain>/.well-known/acme-challenge/<token>  →  301
 //	https://cloud.<domain>/                                   →  400
 //
-// Let's Encrypt arrive EN CLAIR, reçoit un 301 vers un https qui n'a pas
-// encore de certificat valide, et échoue. C'est un cercle fermé : le certificat
-// ne peut pas être obtenu parce que la redirection qu'il justifie est déjà
-// active, et cette redirection empêche le challenge d'aboutir.
+// Let's Encrypt arrives IN CLEAR, receives a 301 towards an https that does
+// not have a valid certificate yet, and fails. It is a closed circle: the
+// certificate cannot be obtained because the redirection it justifies is
+// already active, and that redirection prevents the challenge from completing.
 //
-// POURQUOI UNE CHAÎNE DE MIDDLEWARES PLUTÔT QU'UN redirectScheme : Traefik
-// évalue les middlewares dans l'ordre, et `redirectRegex` permet d'écarter un
-// chemin. On combine donc :
+// WHY A MIDDLEWARE CHAIN RATHER THAN A redirectScheme: Traefik evaluates the
+// middlewares in order, and `redirectRegex` makes it possible to set a path
+// aside. So we combine:
 //
-//  1. un redirectRegex qui NE MATCHE PAS le chemin ACME — l'expression exige
-//     un chemin qui ne commence pas par /.well-known/acme-challenge/ ;
-//  2. un redirectScheme en repli, qui attrape le reste.
+//  1. a redirectRegex that DOES NOT MATCH the ACME path — the expression
+//     requires a path that does not start with /.well-known/acme-challenge/;
+//  2. a redirectScheme as fallback, which catches the rest.
 //
-// LE SECOND EST NÉCESSAIRE : redirectRegex ne s'applique qu'à ce qu'il matche,
-// et sans le repli les requêtes non concernées ne seraient pas redirigées du
-// tout — on aurait remplacé un défaut par un autre.
+// THE SECOND ONE IS NECESSARY: redirectRegex only applies to what it matches,
+// and without the fallback the unrelated requests would not be redirected at
+// all — we would have replaced one defect with another.
 //
-// LE CHEMIN EST ANCRÉ (^) ET LE DOMAINE CAPTURÉ : la substitution reconstruit
-// l'URL en https avec le même hôte et le même chemin, sans quoi une redirection
-// perdrait la route demandée.
+// THE PATH IS ANCHORED (^) AND THE DOMAIN CAPTURED: the substitution rebuilds
+// the URL in https with the same host and the same path, without which a
+// redirection would lose the requested route.
 func redirectionManifest(ns string) string {
 	return fmt.Sprintf(`apiVersion: traefik.io/v1alpha1
 kind: Middleware
@@ -951,26 +951,24 @@ metadata:
   namespace: %s
 spec:
   redirectRegex:
-    # TOUT SAUF LE CHALLENGE ACME, et la regex est écrite pour Go/RE2.
+    # EVERYTHING EXCEPT THE ACME CHALLENGE, and the regex is written for Go/RE2.
     #
-    # PAS D'ASSERTION NÉGATIVE ICI : (?!...) est une syntaxe Perl que RE2
-    # REFUSE. Testé avec regexp.Compile :
+    # NO NEGATIVE LOOKAHEAD HERE: (?!...) is Perl syntax and RE2 REFUSES it.
+    # Verified with regexp.Compile:
     #
-    #     error parsing regexp: invalid or unsupported Perl syntax: (?!
+    #     error parsing regexp: invalid or unsupported Perl syntax: (?! 
     #
-    # L'expression aurait été rejetée par Traefik, et la route se serait
-    # retrouvée servie EN CLAIR sans que rien ne le signale — un défaut pire
-    # que celui qu'on corrige.
+    # Traefik would have rejected the expression, and the route would then have
+    # been served IN CLEAR with nothing to signal it — a worse defect than the
+    # one being fixed.
     #
-    # LA CLASSE [^.#] FAIT LE TRAVAIL : les chemins que nous servons ne
-    # commencent jamais par un point, et /.well-known/acme-challenge/ en
-    # commence un. On redirige donc tout chemin qui ne commence pas par un
-    # point, plus la racine vide.
+    # THE CLASS [^.#] DOES THE JOB: the paths we serve never start with a dot,
+    # and /.well-known/acme-challenge/ starts with one. So we redirect every
+    # path that does not start with a dot, plus the empty root.
     #
-    # EFFET DE BORD ASSUMÉ : /.well-known/<autre-chose> reste en clair. C'est
-    # une convention réservée (RFC 8615) que nos applications n'utilisent pas,
-    # et l'accepter vaut mieux qu'une regex refusée ou qu'une liste de chemins
-    # à tenir à jour.
+    # ACCEPTED SIDE EFFECT: /.well-known/<anything-else> stays in clear. That
+    # is a reserved convention (RFC 8615) our applications do not use, and
+    # accepting it beats a rejected regex or a path list to keep up to date.
     regex: ^http://([^/]+)/($|[^.#].*)$
     replacement: https://${1}/${2}
     permanent: true
@@ -993,17 +991,17 @@ spec:
 // upgrade carries the session, and leaving one host reachable in clear would
 // mean the rule holds everywhere except the one place nobody remembers to
 // check.
-// redirectionAnnotations attache les DEUX middlewares à une route, DANS L'ORDRE.
+// redirectionAnnotations attaches BOTH middlewares to a route, IN ORDER.
 //
-// L'ORDRE EST LA PARTIE QUI COMPTE : Traefik les applique de gauche à droite.
-// Le premier tente la redirection conditionnelle (qui ignore le challenge
-// ACME) ; le second rattrape ce que le premier n'a pas matché. Inversés, le
-// repli redirigerait tout et le premier ne servirait à rien — exactement le
-// défaut qu'on vient de corriger, avec deux middlewares au lieu d'un.
+// THE ORDER IS THE PART THAT MATTERS: Traefik applies them left to right. The
+// first one attempts the conditional redirection (which ignores the ACME
+// challenge); the second catches what the first did not match. Reversed, the
+// fallback would redirect everything and the first one would serve no purpose
+// — exactly the defect we just fixed, with two middlewares instead of one.
 //
-// SÉPARÉS PAR UNE VIRGULE, sans espace : c'est le format attendu par Traefik
-// pour une liste. Une espace de trop rend la valeur non analysable et Traefik
-// ignore SILENCIEUSEMENT la route entière, qui se retrouve servie en clair.
+// SEPARATED BY A COMMA, without a space: that is the format Traefik expects
+// for a list. One extra space makes the value unparseable and Traefik SILENTLY
+// ignores the whole route, which ends up served in clear.
 func redirectionAnnotations(ns string) string {
 	return "    traefik.ingress.kubernetes.io/router.middlewares: " +
 		ns + "-ceffio-redirect-https@kubernetescrd," +

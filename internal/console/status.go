@@ -12,6 +12,8 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/ceffio-suite/ceffio/internal/module"
 )
 
 // Representation of the stack for the console.
@@ -65,43 +67,49 @@ type CertInfo struct {
 	Hote      string `json:"hote"`     // covered domain (deduced from the name)
 }
 
-// catalogueServices: role of each public exposure. A single source of
-// truth — the console and any future doc read the same table.
+// registryNamespaces lists every namespace the registry declares, in
+// module order, deduplicated.
 //
-// office is marked "technical": nobody uses it directly, but the BROWSER
-// loads the ONLYOFFICE editor from it when a document is opened in Nextcloud
-// (DocumentServerUrl). Removing it from the exposure would break document
-// editing — so it stays public, but is no longer presented as a user service.
-var catalogueServices = []struct {
-	sub       string
-	nom       string
-	role      string
-	technique bool
-	sso       bool
-	pods      []string // prefixes of pods that carry the service
-}{
-	{"cloud", "Nextcloud", "Files, sharing and collaboration", false, true,
-		[]string{"nextcloud"}},
-	{"talk", "Nextcloud Talk", "Messaging and video conferencing (built into Nextcloud)", false, true,
-		[]string{"nextcloud"}},
-	{"keycloak", "Keycloak", "Single sign-on (SSO) for all apps", false, false,
-		[]string{"keycloak"}},
-	{"office", "ONLYOFFICE", "Editing engine for Nextcloud documents — loaded by the browser, no useful direct access", true, false,
-		[]string{"onlyoffice"}},
-	{"admin", "Ceffio console", "This administration console", true, false,
-		[]string{"ceffio-admin"}},
-	{"spreed", "Talk — media server", "Video transport for meetings (Janus + signaling)", true, false,
-		[]string{"janus", "talk-signaling", "coturn", "nats"}},
+// WHY the registry and not a hand-written list: the previous list
+// ("data, identity, files, office, video, system") predated the mail, vault
+// and exapps modules — their pods were simply invisible on the status page.
+// Every module declares its Namespaces in Info(); walking the registry
+// makes an omission impossible for any future module.
+func registryNamespaces() []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, m := range moduleAll() {
+		for _, ns := range m.Info().Namespaces {
+			if !seen[ns] {
+				seen[ns] = true
+				out = append(out, ns)
+			}
+		}
+	}
+	return out
+}
+
+// registryServices builds the catalogue of public exposures from the
+// registry, replacing the old hand-written catalogueServices table: each
+// module declares its Services (subdomain, role, SSO, pod prefixes) and the
+// status page only assembles them. SSO comes straight from
+// module.Service.SSO — the same flag ServicePublic already exposed.
+func registryServices() []module.Service {
+	var out []module.Service
+	for _, m := range moduleAll() {
+		out = append(out, m.Info().Services...)
+	}
+	return out
 }
 
 // handleStatus returns the full state of the platform.
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	namespaces := registryNamespaces()
 
-	// 1. All ceffio-* pods at once (one API request per namespace).
+	// 1. All declared-namespace pods at once (one API request per namespace).
 	podsParNS := map[string][]Pod{}
-	for _, l := range []string{"data", "identity", "files", "office", "video", "system"} {
-		ns := "ceffio-" + l
+	for _, ns := range namespaces {
 		pl, err := s.kube.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
 		if err != nil {
 			continue
@@ -135,11 +143,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 2. Layers (internal diagnostic view).
+	// 2. Layers (internal diagnostic view): one row per declared namespace.
 	var stack []Layer
-	for _, l := range []string{"data", "identity", "files", "office", "video", "system"} {
-		ly := Layer{Name: l}
-		for _, p := range podsParNS["ceffio-"+l] {
+	for _, ns := range namespaces {
+		ly := Layer{Name: ns}
+		for _, p := range podsParNS[ns] {
 			ly.Total++
 			if p.Ready {
 				ly.Ready++
@@ -150,20 +158,26 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. Public services: real state computed from the pods carrying them.
+	// The catalogue comes from the registry (module.Service), NOT from a
+	// table maintained here — SSO included, which ServicePublic already
+	// exposed and module.Service now carries.
 	var services []ServicePublic
-	for _, c := range catalogueServices {
+	for _, c := range registryServices() {
 		svc := ServicePublic{
-			Nom:       c.nom,
-			Hote:      c.sub + "." + s.Domain,
-			Role:      c.role,
-			URL:       "https://" + c.sub + "." + s.Domain,
-			Technique: c.technique,
-			SSO:       c.sso,
+			Nom:       c.Name,
+			Hote:      c.Sub + "." + s.Domain,
+			Role:      c.Role,
+			URL:       "https://" + c.Sub + "." + s.Domain,
+			Technique: c.Technical,
+			SSO:       c.SSO,
 			Sante:     "unknown",
 		}
-		for _, ns := range []string{"ceffio-files", "ceffio-identity", "ceffio-office", "ceffio-video", "ceffio-system"} {
+		// Pod prefixes are matched in EVERY declared namespace: the old
+		// code scanned a hard-coded subset of five namespaces, which is
+		// how mail/vault/exapps pods ended up invisible.
+		for _, ns := range namespaces {
 			for _, p := range podsParNS[ns] {
-				if !porteService(p.Name, c.pods) {
+				if !porteService(p.Name, c.PodPrefixes) {
 					continue
 				}
 				svc.PodsTotal++
@@ -284,7 +298,14 @@ func itoa(n int) string {
 // the console must show it before it happens.
 func (s *Server) listCerts(ctx context.Context) []CertInfo {
 	out := []CertInfo{}
-	list, err := s.kube.Discovery().RESTClient().Get().AbsPath("/apis/cert-manager.io/v1", "certificates").DoRaw(ctx)
+	// Guard: the fake clientset used in tests exposes a Discovery with no
+	// REST client — dereferencing nil here would panic the whole status
+	// response for a section (certificates) that is merely unavailable.
+	rc := s.kube.Discovery().RESTClient()
+	if rc == nil {
+		return out
+	}
+	list, err := rc.Get().AbsPath("/apis/cert-manager.io/v1", "certificates").DoRaw(ctx)
 	if err != nil {
 		return out
 	}

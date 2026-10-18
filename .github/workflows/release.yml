@@ -38,6 +38,12 @@ jobs:
     # Everything else stays read-only on purpose.
     permissions:
       contents: write
+    outputs:
+      # Le job console-image dérive ses tags d'image de CETTE sortie : le tag
+      # est résolu et validé une seule fois, puis réutilisé. Deux résolutions
+      # indépendantes pourraient diverger (re-publication via workflow_dispatch
+      # avec un tag saisi à la main, par exemple).
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - name: Resolve the tag
         id: tag
@@ -117,7 +123,7 @@ jobs:
           mkdir -p dist
           for ARCH in amd64 arm64; do
             GOARCH=$ARCH go build -trimpath \
-              -ldflags "-s -w -X main.version=${TAG} -X main.commit=${COMMIT} -X main.date=${DATE}" \
+              -ldflags "-s -w -X github.com/ceffio-suite/ceffio/internal/version.Binary=${TAG} -X github.com/ceffio-suite/ceffio/internal/version.Commit=${COMMIT} -X github.com/ceffio-suite/ceffio/internal/version.Date=${DATE}" \
               -o "dist/ceffio-linux-$ARCH" ./cmd/ceffio
           done
           ( cd dist && sha256sum ceffio-linux-* > checksums.txt )
@@ -131,6 +137,21 @@ jobs:
           ./dist/ceffio-linux-amd64 --help > /dev/null
           ./dist/ceffio-linux-amd64 install --help > /dev/null
           echo "the shipped amd64 binary starts"
+
+      - name: Share the binaries with the console image job
+        # L'IMAGE DOIT CONTENIR LES BINAIRES DE LA RELEASE, OCTET POUR OCTET.
+        # Le job console-image ne recompile JAMAIS : une seconde compilation
+        # (autre date, autre ordre de linking) produirait un binaire différent
+        # de celui que les opérateurs téléchargent et vérifient via
+        # checksums.txt — l'image ne serait plus reproductible depuis la
+        # release. C'est exactement le défaut de l'ancien dépôt ceffio-console.
+        uses: actions/upload-artifact@v7
+        with:
+          name: binaries
+          path: |
+            dist/ceffio-linux-amd64
+            dist/ceffio-linux-arm64
+          if-no-files-found: error
 
       - name: Write the release body
         # `generate_release_notes` keeps the changelog (the commits since the
@@ -176,3 +197,101 @@ jobs:
           body_path: RELEASE_BODY.md
         env:
           GH_TOKEN: ${{ github.token }}
+
+  # L'IMAGE DE LA CONSOLE EST PUBLIÉE ICI, DEPUIS CE DÉPÔT, À PARTIR DES
+  # BINAIRES DE LA RELEASE.
+  #
+  # Avant, elle était publiée par le dépôt séparé ceffio-suite/ceffio-console,
+  # dont le workflow clonait ce dépôt en --depth 1 et RECOMPILE avec Go 1.24
+  # alors que go.mod exige 1.27.1 : l'image ne correspondait à aucune release
+  # vérifiable, et le compilateur ne respectait pas le contrat du code. Ici,
+  # le job consomme l'artefact `binaries` du job release : ce qui tourne dans
+  # l'image est octet pour octet ce que les opérateurs téléchargent et
+  # vérifient via checksums.txt.
+  console-image:
+    name: publish the console image (${{ needs.release.outputs.tag }})
+    runs-on: ubuntu-24.04
+    needs: release
+    permissions:
+      contents: read
+      # Publier sur GHCR est la seule écriture de ce job. Si la politique de
+      # l'organisation restreint GITHUB_TOKEN sur packages:write (cas de
+      # l'ancien dépôt ceffio-console), le repli documenté est un PAT stocké
+      # dans secrets.GHCR_TOKEN avec le scope packages:write — remplacer
+      # `password: ${{ github.token }}` par
+      # `password: ${{ secrets.GHCR_TOKEN }}` dans l'étape de login.
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download the release binaries
+        # Jamais de recompilation : voir l'en-tête du job.
+        uses: actions/download-artifact@v7
+        with:
+          name: binaries
+          path: dist
+
+      - name: Check the downloaded binaries against the release checksums
+        # Le téléchargement d'artefact passe par l'API GitHub, pas par la
+        # release ; cette vérification prouve que l'artefact et la release
+        # publiés par le job précédent sont bien les mêmes fichiers.
+        run: |
+          set -euo pipefail
+          ls -la dist/
+          test -x dist/ceffio-linux-amd64
+          test -x dist/ceffio-linux-arm64
+          # dist/checksums.txt n'est pas dans l'artefact (il n'est pas un
+          # binaire) : on le télécharge depuis la release pour comparer.
+          TAG="${{ needs.release.outputs.tag }}"
+          curl -fsSL -o /tmp/checksums.txt \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/checksums.txt"
+          ( cd dist && sha256sum -c --ignore-missing /tmp/checksums.txt )
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push the multi-architecture image
+        # LE DOCKERFILE NE RECOMPILE RIEN : il copie dist/ceffio-linux-$ARCH
+        # (sélectionné par TARGETARCH, fourni par BuildKit par plateforme).
+        # Une image « from scratch » sans instruction RUN se construit pour
+        # arm64 sur un runner amd64 sans émulation — il n'y a rien à exécuter.
+        #
+        # Tags : X.Y.Z toujours (règle du projet : tag = version, jamais
+        # d'image flottante sans version) ; `latest` UNIQUEMENT pour une
+        # version sans suffixe — un -rc.1 ne doit pas devenir la version que
+        # tout le monde tire par défaut.
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.release.outputs.tag }}"
+          VERSION="${TAG#v}"
+          IMAGE="ghcr.io/ceffio-suite/ceffio-console"
+          TAGS=(-t "${IMAGE}:${VERSION}")
+          case "$TAG" in
+            *-*) echo "prerelease tag: '${IMAGE}:latest' is NOT updated" ;;
+            *)   TAGS+=(-t "${IMAGE}:latest") ;;
+          esac
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            -f build/console/Dockerfile \
+            "${TAGS[@]}" \
+            --push .
+          echo "Published: ${IMAGE}:${VERSION}"
+
+      - name: Prove the image is pullable, anonymously
+        # « Le build a dit pushed » ne prouve pas qu'un inconnu peut tirer
+        # l'image : le paquet peut rester PRIVÉ et le build réussir quand
+        # même. Ce pull se fait SANS identifiants — exactement ce que fait un
+        # nouveau déploiement (crictl pull dans internal/console/deploy.go).
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.release.outputs.tag }}"
+          VERSION="${TAG#v}"
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          docker pull --platform linux/amd64 "ghcr.io/ceffio-suite/ceffio-console:${VERSION}"
+          echo "anonymous pull of :${VERSION} succeeded"

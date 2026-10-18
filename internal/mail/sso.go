@@ -583,9 +583,9 @@ func attendreStabilite(ctx context.Context) error {
 // because re-creating the same address would either fail or add a duplicate,
 // and neither is useful.
 func assurerReseauInterneAutorise(ctx context.Context) error {
-	// Le reseau des pods. k3s l'attribue depuis ce bloc, et il est interne au
-	// cluster : aucun paquet venant de l'exterieur ne peut porter une de ces
-	// adresses sources.
+	// The pod network. k3s allocates it from this block, and it is internal
+	// to the cluster: no packet coming from the outside can carry one of these
+	// source addresses.
 	const reseauPods = "10.42.0.0/16"
 
 	existantes, err := lireChamps(ctx, "x:AllowedIp/get", "address")
