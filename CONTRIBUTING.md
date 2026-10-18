@@ -136,6 +136,15 @@ real failure. New code that breaks one must justify it in the PR.
    an update, never a destruction. Every new deployment step is written to be
    re-runnable, and said so in its comment.
 
+9. **A new optional feature is a module — nothing else.** It ships as a Go
+   package implementing `module.Module` and one blank import in
+   `internal/modules/all.go`; the installer, the CLI and the console read the
+   registry and must not change. No feature-specific route, no
+   feature-specific console section, no hardcoded feature list: the
+   hand-written HaRP and transcription endpoints were folded into the generic
+   module API precisely because each new feature duplicated them. See
+   [`docs/adding-a-module.md`](docs/adding-a-module.md).
+
 ## Reporting an issue
 
 Include, in this order: what you ran, what you expected, what happened (exact
