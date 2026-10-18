@@ -53,6 +53,13 @@ const (
 	// It is a PRODUCT of the injector, never a secret typed in by hand: a
 	// value written in two places is a value that eventually disagrees.
 	secretACME = "ceffio-acme-dns"
+	// nsSystem: where the wildcard certificate and the Traefik default
+	// TLSStore live. ceffio-system, not an application namespace: the
+	// certificate covers EVERY host of the domain, so tying its lifetime to
+	// one application would delete it the day that application is removed.
+	nsSystem = "ceffio-system"
+	// secretWildcard: the single Secret holding the wildcard certificate.
+	secretWildcard = "ceffio-wildcard-tls"
 )
 
 // Deploy applies idempotently the CA + the Ingresses for the domain.
@@ -129,8 +136,28 @@ func Deploy(ctx context.Context, domain string, reglages acme.Reglages) error {
 		}
 	}
 
-	if err := apply(ctx, ingressesManifest(domain)); err != nil {
+	if err := apply(ctx, ingressesManifest(domain, reglages)); err != nil {
 		return err
+	}
+
+	// THE WILDCARD, WHEN THE CHALLENGE ALLOWS IT.
+	//
+	// The Ingresses above point at the shared Secret when DNS-01 is
+	// configured, so the Certificate has to exist for them to have something
+	// to serve. Applied AFTER them on purpose: a certificate can take minutes
+	// (a DNS challenge has to propagate), and Traefik serves its default
+	// certificate meanwhile — an honest "not ready yet" rather than a route
+	// that does not exist at all.
+	//
+	// WHAT IT FIXES, MEASURED: talk.<domain> and cloud.<domain> served
+	// Traefik's default certificate because HTTP-01 needs a service listening
+	// on port 80 for that exact name, and three hostnames of the suite have
+	// none. A wildcard covers every name, including the ones with no Ingress.
+	if w := certWildcardManifest(domain, reglages); w != "" {
+		if err := apply(ctx, w); err != nil {
+			return err
+		}
+		fmt.Printf("∙ wildcard certificate requested (*.%s, single issuance)\n", domain)
 	}
 
 	// KEYCLOAK'S PUBLIC HOSTNAME IS SET HERE, NOT LATER.
@@ -1126,7 +1153,7 @@ func redirectionAnnotations(ns string) string {
 		ns + "-ceffio-redirect-https-fallback@kubernetescrd\n"
 }
 
-func ingressesManifest(domain string) string {
+func ingressesManifest(domain string, reglages acme.Reglages) string {
 	// One decision for the whole set: every host of a domain is signed by the
 	// same authority. Mixing them would mean some names show a browser warning
 	// and others do not, with no rule the operator could state.
@@ -1177,7 +1204,7 @@ spec:
   ingressClassName: traefik
   tls:
     - hosts: [%[3]s]
-      secretName: %[1]s-tls
+      secretName: %[8]s
   rules:
     - host: %[3]s
       http:
@@ -1189,7 +1216,77 @@ spec:
                 name: %[4]s
                 port:
                   number: %[6]d
-`, r.sub, r.namespace, host, r.service, ann, r.port, issuer)
+`, r.sub, r.namespace, host, r.service, ann, r.port, issuer, nomSecretTLS(r.sub, reglages))
 	}
 	return sb.String()
+}
+
+// nomSecretTLS returns the Secret an Ingress reads its certificate from.
+//
+// TWO REGIMES, AND THE REASON IS THE ACME CHALLENGE, NOT A PREFERENCE:
+//
+//	HTTP-01  one certificate per hostname, so one Secret per route. The name
+//	         is derived from the host, which is also how cert-manager names
+//	         the Secret it creates for an Ingress.
+//
+//	DNS-01   ONE wildcard certificate for the whole domain, in ONE Secret
+//	         (certWildcardManifest below). Every route points at it. That is the
+//	         point of the change: nine hostname-by-hostname issuances against
+//	         the Let's Encrypt weekly quota become a single certificate, and a
+//	         hostname added later is served WITHOUT any new issuance.
+//
+// WHY NOT ALWAYS THE WILDCARD: a wildcard cannot be obtained over HTTP-01.
+// Asking for it with the http01 solver would leave every Ingress pointing at a
+// Secret that never appears, and Traefik would serve its own default
+// certificate — the exact symptom this distinction removes.
+func nomSecretTLS(sub string, reglages acme.Reglages) string {
+	if reglages.DNS01() {
+		return secretWildcard
+	}
+	return sub + "-tls"
+}
+
+// certWildcardManifest creates the single certificate covering the domain and
+// every subdomain, plus the Traefik default TLSStore that makes it the
+// cluster-wide fallback.
+//
+// WHY A TLSStore IN ADDITION TO THE CERTIFICATE: a Secret is namespaced, and
+// the wildcard lives in ceffio-system while the Ingresses live in seven
+// different namespaces. Traefik resolves that with its `default` TLSStore: any
+// route without a more specific certificate gets this one — so a new
+// application, or a namespace nobody remembered to configure, is served in
+// HTTPS the moment it exists.
+//
+// WHY WILDCARD AND APEX IN THE SAME Certificate: Let's Encrypt treats them as
+// two identifiers but ONE issuance, and cert-manager publishes two TXT records
+// at the same _acme-challenge name. The libdns webhook merges them (GetRecords
+// + SetRecords); a solver that overwrites instead would loop forever without
+// saying why.
+func certWildcardManifest(domain string, reglages acme.Reglages) string {
+	if !reglages.DNS01() {
+		return ""
+	}
+	return fmt.Sprintf(`apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: %[1]s
+  namespace: %[2]s
+spec:
+  secretName: %[1]s
+  issuerRef:
+    name: %[3]s
+    kind: ClusterIssuer
+  dnsNames:
+    - %[4]s
+    - "*.%[4]s"
+---
+apiVersion: traefik.io/v1alpha1
+kind: TLSStore
+metadata:
+  name: default
+  namespace: %[2]s
+spec:
+  defaultCertificate:
+    secretName: %[1]s
+`, secretWildcard, nsSystem, issuerACME, domain)
 }
