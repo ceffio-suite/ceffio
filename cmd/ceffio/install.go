@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ceffio-suite/ceffio/internal/acme"
 	"github.com/ceffio-suite/ceffio/internal/apps"
 	"github.com/ceffio-suite/ceffio/internal/bootstrap"
 	"github.com/ceffio-suite/ceffio/internal/cluster"
@@ -803,7 +804,18 @@ func installerModulesOptionnels(ctx context.Context, o *installOptions, modules 
 	if err != nil {
 		return fmt.Errorf("optional modules need a Kubernetes client: %w", err)
 	}
-	env := module.Env{Domain: o.domain, Kube: kube, Out: os.Stdout}
+
+	// The ACME settings are resolved HERE and handed to the modules: a module
+	// never reads the environment itself. An invalid configuration stops the
+	// phase instead of installing modules that would act on settings nobody
+	// validated — the ingress module is precisely the one that writes a
+	// ClusterIssuer from them.
+	reglages, err := acme.DepuisEnvironnement()
+	if err != nil {
+		return err
+	}
+
+	env := module.Env{Domain: o.domain, Kube: kube, Out: os.Stdout, Acme: reglages}
 
 	fmt.Printf("\n∙ optional modules from the registry (%d)\n", len(modules))
 	for _, m := range modules {

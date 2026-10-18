@@ -79,8 +79,15 @@ func kindName(k module.Kind) string {
 // moduleEnv builds the environment handed to registry modules: the shared
 // Kubernetes client and the console domain. Out is chosen per call — the
 // operation journal for install/uninstall, io.Discard for read-only state.
+//
+// The ACME settings come from the CONSOLE'S OWN PROCESS, resolved once at
+// startup (s.acme) rather than re-read here. WHY: the console runs as a pod
+// with a fixed environment; re-reading it on every call would give a different
+// answer only if the pod's environment changed under it, which cannot happen —
+// and resolving it once means the settings page can later update the value in
+// place without any module reading os.Getenv.
 func (s *Server) moduleEnv(out io.Writer) module.Env {
-	return module.Env{Domain: s.Domain, Kube: s.kube, Out: out}
+	return module.Env{Domain: s.Domain, Kube: s.kube, Out: out, Acme: s.acme}
 }
 
 // viewFor builds the browser view of one module.

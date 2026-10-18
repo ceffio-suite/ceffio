@@ -25,6 +25,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+
+	"github.com/ceffio-suite/ceffio/internal/acme"
 )
 
 const (
@@ -51,12 +53,34 @@ type Server struct {
 	// ops tracks the asynchronous module operations (one at a time per
 	// module, with the in-memory journal). See module_ops.go.
 	ops *opsManager
+
+	// acme is the ACME configuration of THIS installation, resolved once at
+	// startup from the container's environment and handed to every module
+	// through module.Env.
+	//
+	// WHY RESOLVED ONCE AND NOT PER CALL: the pod's environment does not
+	// change while it runs, so re-reading it per call would only add a
+	// failure mode. Resolving it here also means an invalid value is
+	// reported ONCE, at startup, in the console's own logs — instead of
+	// silently degrading a certificate issuance weeks later.
+	acme acme.Reglages
 }
 
 // New creates the console server: in-cluster K8s client (or out-of-cluster
 // kubeconfig), and Keycloak admin access read from the keycloak-admin secret.
 func New(domain, apiKey string) (*Server, error) {
-	s := &Server{Domain: domain, APIKey: apiKey, ops: newOpsManager()}
+	s := &Server{Domain: domain, APIKey: apiKey, ops: newOpsManager(), acme: acme.HTTP01()}
+
+	// The ACME configuration is resolved ONCE, and an invalid value is
+	// reported without preventing startup: the console is the only way an
+	// operator can SEE and fix the configuration, so refusing to serve would
+	// lock them out of the very page they need. The historical HTTP-01 is used
+	// meanwhile, and the warning names the variable at fault.
+	if reglages, err := acme.DepuisEnvironnement(); err == nil {
+		s.acme = reglages
+	} else {
+		fmt.Fprintf(os.Stderr, "⚠ %v — the console assumes the %s challenge\n", err, acme.ChallengeHTTP)
+	}
 	// Kubernetes client: in-cluster if possible, otherwise the default kubeconfig.
 	if cfg, err := rest.InClusterConfig(); err == nil {
 		cs, err := kubernetes.NewForConfig(cfg)
