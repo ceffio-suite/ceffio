@@ -34,6 +34,7 @@ package exapps
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"strconv"
@@ -53,6 +54,9 @@ const (
 	// keeping them in their own namespace means a Role scoped to it cannot
 	// reach anything of ours.
 	nsExapps = "ceffio-exapps"
+	// nomCA: the ConfigMap the install creates in every application namespace
+	// (internal/ingress createCAConfigs). Copied into the ExApp namespace by copierCA.
+	nomCA = "ceffio-ca-cm"
 
 	// HARP LIVES IN THE EXAPP NAMESPACE, NOT IN ceffio-system.
 	//
@@ -162,6 +166,12 @@ func Deploy(ctx context.Context, domain string) error {
 	}
 	cle, err := ensureClePartagee(ctx)
 	if err != nil {
+		return err
+	}
+	// The CA must be present in THIS namespace before HaRP starts: its
+	// manifest mounts ceffio-ca-cm, and a missing ConfigMap leaves the pod
+	// stuck in ContainerCreating with a message about a missing volume.
+	if err := copierCA(ctx); err != nil {
 		return err
 	}
 	if err := deployerHarp(ctx, domain, cle); err != nil {
@@ -379,6 +389,51 @@ func ensureClePartagee(ctx context.Context) (string, error) {
 	return cle, nil
 }
 
+// copierCA copies the internal certificate authority into the ExApp namespace.
+//
+// WHY A COPY AND NOT A DIRECT MOUNT: the authority lives in cert-manager, and a
+// pod cannot mount a ConfigMap from another namespace. The install's own
+// TLS-trust pass (internal/ingress) injects it component by component — but it
+// runs BEFORE HaRP exists, since the console installs HaRP later. HaRP was
+// therefore the one component left without the authority, and it is the one
+// that talks to Nextcloud over HTTPS:
+//
+//	aiohttp ClientConnectorCertificateError: Cannot connect to host
+//	cloud.<domain>:443 ssl:True [SSLCertVerificationError]
+//
+// It then never registers the ExApp it deployed, and KILLS the container one
+// second after starting it, in a loop.
+//
+// The console may read ConfigMaps in ceffio-files and write them in
+// ceffio-exapps — verified with `kubectl auth can-i`. No right is widened.
+//
+// A public install whose certificate was issued successfully has no need of
+// this: an absent source ConfigMap is left alone rather than invented.
+func copierCA(ctx context.Context) error {
+	cli, err := k8sapi.Nouveau()
+	if err != nil {
+		return fmt.Errorf("Kubernetes client: %w", err)
+	}
+	donnees, err := cli.LireConfigMap(ctx, nsNextcloud, nomCA)
+	if err != nil {
+		return err
+	}
+	if len(donnees) == 0 {
+		return nil // no internal authority to carry over
+	}
+	objet := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata":   map[string]any{"name": nomCA, "namespace": nsExapps},
+		"data":       donnees,
+	}
+	manifeste, err := json.Marshal(objet)
+	if err != nil {
+		return err
+	}
+	return cli.Appliquer(ctx, string(manifeste))
+}
+
 // deployerHarp creates the pod.
 //
 // SECRETS COME FROM THE INJECTOR, like every other component: HP_SHARED_KEY is
@@ -439,6 +494,25 @@ spec:
           value: %[5]s
         - name: NC_INSTANCE_URL
           value: https://cloud.%[6]s
+        # THE INTERNAL AUTHORITY. HaRP reaches Nextcloud over HTTPS, and the
+        # console installs HaRP OUTSIDE the install's TLS-trust pass (that pass
+        # runs at install time; HaRP does not exist yet). Without this, a
+        # private-domain install — or a public one whose certificate is not yet
+        # issued — makes HaRP fail its TLS verification, so it never registers
+        # the ExApp it just deployed, and it then KILLS the container:
+        #
+        #   aiohttp ClientConnectorCertificateError: Cannot connect to host
+        #   cloud.<domain>:443 ssl:True [SSLCertVerificationError]
+        #
+        # Measured on a fresh install: nc-app-live-transcription was deployed,
+        # then killed one second after starting, in a loop.
+        #
+        # paquet-combine.crt and NOT ceffio-ca.crt: Python reads SSL_CERT_FILE,
+        # which REPLACES the default bundle. Pointing it at our authority alone
+        # would make every public certificate refused — the trap that already
+        # broke Synapse's OIDC callback.
+        - name: SSL_CERT_FILE
+          value: /etc/ceffio-ca/paquet-combine.crt
         # REQUIRED: start.sh refuses to start without it. It is the address the
         # FRP proxies bind to, used for the tunnel towards the ExApps.
         - name: HP_FRP_ADDRESS
@@ -470,6 +544,14 @@ spec:
         resources:
           requests: {memory: 128Mi, cpu: 50m}
           limits: {memory: 512Mi}
+        volumeMounts:
+        - {name: ceffio-ca, mountPath: /etc/ceffio-ca, readOnly: true}
+      volumes:
+      # The ConfigMap is copied into this namespace by Preparer: the console
+      # cannot read the one in cert-manager (no right on Secrets there), and a
+      # cross-namespace read is not something a pod can do either.
+      - name: ceffio-ca
+        configMap: {name: ceffio-ca-cm}
 ---
 apiVersion: v1
 kind: Service

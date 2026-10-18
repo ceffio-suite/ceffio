@@ -130,6 +130,21 @@ func (c *Client) LireSecret(ctx context.Context, ns, nom, cle string) (string, e
 	return string(s.Data[cle]), nil
 }
 
+// LireConfigMap reads a ConfigMap's data. Returns nil (no error) when it does
+// not exist: an absent ConfigMap is a STATE, not a failure — the caller decides
+// what to do about it, and conflating the two is how a missing authority gets
+// mistaken for a broken cluster.
+func (c *Client) LireConfigMap(ctx context.Context, ns, nom string) (map[string]string, error) {
+	cm, err := c.cs.CoreV1().ConfigMaps(ns).Get(ctx, nom, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading configmap %s/%s: %w", ns, nom, err)
+	}
+	return cm.Data, nil
+}
+
 // PoserSecret creates or replaces a Secret. Idempotent.
 func (c *Client) PoserSecret(ctx context.Context, ns, nom string, donnees map[string][]byte) error {
 	s := &corev1.Secret{
