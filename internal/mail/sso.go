@@ -588,14 +588,20 @@ func assurerReseauInterneAutorise(ctx context.Context) error {
 	// source addresses.
 	const reseauPods = "10.42.0.0/16"
 
+	// lireChamps returns address → id, so the check is a KEY LOOKUP —
+	// `_, ok := m[k]` cannot be got wrong. An earlier version iterated the
+	// map with `for _, adresse := range existantes`, which yields the
+	// VALUES: it compared an object identifier to a network address, never
+	// matched, and re-created the rule on every run. Stalwart then answers
+	// `primaryKeyViolation` for an address it already holds. Measured:
+	// re-running `ceffio install` on an installed platform aborted here,
+	// which breaks the idempotency promise of CONTRIBUTING.md rule 8.
 	existantes, err := lireChamps(ctx, "x:AllowedIp/get", "address")
 	if err != nil {
 		return fmt.Errorf("reading the trusted addresses: %w", err)
 	}
-	for _, adresse := range existantes {
-		if adresse == reseauPods {
-			return nil
-		}
+	if _, deja := existantes[reseauPods]; deja {
+		return nil
 	}
 
 	if _, err := creerObjet(ctx, "x:AllowedIp/set", map[string]any{
