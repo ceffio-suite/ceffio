@@ -410,6 +410,18 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	if err != nil {
 		return err
 	}
+	// The settings are also published in the vault, which is where the CONSOLE
+	// reads them from: its container declares no environment variable at all,
+	// so a value written only here would leave the TLS page reporting the
+	// default while the cluster runs another challenge.
+	//
+	// Non-blocking on purpose: the ingress layer below is what makes HTTPS
+	// work, and a vault that refuses this write must not cost the operator the
+	// whole installation over a display value.
+	if err := vault.PoserReglagesACME(ctx, reglagesACME); err != nil {
+		fmt.Printf("  ⚠ ACME settings not published to the vault (%v) — the console will "+
+			"show the default challenge; the certificates themselves are unaffected\n", err)
+	}
 	if err := ingress.Deploy(ctx, o.domain, reglagesACME); err != nil {
 		return err
 	}

@@ -592,6 +592,26 @@ func applyConsoleManifest(ctx context.Context, domain string, rights []Namespace
 				{"NC_USER", vault.ChampCoffre("username")},
 				{"NC_PASSWORD", vault.ChampCoffre("password")},
 			}},
+			// THE ACME SETTINGS OF THIS INSTALLATION, AND WHY THEY COME FROM
+			// THE VAULT RATHER THAN FROM THE POD MANIFEST.
+			//
+			// The console container declares NO env at all: everything it reads
+			// comes from the file the injector renders. Writing the challenge
+			// into the Deployment would have worked for a fresh install and
+			// broken every existing one — and worse, it would have made the
+			// console report the DEFAULT while the ingress layer used another
+			// value, which is precisely the divergence the TLS page exists to
+			// prevent.
+			//
+			// The values are written by the installation (internal/vault) and
+			// read back here, so the page always shows what the cluster is
+			// actually configured with.
+			{Chemin: "kv/data/ceffio/tls/acme", Paires: [][2]string{
+				{"CEFFIO_ACME_CHALLENGE", vault.ChampCoffre("challenge")},
+				{"CEFFIO_DNS_PROVIDER", vault.ChampCoffre("provider")},
+				{"CEFFIO_DNS_ZONE", vault.ChampCoffre("zone")},
+				{"CEFFIO_DNS_WEBHOOK_GROUP", vault.ChampCoffre("webhook_group")},
+			}},
 		}))
 
 	manifest := `apiVersion: v1
