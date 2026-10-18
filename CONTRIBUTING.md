@@ -34,6 +34,33 @@ Merge conventions:
   split, not to be trusted.
 - The CI must be green before review. Reviews are required (see branch
   protection) — a merge is two people agreeing, not one person being fast.
+- **A merged branch is deleted, and its author deletes it.** Git does not do
+  this on its own and neither does GitHub, so fifty branches accumulated here
+  over a few days — every one of them already merged, every one of them
+  suggesting work that no longer exists. The cost is not tidiness: `git branch`
+  output is how you find the branch you are looking for, and a list where
+  most entries are dead is a list nobody reads.
+
+  Deleting the branch is part of finishing the PR, not a separate chore:
+
+  ```bash
+  gh pr merge --delete-branch          # local and remote, in one move
+  ```
+
+  If you merged from the web interface, or the branch outlived the merge:
+
+  ```bash
+  # which branches are already contained in develop — those, and only those
+  git fetch --prune
+  git branch -r --merged origin/develop | grep -v 'develop$\|main$'
+  git push origin --delete <branch>    # remote
+  git branch -d <branch>               # local; -d refuses to drop unmerged work
+  ```
+
+  Use `-d`, not `-D`: `-d` refuses a branch that is not merged, which is the
+  point. A branch that is NOT merged is not clutter — it is work in progress,
+  and it should be finished or explicitly abandoned rather than swept away
+  with the rest.
 
 ### Releasing
 
