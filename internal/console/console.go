@@ -162,6 +162,11 @@ func (s *Server) Handler() http.Handler {
 	// key point — an untested config is worthless.
 	mux.HandleFunc("/api/smtp", s.requireAuth(s.handleSmtp))
 	mux.HandleFunc("/api/smtp/tester", s.requireAuth(s.handleSmtpTester))
+	// The TLS page: which ACME challenge is active, through which DNS provider,
+	// and where the certificates stand. The credential it writes goes to
+	// OpenBao — the console holds no right in cert-manager, by design, and the
+	// solver reads it through the injector.
+	mux.HandleFunc("/api/tls", s.requireAuth(s.handleTLS))
 	return mux
 }
 
