@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright © MANDEM
 
-// Package talk déclare la couche « talk » (High Performance Backend de
-// Nextcloud Talk : signaling, NATS, Janus, coturn) comme module Core du
-// registre.
+// Package talk declares the "talk" layer (High Performance Backend of
+// Nextcloud Talk: signaling, NATS, Janus, coturn) as a Core module of the
+// registry.
 //
-// POURQUOI UN ENVELOPPEMENT : l'installation existe déjà dans internal/talk
-// et reste pilotée par cmd/ceffio/install.go. Ce package DÉCRIT la couche
-// pour que l'état et le diagnostic la lisent dans le registre.
+// WHY A WRAPPER: the install already exists in internal/talk and remains
+// driven by cmd/ceffio/install.go. This package DESCRIBES the layer so that
+// the state and the diagnostic read it in the registry.
 //
-// NOTE SUR LES SERVICES : la page Talk elle-même (sub « talk ») est une app
-// DANS Nextcloud — elle est décrite par le module « files », qui porte les
-// pods « nextcloud ». Ce module-ci décrit le MEDIA SERVER (sub « spreed ») :
-// signaling, Janus, coturn et NATS, dans ceffio-video.
+// NOTE ON THE SERVICES: the Talk page itself (sub "talk") is an app INSIDE
+// Nextcloud — it is described by the "files" module, which carries the
+// "nextcloud" pods. This module describes the MEDIA SERVER (sub "spreed"):
+// signaling, Janus, coturn and NATS, in ceffio-video.
 package talk
 
 import (
@@ -23,16 +23,16 @@ import (
 	coucheTalk "github.com/ceffio-suite/ceffio/internal/talk"
 )
 
-// Le namespace du media server (internal/talk/talk.go, ns).
+// The namespace of the media server (internal/talk/talk.go, ns).
 const nsVideo = "ceffio-video"
 
-// talkModule est le module « talk ».
+// talkModule is the "talk" module.
 type talkModule struct{}
 
 func init() { module.Register(&talkModule{}) }
 
-// Info décrit la couche. Requires volontairement vide : l'ordre du socle
-// (talk après files et identity) appartient à la séquence explicite de
+// Info describes the layer. Requires deliberately empty: the order of the
+// core (talk after files and identity) belongs to the explicit sequence of
 // cmd/ceffio/install.go.
 func (m *talkModule) Info() module.Info {
 	return module.Info{
@@ -50,9 +50,9 @@ func (m *talkModule) Info() module.Info {
 		// a subset of it; the union is unchanged.
 		Permissions: []module.Permission{socle.StandardPermission(nsVideo)},
 
-		// Reprise EXACTE de l'entrée « spreed » de catalogueServices
-		// (internal/console/status.go) : technique (transport média, pas
-		// un accès humain), SSO=false, et les quatre préfixes de pods du
+		// EXACT copy of the "spreed" entry of catalogueServices
+		// (internal/console/status.go): technical (media transport, not a
+		// human access), SSO=false, and the four pod prefixes of the
 		// media server.
 		Services: []module.Service{
 			{
@@ -67,17 +67,16 @@ func (m *talkModule) Info() module.Info {
 	}
 }
 
-// Install délègue à talk.Deploy, inchangé — le registre décrit, la séquence
-// de cmd/ceffio/install.go reste maître de l'ordre du socle.
+// Install delegates to talk.Deploy, unchanged — the registry describes, the
+// sequence of cmd/ceffio/install.go remains master of the core order.
 func (m *talkModule) Install(ctx context.Context, env module.Env) error {
 	return coucheTalk.Deploy(ctx)
 }
 
-// State lit le cluster : les quatre Deployments du media server prêts.
-// On liste chaque charge plutôt que de compter les pods du namespace :
-// ceffio-video héberge aussi le recorder (module « recording », optionnel)
-// — l'état du SOCLE ne doit pas dépendre de la présence d'un module à la
-// carte.
+// State reads the cluster: the four Deployments of the media server ready.
+// We list each workload rather than counting the pods of the namespace:
+// ceffio-video also hosts the recorder (module "recording", optional) — the
+// state of the CORE must not depend on the presence of an optional module.
 func (m *talkModule) State(ctx context.Context, env module.Env) module.State {
 	return socle.EtatLePlusBas(
 		socle.EtatDuDeploiement(ctx, env, nsVideo, "nats"),
@@ -87,8 +86,8 @@ func (m *talkModule) State(ctx context.Context, env module.Env) module.State {
 	)
 }
 
-// Uninstall refuse : sans media server, les appels Talk ne passent plus —
-// le socle se retire avec le cluster (ceffio uninstall).
+// Uninstall refuses: without the media server, Talk calls no longer go
+// through — the core is removed with the cluster (ceffio uninstall).
 func (m *talkModule) Uninstall(ctx context.Context, env module.Env) error {
 	return socle.ErreurSocleIndemontable(m.Info().ID)
 }

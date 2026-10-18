@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright © MANDEM
 
-// Package platform déclare la couche « platform » (namespaces, cert-manager,
-// autorités TLS) comme module Core du registre.
+// Package platform declares the "platform" layer (namespaces, cert-manager,
+// TLS authorities) as a Core module of the registry.
 //
-// POURQUOI UN ENVELOPPEMENT : l'installation existe déjà dans
-// internal/platform et reste pilotée par la séquence explicite de
-// cmd/ceffio/install.go. Ce package ne réécrit rien : il DÉCRIT la couche
-// (état, namespaces, services) pour que le CLI, la console et le doctor
-// lisent le socle dans le registre, au lieu de le deviner.
+// WHY A WRAPPER: the install already exists in internal/platform and
+// remains driven by the explicit sequence of cmd/ceffio/install.go. This
+// package rewrites nothing: it DESCRIBES the layer (state, namespaces,
+// services) so that the CLI, the console and the doctor read the core in
+// the registry, instead of guessing it.
 package platform
 
 import (
@@ -20,11 +20,11 @@ import (
 )
 
 const (
-	// Le namespace du chart parapluie et de la release Helm « ceffio »
+	// The namespace of the umbrella chart and of the Helm release "ceffio"
 	// (internal/platform/platform.go, installUmbrella).
 	nsSystem = "ceffio-system"
-	// cert-manager vit dans SON namespace (chart jetstack) : l'état de la
-	// couche se lit là, pas dans ceffio-system.
+	// cert-manager lives in ITS OWN namespace (jetstack chart): the state
+	// of the layer is read there, not in ceffio-system.
 	nsCertManager = "cert-manager"
 	// The umbrella chart creates this namespace (internal/charts/ceffio/
 	// values.yaml, namespaces.observability) and no other module owns it —
@@ -37,16 +37,16 @@ const (
 	nsExapps = "ceffio-exapps"
 )
 
-// platformModule est le module « platform ».
+// platformModule is the "platform" module.
 type platformModule struct{}
 
 func init() { module.Register(&platformModule{}) }
 
-// Info décrit la couche. Requires reste VOLONTAIREMENT vide pour tous les
-// modules Core : l'ordre du socle (platform ‖ data → vault → identity → …)
-// appartient à la séquence explicite de cmd/ceffio/install.go, qui garde la
-// main ; le duplicer ici créerait une seconde source de vérité, avec le
-// risque qu'elle contredisse la première.
+// Info describes the layer. Requires remains DELIBERATELY empty for all
+// Core modules: the order of the core (platform ‖ data → vault → identity → …)
+// belongs to the explicit sequence of cmd/ceffio/install.go, which stays in
+// charge; duplicating it here would create a second source of truth, with
+// the risk that it contradicts the first.
 func (m *platformModule) Info() module.Info {
 	return module.Info{
 		ID:          "platform",
@@ -55,9 +55,9 @@ func (m *platformModule) Info() module.Info {
 		Kind:        module.Core,
 		Default:     true,
 
-		// Les deux namespaces sont réels : le chart parapluie pose les
-		// namespaces ceffio-* depuis ceffio-system, et cert-manager
-		// (attendu prêt par waitCertManagerReady) vit dans cert-manager.
+		// Both namespaces are real: the umbrella chart lays down the
+		// ceffio-* namespaces from ceffio-system, and cert-manager
+		// (expected ready by waitCertManagerReady) lives in cert-manager.
 		Namespaces: []string{nsSystem, nsCertManager},
 
 		// Permissions (batch B6): the console's namespace-scoped rights are
@@ -84,19 +84,19 @@ func (m *platformModule) Info() module.Info {
 	}
 }
 
-// Install délègue à platform.Deploy, inchangé.
+// Install delegates to platform.Deploy, unchanged.
 //
-// POURQUOI LA DÉLÉGATION NE FAIT PAS DU REGISTRE L'INSTALLATEUR : la
-// séquence du socle reste dans cmd/ceffio/install.go. Cette méthode honore
-// le contrat module.Module et permet à un frontal de rejouer UNE couche à
-// l'identique — pas de réordonner le socle.
+// WHY THE DELEGATION DOES NOT MAKE THE REGISTRY THE INSTALLER: the core
+// sequence remains in cmd/ceffio/install.go. This method honors the
+// module.Module contract and lets a frontend replay ONE layer identically —
+// not reorder the core.
 func (m *platformModule) Install(ctx context.Context, env module.Env) error {
 	return couchePlatform.Deploy(ctx)
 }
 
-// State lit le cluster : le namespace ceffio-system actif et les trois
-// Deployments de cert-manager prêts — exactement ce que platform.Deploy
-// attend avant de continuer (waitCertManagerReady).
+// State reads the cluster: the ceffio-system namespace active and the three
+// cert-manager Deployments ready — exactly what platform.Deploy waits for
+// before continuing (waitCertManagerReady).
 func (m *platformModule) State(ctx context.Context, env module.Env) module.State {
 	return socle.EtatLePlusBas(
 		socle.EtatNamespaceActif(ctx, env, nsSystem),
@@ -106,8 +106,8 @@ func (m *platformModule) State(ctx context.Context, env module.Env) module.State
 	)
 }
 
-// Uninstall refuse : le socle se retire avec le cluster (ceffio uninstall),
-// jamais couche par couche — voir socle.ErreurSocleIndemontable.
+// Uninstall refuses: the core is removed with the cluster (ceffio
+// uninstall), never layer by layer — see socle.ErreurSocleIndemontable.
 func (m *platformModule) Uninstall(ctx context.Context, env module.Env) error {
 	return socle.ErreurSocleIndemontable(m.Info().ID)
 }

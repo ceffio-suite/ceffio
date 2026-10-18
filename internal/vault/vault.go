@@ -947,35 +947,35 @@ path "auth/*" { capabilities = ["create","read","update","delete","list"] }
 path "auth/token/create" { capabilities = ["create","update","sudo"] }
 path "sys/health" { capabilities = ["read"] }`},
 	}
-	// ON ATTEND QU'OPENBAO ACCEPTE D'ÉCRIRE, ET C'EST LE CŒUR DU CORRECTIF.
+	// WE WAIT UNTIL OPENBAO ACCEPTS A WRITE, AND THAT IS THE HEART OF THE FIX.
 	//
-	// MESURÉ sur une machine vierge, et c'est le from scratch qui l'a révélé :
-	// la toute première écriture de politique échouait avec
+	// MEASURED on a virgin machine, and it is the from-scratch install that
+	// revealed it: the very first policy write failed with
 	//
 	//	URL: PUT .../v1/sys/policies/acl/ceffio-admin
 	//	Code: 500. Errors: * internal error
 	//
-	// et dans les journaux d'OpenBao, la vraie cause :
+	// and in OpenBao's logs, the real cause:
 	//
 	//	[ERROR] audit: backend failed to log request: backend=fichier/
 	//	error="error fetching salt: failed to persist salt"
 	//	[ERROR] core: failed to audit request: path=sys/policies/acl/ceffio-admin
 	//
-	// OpenBao refuse une opération dont il ne peut pas écrire la trace d'audit,
-	// et il lui faut quelques secondes après le déscellement pour établir le
-	// sel de ce journal. CE N'EST PAS UNE POLITIQUE MAL FORMÉE : elle passe
-	// parfaitement une fois ce délai écoulé, et l'erreur ne se reproduit plus.
+	// OpenBao refuses an operation whose audit trace it cannot write, and
+	// it needs a few seconds after unsealing to establish that log's salt.
+	// THIS IS NOT A MALFORMED POLICY: it goes through perfectly once
+	// the delay has elapsed, and the error does not reproduce.
 	//
-	// CE DÉFAUT NE SE VOYAIT PAS SUR UNE MACHINE RÉINSTALLÉE : le sel existe
-	// déjà dans le volume, donc la première écriture réussit. Sur un volume
-	// neuf, elle échoue — et le déploiement abandonnait pour une condition
-	// temporaire.
+	// THIS DEFECT WAS INVISIBLE ON A REINSTALLED MACHINE: the salt already
+	// exists in the volume, so the first write succeeds. On a fresh
+	// volume, it fails — and the deployment gave up on a temporary
+	// condition.
 	//
-	// POURQUOI ON RÉESSAIE PLUTÔT QUE D'ATTENDRE EN AVEUGLE : un délai fixe
-	// serait arbitraire, et trop court sur un disque lent. Réessayer sonde
-	// l'état RÉEL : la première tentative qui passe prouve que le sel est prêt.
-	// On réessaie aussi les politiques suivantes, parce que la première peut
-	// avoir réussi et la troisième échouer si le sel a été recréé entre-temps.
+	// WHY WE RETRY RATHER THAN WAIT BLINDLY: a fixed delay would be
+	// arbitrary, and too short on a slow disk. Retrying probes the REAL
+	// state: the first attempt that goes through proves the salt is ready.
+	// The subsequent policies are retried too, because the first may have
+	// succeeded and the third fail if the salt was recreated in between.
 	attendreEcritureVault(ctx, cli, pod, inst)
 
 	for _, p := range politiques {
@@ -1516,22 +1516,22 @@ func baoAvecJeton(ctx context.Context, cli *k8sapi.Client, jeton string, args ..
 	return sortie, err
 }
 
-// attendreEcritureVault attend qu'OpenBao accepte une écriture, en sondant
-// jusqu'à ce que son journal d'audit soit opérationnel.
+// attendreEcritureVault waits until OpenBao accepts a write, probing
+// until its audit log is operational.
 //
-// POURQUOI SONDER AVEC UNE VRAIE ÉCRITURE, ET PAS AVEC /sys/health : l'état
-// qui nous intéresse n'est pas « le serveur répond » mais « le serveur accepte
-// de modifier quelque chose ». Un OpenBao déscellé et sain répond très bien à
-// /sys/health pendant que son audit échoue encore, et refuserait l'écriture.
-// On teste donc EXACTEMENT l'opération qui doit réussir.
+// WHY PROBE WITH A REAL WRITE, AND NOT WITH /sys/health: the state we
+// care about is not "the server answers" but "the server accepts
+// modifying something". An unsealed, healthy OpenBao answers
+// /sys/health perfectly well while its audit still fails, and would
+// refuse the write. We therefore test EXACTLY the operation that must succeed.
 //
-// L'ÉCRITURE EST SANS EFFET DE BORD : on écrit une politique jetable, dans un
-// chemin où personne ne lit. Une sonde qui modifierait l'état réel laisserait
-// une trace à chaque installation.
+// THE WRITE HAS NO SIDE EFFECT: we write a throwaway policy, at a path
+// nobody reads. A probe that modified the real state would leave a
+// trace at every installation.
 //
-// Silence si la sonde ne peut pas aboutir : l'appelant enchaîne sur les vraies
-// politiques et rapportera l'erreur avec le nom de celle qui a échoué, ce qui
-// est plus utile qu'un message sur une sonde.
+// Silent if the probe cannot complete: the caller moves on to the real
+// policies and will report the error with the name of the one that
+// failed, which is more useful than a message about a probe.
 func attendreEcritureVault(ctx context.Context, cli *k8sapi.Client, pod, jeton string) {
 	const limite = 60 * time.Second
 	fin := time.Now().Add(limite)
@@ -1558,13 +1558,13 @@ func attendreEcritureVault(ctx context.Context, cli *k8sapi.Client, pod, jeton s
 	}
 }
 
-// ecrirePolitique écrit une politique, en réessayant sur erreur transitoire.
+// ecrirePolitique writes a policy, retrying on transient errors.
 //
-// LA SONDE CI-DESSUS COUVRE LE CAS NORMAL ; CE RÉESSAI COUVRE LE RESTE. Une
-// écriture peut encore échouer si la connexion au pod tombe, si le sel est
-// recréé, ou si le vault redémarre entre deux politiques. Traiter ces cas comme
-// fatals ferait échouer une installation pour une condition qui se résout
-// seule en deux secondes.
+// THE PROBE ABOVE COVERS THE NORMAL CASE; THIS RETRY COVERS THE REST. A
+// write can still fail if the connection to the pod drops, if the salt
+// is recreated, or if the vault restarts between two policies. Treating
+// those cases as fatal would fail an installation over a condition
+// that resolves itself in two seconds.
 func ecrirePolitique(ctx context.Context, cli *k8sapi.Client, jeton string, p struct {
 	nom, regle string
 }) error {

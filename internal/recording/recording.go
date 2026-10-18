@@ -370,24 +370,24 @@ func reglageRecording(url, secret string) string {
 
 // Remove takes the recording server out, completely.
 //
-// MIROIR EXACT DE Deploy, dans l'ordre inverse de ce qui compte :
-//  1. le réglage Talk d'abord — tant que le serveur existe encore, un
-//     bouton d'enregistrement actif pointerait vers une URL morte au
-//     milieu du retrait ;
-//  2. puis les ressources Kubernetes : Deployment, Service, ServiceAccount.
+// EXACT MIRROR OF Deploy, in the reverse order of what matters:
+//  1. the Talk setting first — while the server still exists, an active
+//     recording button would point at a dead URL in the middle of the
+//     removal;
+//  2. then the Kubernetes resources: Deployment, Service, ServiceAccount.
 //
-// CE QUI N'EST PAS SUPPRIMÉ, ET POURQUOI :
-//   - la configuration du signaling : il n'existe AUCUN bloc [recording]
-//     dedans (voir la note détaillée de internal/talk/talk.go — vérifiée
-//     contre les sources du signaling, qui ne connaît pas ce mot). Talk
-//     appelle le recorder directement en HTTP ; il n'y a donc rien à
-//     défaire de ce côté.
-//   - l'entrée recording/server du coffre : la clé y reste, comme
-//     exapps.Remove laisse la clé de HaRP. La régénérer au prochain
-//     Deploy est inutile, et sa présence ne coûte rien.
+// WHAT IS NOT DELETED, AND WHY:
+//   - the signaling configuration: there is NO [recording] block in it
+//     (see the detailed note in internal/talk/talk.go — verified against
+//     the signaling sources, which do not know that word). Talk calls the
+//     recorder directly over HTTP; there is therefore nothing to undo on
+//     that side.
+//   - the recording/server vault entry: the key stays there, like
+//     exapps.Remove leaves the HaRP key. Regenerating it at the next
+//     Deploy is pointless, and its presence costs nothing.
 //
-// Best effort sur chaque suppression : une ressource déjà absente est le
-// cas normal au second retrait, et ne doit pas interrompre les autres.
+// Best effort on each deletion: an already absent resource is the normal
+// case on a second removal, and must not interrupt the others.
 func Remove(ctx context.Context) error {
 	fmt.Println("\nRemoving the call recording server...")
 
@@ -396,21 +396,21 @@ func Remove(ctx context.Context) error {
 		return fmt.Errorf("Kubernetes client: %w", err)
 	}
 
-	// 1. le réglage Talk. Via l'API Kubernetes, pas kubectl : ce retrait
-	// peut être déclenché depuis la console, dont le conteneur est
-	// distroless (ni shell ni kubectl) — la même leçon que partout
-	// ailleurs dans le projet.
+	// 1. the Talk setting. Through the Kubernetes API, not kubectl: this
+	// removal can be triggered from the console, whose container is
+	// distroless (no shell, no kubectl) — the same lesson as everywhere
+	// else in the project.
 	if pod, err := cli.PodDuDeploiement(ctx, "ceffio-files", "nextcloud", "nextcloud"); err == nil {
 		if _, err := cli.Executer(ctx, "ceffio-files", pod, "nextcloud",
 			"php", "occ", "config:app:delete", "spreed", "recording_servers"); err != nil {
-			// Non fatal : le réglage peut être déjà absent. Rapporté,
-			// pas avalé.
+			// Not fatal: the setting may already be absent. Reported,
+			// not swallowed.
 			fmt.Printf("  note: clearing the Talk setting returned: %v\n", err)
 		}
 	}
 
-	// 2. les ressources Kubernetes, dans le même style que exapps.Remove :
-	// chaque suppression est indépendante.
+	// 2. the Kubernetes resources, in the same style as exapps.Remove:
+	// each deletion is independent.
 	for _, forme := range []string{
 		"Deployment/" + nom,
 		"Service/" + service,

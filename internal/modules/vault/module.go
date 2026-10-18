@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright © MANDEM
 
-// Package vault déclare la couche « vault » (OpenBao, le coffre des secrets)
-// comme module Core du registre.
+// Package vault declares the "vault" layer (OpenBao, the secrets vault) as
+// a Core module of the registry.
 //
-// POURQUOI UN ENVELOPPEMENT : l'installation existe déjà dans internal/vault
-// et reste pilotée par cmd/ceffio/install.go. Ce package DÉCRIT la couche
-// pour que l'état et le diagnostic la lisent dans le registre.
+// WHY A WRAPPER: the install already exists in internal/vault and remains
+// driven by cmd/ceffio/install.go. This package DESCRIBES the layer so that
+// the state and the diagnostic read it in the registry.
 package vault
 
 import (
@@ -20,19 +20,19 @@ import (
 )
 
 const (
-	// Le namespace du coffre (internal/vault/vault.go, ns).
+	// The namespace of the vault (internal/vault/vault.go, ns).
 	nsVault = "ceffio-vault"
 )
 
-// vaultModule est le module « vault ».
+// vaultModule is the "vault" module.
 type vaultModule struct{}
 
 func init() { module.Register(&vaultModule{}) }
 
-// Info décrit la couche. Requires volontairement vide : l'ordre du socle
-// appartient à la séquence explicite de cmd/ceffio/install.go (qui pose le
-// coffre APRÈS platform mais AVANT toute application, pour que chacune
-// puisse lire ses secrets au lieu d'en inventer).
+// Info describes the layer. Requires deliberately empty: the order of the
+// core belongs to the explicit sequence of cmd/ceffio/install.go (which
+// lays down the vault AFTER platform but BEFORE any application, so that
+// each one can read its secrets instead of inventing them).
 func (m *vaultModule) Info() module.Info {
 	return module.Info{
 		ID:          "vault",
@@ -48,32 +48,32 @@ func (m *vaultModule) Info() module.Info {
 		// socle.StandardPermission).
 		Permissions: []module.Permission{socle.StandardPermission(nsVault)},
 
-		// PAS de Services déclarés, et c'est un choix vérifié : l'Ingress
-		// bao.<domain> existe bien (internal/ingress, ingressesManifest —
-		// l'OIDC y renvoie le navigateur), mais il n'est PAS dans
-		// catalogueServices (internal/console/status.go). Le registre doit
-		// permettre de reproduire la réponse actuelle de /api/status à
-		// l'identique ; inventer une exposition que la console n'a jamais
-		// publiée la ferait mentir dans l'autre sens.
+		// NO Services declared, and it is a verified choice: the Ingress
+		// bao.<domain> does exist (internal/ingress, ingressesManifest —
+		// the OIDC sends the browser there), but it is NOT in
+		// catalogueServices (internal/console/status.go). The registry must
+		// be able to reproduce the current answer of /api/status exactly;
+		// inventing an exposure the console never published would make it
+		// lie in the other direction.
 	}
 }
 
-// Install délègue à vault.Deploy, inchangé — avec UNE adaptation qui n'est
-// pas cosmétique : Deploy ne retourne jamais d'erreur, mais un *Resultat
-// dont Pret dit si le coffre est utilisable.
+// Install delegates to vault.Deploy, unchanged — with ONE adaptation that
+// is not cosmetic: Deploy never returns an error, but a *Resultat whose
+// Pret says whether the vault is usable.
 //
-// POURQUOI PUBLIER BAO_* ICI : c'est exactement ce que fait la séquence
-// d'installation (cmd/ceffio/install.go) juste après vault.Deploy — sans
-// cette publication, le coffre serait déployé mais les couches suivantes
-// liraient secrets.DepuisEnvironnement() = nil et retomberaient sur les
-// Secrets Kubernetes. Un Install qui poserait le coffre sans le publier
-// installerait un coffre que personne n'utilise.
+// WHY PUBLISH BAO_* HERE: this is exactly what the install sequence
+// (cmd/ceffio/install.go) does right after vault.Deploy — without this
+// publication, the vault would be deployed but the following layers would
+// read secrets.DepuisEnvironnement() = nil and fall back to Kubernetes
+// Secrets. An Install that lays down the vault without publishing it would
+// install a vault nobody uses.
 //
-// POURQUOI NE PAS ÉCHOUER QUAND Pret=false : la règle documentée de la
-// couche est « un coffre indisponible ne fait jamais échouer le
-// déploiement » — la suite continue avec les Secrets Kubernetes. Le
-// module honore ce contrat : avertissement écrit dans env.Out, retour nil.
-// C'est State, pas Install, qui dira ensuite la vérité sur le coffre.
+// WHY NOT FAIL WHEN Pret=false: the documented rule of the layer is "an
+// unavailable vault never fails the deployment" — the suite continues with
+// Kubernetes Secrets. The module honors this contract: warning written to
+// env.Out, nil returned. It is State, not Install, that will then tell the
+// truth about the vault.
 func (m *vaultModule) Install(ctx context.Context, env module.Env) error {
 	resultat := coucheVault.Deploy(ctx, env.Domain)
 	if resultat != nil && resultat.Pret {
@@ -92,18 +92,18 @@ func (m *vaultModule) Install(ctx context.Context, env module.Env) error {
 	return nil
 }
 
-// State lit le cluster : le pod du StatefulSet OpenBao (openbao-0) prêt. On
-// ne demande PAS `bao status` : un coffre scellé ou non initialisé est un
-// état transitoire normal de l'installation, et c'est la couche elle-même
-// qui initialise et descelle — l'état observé du pod est le signal honnête
-// ici.
+// State reads the cluster: the pod of the OpenBao StatefulSet (openbao-0)
+// ready. We do NOT ask `bao status`: a sealed or uninitialized vault is a
+// normal transient state of the installation, and the layer itself
+// initializes and unseals — the observed state of the pod is the honest
+// signal here.
 func (m *vaultModule) State(ctx context.Context, env module.Env) module.State {
 	return socle.EtatDesPods(ctx, env, []string{nsVault}, []string{"openbao"})
 }
 
-// Uninstall refuse : le coffre porte les secrets de TOUTE la suite — le
-// retirer effacerait les identités des bases et des apps. Le socle se
-// retire avec le cluster (ceffio uninstall).
+// Uninstall refuses: the vault carries the secrets of the WHOLE suite —
+// removing it would erase the credentials of the databases and the apps.
+// The core is removed with the cluster (ceffio uninstall).
 func (m *vaultModule) Uninstall(ctx context.Context, env module.Env) error {
 	return socle.ErreurSocleIndemontable(m.Info().ID)
 }

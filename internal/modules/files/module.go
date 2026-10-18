@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright © MANDEM
 
-// Package files déclare la couche « files » (Nextcloud) comme module Core du
-// registre.
+// Package files declares the "files" layer (Nextcloud) as a Core module of
+// the registry.
 //
-// POURQUOI UN ENVELOPPEMENT : l'installation existe déjà dans internal/files
-// et reste pilotée par cmd/ceffio/install.go. Ce package DÉCRIT la couche
-// pour que l'état et le diagnostic la lisent dans le registre.
+// WHY A WRAPPER: the install already exists in internal/files and remains
+// driven by cmd/ceffio/install.go. This package DESCRIBES the layer so that
+// the state and the diagnostic read it in the registry.
 //
-// NOTE SUR LES SERVICES : cette couche porte DEUX expositions publiques
-// (cloud ET talk) parce que Nextcloud Talk est une app DANS Nextcloud — les
-// deux sont servies par les mêmes pods « nextcloud ». Le media server de
-// Talk (Janus, signaling, coturn) est, lui, décrit par le module « talk ».
+// NOTE ON THE SERVICES: this layer carries TWO public exposures (cloud AND
+// talk) because Nextcloud Talk is an app INSIDE Nextcloud — both are served
+// by the same "nextcloud" pods. The Talk media server (Janus, signaling,
+// coturn), for its part, is described by the "talk" module.
 package files
 
 import (
@@ -22,17 +22,17 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/modules/socle"
 )
 
-// Le namespace de Nextcloud (internal/files/files.go, ns).
+// The namespace of Nextcloud (internal/files/files.go, ns).
 const nsFiles = "ceffio-files"
 
-// filesModule est le module « files ».
+// filesModule is the "files" module.
 type filesModule struct{}
 
 func init() { module.Register(&filesModule{}) }
 
-// Info décrit la couche. Requires volontairement vide : l'ordre du socle
-// (files après identity, office après files) appartient à la séquence
-// explicite de cmd/ceffio/install.go.
+// Info describes the layer. Requires deliberately empty: the order of the
+// core (files after identity, office after files) belongs to the explicit
+// sequence of cmd/ceffio/install.go.
 func (m *filesModule) Info() module.Info {
 	return module.Info{
 		ID:          "files",
@@ -48,10 +48,9 @@ func (m *filesModule) Info() module.Info {
 		// granted via its RoleBinding (see socle.StandardPermission).
 		Permissions: []module.Permission{socle.StandardPermission(nsFiles)},
 
-		// Reprise EXACTE des entrées « cloud » et « talk » de
-		// catalogueServices (internal/console/status.go) : mêmes textes,
-		// mêmes préfixes de pods, mêmes SSO=true (les deux passent par
-		// Keycloak).
+		// EXACT copy of the "cloud" and "talk" entries of
+		// catalogueServices (internal/console/status.go): same texts,
+		// same pod prefixes, same SSO=true (both go through Keycloak).
 		Services: []module.Service{
 			{
 				Sub:         "cloud",
@@ -73,19 +72,19 @@ func (m *filesModule) Info() module.Info {
 	}
 }
 
-// Install délègue à files.Deploy, inchangé — le registre décrit, la
-// séquence de cmd/ceffio/install.go reste maître de l'ordre du socle.
+// Install delegates to files.Deploy, unchanged — the registry describes,
+// the sequence of cmd/ceffio/install.go remains master of the core order.
 func (m *filesModule) Install(ctx context.Context, env module.Env) error {
 	return coucheFiles.Deploy(ctx)
 }
 
-// State lit le cluster : le Deployment nextcloud prêt dans ceffio-files.
+// State reads the cluster: the Deployment nextcloud ready in ceffio-files.
 func (m *filesModule) State(ctx context.Context, env module.Env) module.State {
 	return socle.EtatDuDeploiement(ctx, env, nsFiles, "nextcloud")
 }
 
-// Uninstall refuse : Nextcloud porte les fichiers des utilisateurs — le
-// socle se retire avec le cluster (ceffio uninstall).
+// Uninstall refuses: Nextcloud carries the users' files — the core is
+// removed with the cluster (ceffio uninstall).
 func (m *filesModule) Uninstall(ctx context.Context, env module.Env) error {
 	return socle.ErreurSocleIndemontable(m.Info().ID)
 }

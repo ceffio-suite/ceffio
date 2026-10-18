@@ -148,8 +148,8 @@ func (c *Client) PoserSecret(ctx context.Context, ns, nom string, donnees map[st
 }
 
 // SupprimerSecret deletes a Secret, without failing if it does not exist.
-// SupprimerEfface supprime une ressource à partir de sa forme « Kind/nom »,
-// comme `kubectl delete`.
+// SupprimerEfface deletes a resource from its "Kind/name" form,
+// like `kubectl delete`.
 //
 // WHY THIS REPLACES A `kubectl delete`: the console runs in a container built
 // from scratch — no shell, no kubectl binary. Measured on a button click:
@@ -183,7 +183,7 @@ func (c *Client) SupprimerEfface(ctx context.Context, ns, forme string) error {
 	return nil
 }
 
-// SupprimerSecret supprime un Secret par son nom.
+// SupprimerSecret deletes a Secret by its name.
 func (c *Client) SupprimerSecret(ctx context.Context, ns, nom string) error {
 	if err := c.cs.CoreV1().Secrets(ns).Delete(ctx, nom, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		return err
@@ -653,8 +653,8 @@ func equivalent(actuel, voulu *unstructured.Unstructured) bool {
 	return sousEnsemble(voulu.Object, actuel.Object)
 }
 
-// sousEnsemble vérifie récursivement que tout ce que `voulu` contient se
-// retrouve à l'identique dans `actuel`.
+// sousEnsemble recursively verifies that everything `voulu` contains
+// is found identically in `actuel`.
 //
 // MAPS ARE COMPARED KEY BY KEY, lists as unordered sets of their elements, and
 // scalars by value. Lists are unordered because the API server reorders some of
@@ -686,8 +686,8 @@ func sousEnsemble(voulu, actuel interface{}) bool {
 		if len(v) != len(a) {
 			return false
 		}
-		// Chaque élément voulu doit trouver un élément actuel équivalent, sans
-		// réutiliser le même.
+		// Each wanted element must find an equivalent current element,
+		// without reusing the same one.
 		utilise := make([]bool, len(a))
 		for _, elemVoulu := range v {
 			trouve := false
@@ -708,26 +708,26 @@ func sousEnsemble(voulu, actuel interface{}) bool {
 		return true
 
 	default:
-		// Scalaire : comparaison directe. Les nombres viennent du décodage
-		// JSON (float64), des deux côtés, donc la comparaison est fiable.
+		// Scalar: direct comparison. Numbers come from JSON decoding
+		// (float64), on both sides, so the comparison is reliable.
 		return voulu == actuel
 	}
 }
 
-// AttendrePret attend qu'un namespace EXISTE et soit Active.
+// AttendrePret waits until a namespace EXISTS and is Active.
 //
-// C'EST LE PENDANT EXACT D'AttendreDisparition, et les deux ne se confondent
-// pas. AttendreDisparition sert quand on vient de demander une suppression ;
-// celle-ci sert quand on vient de demander une création, et que le namespace
-// peut être encore en Terminating d'un « Remove » précédent.
+// IT IS THE EXACT COUNTERPART OF AttendreDisparition, and the two must
+// not be confused. AttendreDisparition serves when a deletion was just
+// requested; this one serves when a creation was just requested, and
+// the namespace may still be Terminating from a previous "Remove".
 //
-// LA DISTINCTION EST CRITIQUE : appelée par erreur à la place de l'autre, cette
-// fonction attend la disparition d'un namespace qui existe — c'est-à-dire
-// jusqu'au délai, systématiquement, avec un déploiement qui ne fait rien et un
-// journal qui s'arrête sur sa première ligne.
+// THE DISTINCTION IS CRITICAL: called by mistake in place of the
+// other, this function waits for the disappearance of a namespace that
+// exists — that is, until the timeout, systematically, with a
+// deployment that does nothing and a log that stops on its first line.
 //
-// Un namespace absent est simplement attendu, pas traité comme une erreur :
-// c'est un état transitoire normal juste après une création.
+// An absent namespace is simply waited for, not treated as an error:
+// it is a normal transient state right after a creation.
 func (c *Client) AttendrePret(ctx context.Context, nom string, limite time.Duration) error {
 	fin := time.Now().Add(limite)
 	var dernier string
@@ -752,16 +752,17 @@ func (c *Client) AttendrePret(ctx context.Context, nom string, limite time.Durat
 	return fmt.Errorf("le namespace %s est %s après %s", nom, dernier, limite)
 }
 
-// PAS D'AttendreDisparition ICI, ET C'EST VOLONTAIRE.
+// NO AttendreDisparition HERE, AND THAT IS DELIBERATE.
 //
-// La fonction a existé, le temps où « Remove » supprimait le namespace des
-// ExApp. Elle a été retirée avec la suppression elle-même.
+// The function existed, back when "Remove" deleted the ExApp
+// namespace. It was removed along with the deletion itself.
 //
-// LA GARDER AU VOISINAGE D'AttendrePret SERAIT UN PIÈGE : deux fonctions de
-// même signature et de noms proches, dont l'une attend l'apparition et l'autre
-// la disparition. C'est précisément l'inversion qui a rendu le bouton « Deploy
-// the deployer » inerte — un appel erroné ne se voit ni au build ni au vet. Une
-// fonction morte qui invite à cette erreur n'a rien à faire ici.
+// KEEPING IT IN THE NEIGHBOURHOOD OF AttendrePret WOULD BE A TRAP:
+// two functions with the same signature and near-identical names, one
+// waiting for appearance and the other for disappearance. That is
+// precisely the inversion that made the "Deploy the deployer" button
+// inert — a wrong call is visible neither at build nor at vet. A dead
+// function that invites that mistake has no business here.
 
 // ListerPVC returns the names of the PersistentVolumeClaims in a namespace.
 //

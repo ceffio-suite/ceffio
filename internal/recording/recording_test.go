@@ -9,11 +9,11 @@ import (
 	"testing"
 )
 
-// Le manifeste est un document multi-YAML. Comme les autres tests du projet,
-// on le verifie par inspection textuelle plutot qu'en ajoutant un parseur :
-// une dependance de test pour deux documents n'en vaut pas le cout, et ce qui
-// compte ici n'est pas la forme generale du YAML mais des points precis qui ont
-// reellement casse en developpement.
+// The manifest is a multi-YAML document. Like the other tests in the project,
+// we verify it by textual inspection rather than adding a parser: a test
+// dependency for two documents is not worth the cost, and what matters here is
+// not the general shape of the YAML but precise points that actually broke in
+// development.
 func TestManifesteRecorderContientLesObjetsAttendus(t *testing.T) {
 	doc := manifesteRecorder("ceffio.mandem-it.com", "    vault.hashicorp.com/role: recording")
 
@@ -24,17 +24,17 @@ func TestManifesteRecorderContientLesObjetsAttendus(t *testing.T) {
 	}
 }
 
-// LE PIEGE QUI A COUTE UN CRASHLOOP: l'image lit RECORDING_SECRET dans son
-// ENVIRONNEMENT, alors que l'injecteur ecrit /secrets/env. Le conteneur doit
-// donc sourcer ce fichier, et passer a start.sh les arguments de l'image.
-// Sans ce bloc le pod demarre puis sort aussitot sur
-// "You need to provide the RECORDING_SECRET." — panne silencieuse du point de
-// vue de l'application, qui ne voit qu'une variable vide.
+// THE TRAP THAT COST A CRASHLOOP: the image reads RECORDING_SECRET from its
+// ENVIRONMENT, while the injector writes /secrets/env. The container must
+// therefore source that file, and pass start.sh the image's arguments.
+// Without this block the pod starts then exits immediately on
+// "You need to provide the RECORDING_SECRET." — a silent failure from the
+// application's point of view, which only sees an empty variable.
 func TestConteneurSourceLesSecretsEtPasseLesArguments(t *testing.T) {
 	doc := manifesteRecorder("ceffio.mandem-it.com", "    vault.hashicorp.com/role: recording")
 
-	// start.sh se termine par un exec sur SES arguments : l'appeler sans
-	// argument ne demarre rien.
+	// start.sh ends with an exec on ITS arguments: calling it without
+	// arguments starts nothing.
 	cas := []struct {
 		contient, quoi string
 	}{
@@ -51,9 +51,9 @@ func TestConteneurSourceLesSecretsEtPasseLesArguments(t *testing.T) {
 	}
 }
 
-// Le secret du signaling est ecrit dans l'entree du recorder par le code, pas
-// reference directement : le recorder ne doit detenir aucun droit sur talk/*.
-// Ce test verifie que le manifeste ne lit QUE son propre chemin dans le coffre.
+// The signaling secret is written into the recorder's entry by the code, not
+// referenced directly: the recorder must hold no right on talk/*.
+// This test verifies that the manifest reads ONLY its own vault path.
 func TestLeRecorderNeLitQueSaPropreEntree(t *testing.T) {
 	ann := annotationsRecorder()
 	if strings.Contains(ann, "ceffio/talk/") {
@@ -64,25 +64,25 @@ func TestLeRecorderNeLitQueSaPropreEntree(t *testing.T) {
 	}
 }
 
-// LA FORME DE CE REGLAGE EST CE QUI FAIT FONCTIONNER LA FONCTIONNALITE, et ce
-// n'est pas la forme evidente.
+// THE SHAPE OF THIS SETTING IS WHAT MAKES THE FEATURE WORK, and it is not the
+// obvious shape.
 //
-// Talk lit un OBJET a deux cles :
+// Talk reads an OBJECT with two keys:
 //
 //	{"servers":[{"server":"URL"}],"secret":"SECRET"}
 //
-// lu par Config::getRecordingServers() -> $recording['servers']
+// read by Config::getRecordingServers() -> $recording['servers']
 //
-//	et Config::getRecordingSecret()  -> $recording['secret']
+//	and Config::getRecordingSecret()  -> $recording['secret']
 //
-// Les deux passent par getAppValueArray(), qui json_decode la chaine stockee.
+// Both go through getAppValueArray(), which json_decodes the stored string.
 //
-// Ce test attrape l'erreur reellement commise : un TABLEAU
-// [{"url":...,"secret":...}], qui semble naturel et ne marche pas — la racine
-// etant une liste, aucune des deux cles n'existe au premier niveau, les deux
-// getters renvoient leur defaut ([] et ""), et isRecordingEnabled() renvoie
-// false. Talk grise alors « enregistrer cet appel » avec « le serveur
-// d'enregistrement n'est pas installe », alors que le recorder tourne.
+// This test catches the mistake actually made: an ARRAY
+// [{"url":...,"secret":...}], which looks natural and does not work — the root
+// being a list, neither key exists at the top level, both getters return their
+// default ([] and ""), and isRecordingEnabled() returns false. Talk then greys
+// out "record this call" with "the recording server is not installed", while
+// the recorder is running.
 func TestReglageRecordingServersEstUnObjetAvecServerEtSecret(t *testing.T) {
 	reglage := reglageRecording("http://talk-recording.ceffio-video.svc:1234", "secret-de-test")
 
@@ -91,17 +91,17 @@ func TestReglageRecordingServersEstUnObjetAvecServerEtSecret(t *testing.T) {
 		t.Fatalf("le reglage doit etre un OBJET JSON (Talk le passe a getAppValueArray) ; recu %s", reglage)
 	}
 
-	// getRecordingServers() renvoie $recording['servers'] ?? []
+	// getRecordingServers() returns $recording['servers'] ?? []
 	servers, ok := d["servers"].([]any)
 	if !ok || len(servers) == 0 {
 		t.Fatalf("cle \"servers\" absente ou vide : getRecordingServers() renverrait [] ; recu %s", reglage)
 	}
-	// getRecordingSecret() renvoie $recording['secret'] ?? ''
+	// getRecordingSecret() returns $recording['secret'] ?? ''
 	if d["secret"] != "secret-de-test" {
 		t.Errorf("secret = %v, attendu \"secret-de-test\"", d["secret"])
 	}
 
-	// Le champ de l'entree est "server", pas "url".
+	// The entry field is "server", not "url".
 	premier, _ := servers[0].(map[string]any)
 	if _, ok := premier["server"]; !ok {
 		t.Errorf("l'entree doit porter la cle \"server\" ; recu %v", premier)

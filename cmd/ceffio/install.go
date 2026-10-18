@@ -287,23 +287,23 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 		os.Setenv("BAO_MOTEUR", "kv")
 		fmt.Printf("∙ vault published for the following steps: %s (token not shown)\n", coffreBao.Adresse)
 	} else {
-		// CE N'EST PAS UN REPLI NEUTRE, et le dire ainsi était trompeur.
+		// THIS IS NOT A NEUTRAL FALLBACK, and saying so was misleading.
 		//
-		// Le message annonçait « secrets will stay in Kubernetes (expected
-		// behavior) », ce qui laisse croire que la suite s'accommode d'un vault
-		// absent. Elle ne s'en accommode PAS : la couche identity refuse de
-		// démarrer sans lui, et l'opérateur découvrait plus loin
+		// The message announced « secrets will stay in Kubernetes (expected
+		// behavior) », which suggests the rest copes with an absent vault. It
+		// does NOT: the identity layer refuses to start without it, and the
+		// operator discovered further down
 		//
 		//	vault unreadable for keycloak/db: no vault configured
 		//
-		// Une erreur qui accuse une configuration absente alors que le sujet
-		// est un vault qui n'a pas démarré.
+		// An error that blames a missing configuration while the subject is a
+		// vault that did not start.
 		//
-		// ON CONTINUE QUAND MÊME, parce que le déploiement de la plateforme
-		// (namespaces, ingress, StorageClass) n'a pas besoin du coffre et qu'il
-		// vaut mieux laisser la suite le tenter : une installation partielle
-		// mais diagnostiquable vaut mieux qu'un arrêt immédiat. Ce qui change,
-		// c'est que le message dit maintenant ce qui va se passer.
+		// WE CONTINUE ANYWAY, because the platform deployment (namespaces,
+		// ingress, StorageClass) does not need the vault and it is better to
+		// let the rest attempt it: a partial but diagnosable installation
+		// beats an immediate stop. What changes is that the message now says
+		// what is going to happen.
 		fmt.Println("  ⚠ vault unavailable — the identity layer will fail without it")
 		fmt.Println("    check `kubectl -n ceffio-vault get pods` and the openbao logs")
 	}
@@ -333,20 +333,20 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	// 10bis. THE LOCAL NEXTCLOUD ACCOUNT, and it belongs HERE rather than in the
 	// identity layer.
 	//
-	// L'ORDRE N'EST PAS UN DÉTAIL : la couche identity (Phase 4) crée le realm
-	// et le compte Keycloak, mais Nextcloud n'existe qu'à partir de la ligne
-	// ci-dessus. Créé trop tôt, le compte Nextcloud échouait et la plateforme
-	// démarrait avec une seule des deux portes d'entrée.
+	// THE ORDER IS NOT A DETAIL: the identity layer (Phase 4) creates the
+	// realm and the Keycloak account, but Nextcloud only exists from the line
+	// above onwards. Created too early, the Nextcloud account failed and the
+	// platform started with only one of the two entry doors.
 	//
-	// CE COMPTE EST LE CHEMIN DE SECOURS : il permet de se connecter en direct
-	// si Keycloak est indisponible. Une plateforme dont l'unique accès est une
-	// dépendance est une plateforme qu'une panne de cette dépendance enferme.
+	// THIS ACCOUNT IS THE FALLBACK PATH: it allows logging in directly if
+	// Keycloak is unavailable. A platform whose only access is a dependency is
+	// a platform that an outage of that dependency locks out.
 	//
-	// Idempotent : un compte présent est laissé tel quel, mot de passe compris.
+	// Idempotent: an existing account is left as-is, password included.
 	if err := identity.EnsureCompteNextcloud(ctx); err != nil {
-		// Non bloquant, et rapporté : Keycloak est ce que l'interface utilise,
-		// et interrompre une installation réussie pour le chemin de secours
-		// serait un mauvais échange. La console peut le créer plus tard.
+		// Non-blocking, and reported: Keycloak is what the interface uses,
+		// and interrupting a successful installation for the fallback path
+		// would be a bad trade. The console can create it later.
 		fmt.Printf("  ⚠ compte Nextcloud non créé : %v\n", err)
 		fmt.Println("    (créable depuis la page Administration de la console)")
 	}

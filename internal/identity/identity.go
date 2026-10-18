@@ -33,9 +33,9 @@ const (
 	dbUser    = "keycloak"
 	dbService = "ceffio-pg-rw.ceffio-data.svc"
 
-	// Nextcloud vit dans son propre namespace. Le confondre avec celui de
-	// PostgreSQL a produit « deployments.apps "nextcloud" not found », une
-	// erreur qui accuse un déploiement absent alors que le sujet est un
+	// Nextcloud lives in its own namespace. Confusing it with
+	// PostgreSQL's produced `deployments.apps "nextcloud" not found`, an
+	// error that blames a missing deployment when the subject is a
 	// namespace.
 	nsFiles = "ceffio-files"
 )
@@ -72,20 +72,20 @@ func Deploy(ctx context.Context) error {
 
 	// THE ADMINISTRATOR ACCOUNT ITSELF, created HERE and not from the console.
 	//
-	// POURQUOI À L'INSTALLATION : le realm et le compte sont deux choses, et
-	// seule la première était faite. L'opérateur se retrouvait avec un realm
-	// vide — vérifié, `kcadm get users -r ceffio` rendait `[ ]` — et une
-	// interface qui affichait
+	// WHY AT INSTALLATION: the realm and the account are two things, and
+	// only the first one was done. The operator ended up with an empty
+	// realm — verified, `kcadm get users -r ceffio` returned `[ ]` — and
+	// an interface that displayed
 	//
 	//	missing from the directory
 	//	missing from Nextcloud
 	//	WITHOUT admin rights
 	//	inactive account
 	//
-	// La rotation depuis la console savait poser un mot de passe mais pas créer
-	// le compte, ce qui supposait que l'installation l'ait fait. Elle ne le
-	// faisait pas. Une plateforme fraîchement installée doit être utilisable
-	// sans qu'on ait à cliquer sur un bouton pour que son administrateur existe.
+	// The rotation from the console knew how to place a password but not to
+	// create the account, which assumed the installation had done it. It
+	// had not. A freshly installed platform must be usable without
+	// having to click a button for its administrator to exist.
 	if err := ensureCompteAdmin(ctx); err != nil {
 		return err
 	}
@@ -472,18 +472,18 @@ func ensureCompteAdmin(ctx context.Context) error {
 	// account is created, so its presence means a previous run succeeded.
 	// Reading the account from Keycloak instead would be guessing — the account
 	// could have been deleted by hand while the password stayed in the vault.
-	// LE COMPTE EXISTE DÉJÀ : on ne régénère PAS le mot de passe, mais on ne
-	// sort pas non plus.
+	// THE ACCOUNT ALREADY EXISTS: we do NOT regenerate the password, but we
+	// do not exit either.
 	//
-	// SORTIR ICI ÉTAIT UN DÉFAUT : les champs obligatoires de Keycloak
-	// (firstName, lastName) ne sont pas remplis par `create users` d'une
-	// version antérieure, et un `return` immédiat rendait impossible la
-	// réparation d'un realm déjà provisionné. L'opérateur restait bloqué sur
-	// « Please specify this field. » à la première connexion, sans aucun moyen
-	// de s'en sortir par une réinstallation.
+	// EXITING HERE WAS A DEFECT: Keycloak's mandatory fields (firstName,
+	// lastName) are not filled by an earlier version's `create users`,
+	// and an immediate `return` made repairing an already-provisioned
+	// realm impossible. The operator stayed stuck on
+	// "Please specify this field." at the first sign-in, with no way out
+	// through a reinstall.
 	//
-	// La réparation est donc TOUJOURS exécutée : elle est idempotente, et sur
-	// un compte sain elle ne change rien.
+	// The repair is therefore ALWAYS executed: it is idempotent, and on a
+	// healthy account it changes nothing.
 	entree, err := secrets.LireEntreeCoffre(ctx, coffre, "sso", "adminceffio")
 	existant := err == nil && entree["password"] != ""
 	if existant {
@@ -522,9 +522,9 @@ func ensureCompteAdmin(ctx context.Context) error {
 
 	// 3. THE VAULT LAST, as the completion marker. Written before the accounts
 	//    existed, a crash in between would leave a password for nothing.
-	// On n'écrit que si le compte vient d'être créé : réécrire une entrée
-	// identique créerait une version de plus dans l'historique du coffre à
-	// chaque réinstallation, sans rien apporter.
+	// We write only if the account was just created: rewriting an
+	// identical entry would add one more version to the vault's history
+	// at every reinstall, bringing nothing.
 	if !existant {
 		if err := secrets.EcrireDansCoffre(ctx, coffre, "sso", "adminceffio", map[string]string{
 			"username": compteAdminIdentifiant,
@@ -617,18 +617,18 @@ func creerCompteKeycloak(ctx context.Context, mdp string) error {
 		`-s "email=` + compteAdminEmail + `" ` +
 		`-s "firstName=` + compteAdminPrenom + `" -s "lastName=` + compteAdminNom + `" ` +
 		`>/dev/null 2>&1 || true) && ` +
-		// L'IDENTIFIANT TECHNIQUE DOIT ÊTRE RÉCUPÉRÉ, PAS DEVINÉ : `kcadm
-		// update` attend l'UUID, et lui passer le nom d'utilisateur répond
+		// THE TECHNICAL IDENTIFIER MUST BE FETCHED, NOT GUESSED: `kcadm
+		// update` expects the UUID, and passing it the username answers
 		//
 		//	Resource not found for url: .../users/adminceffio
 		//
-		// Mesuré sur le realm vivant. L'échec était avalé par le `|| true`
-		// destiné à rendre l'étape idempotente, donc l'installation annonçait
-		// « administrator fields repaired » sans que rien ne soit réparé — le
-		// pire des états, puisqu'il décourage d'aller vérifier.
+		// Measured on the live realm. The failure was swallowed by the
+		// `|| true` meant to make the step idempotent, so the installation
+		// announced "administrator fields repaired" without anything being
+		// repaired — the worst of states, since it discourages going to check.
 		//
-		// On extrait l'id de la réponse JSON, en shell, sans dépendre d'un
-		// outil qui pourrait manquer dans l'image Keycloak.
+		// We extract the id from the JSON response, in shell, without
+		// depending on a tool that might be missing from the Keycloak image.
 		`id=$(/opt/keycloak/bin/kcadm.sh get users -r ceffio -q username=` + compteAdminIdentifiant +
 		` --fields id --format csv --noquotes 2>/dev/null | tr -d "\r" | tail -1) && ` +
 		`if [ -n "$id" ]; then ` +
@@ -636,16 +636,16 @@ func creerCompteKeycloak(ctx context.Context, mdp string) error {
 		`-s "firstName=` + compteAdminPrenom + `" -s "lastName=` + compteAdminNom + `" ` +
 		`-s "email=` + compteAdminEmail + `" -s emailVerified=true -s enabled=true; ` +
 		`else echo "administrator id not found in realm ceffio" >&2; exit 1; fi && ` +
-		// LE MOT DE PASSE N'EST POSÉ QUE S'IL Y EN A UN.
+		// THE PASSWORD IS PLACED ONLY IF THERE IS ONE.
 		//
-		// Sur un compte existant, la fonction reçoit le mot de passe DÉJÀ
-		// stocké — elle ne le régénère pas. Mais si cette lecture échouait et
-		// rendait une chaîne vide, `set-password --new-password ""` EFFACERAIT
-		// le mot de passe du compte : l'opérateur se retrouverait sans aucun
-		// moyen de se connecter, sur une plateforme pourtant installée.
+		// On an existing account, the function receives the ALREADY stored
+		// password — it does not regenerate it. But if that read failed and
+		// returned an empty string, `set-password --new-password ""` would
+		// ERASE the account's password: the operator would end up with no
+		// way to sign in, on an otherwise installed platform.
 		//
-		// Le test est dans le shell et non en Go, parce que c'est là que la
-		// valeur existe.
+		// The test is in the shell and not in Go, because that is where the
+		// value exists.
 		`if [ -n "$mdpadmin" ]; then ` +
 		`/opt/keycloak/bin/kcadm.sh set-password -r ceffio --username ` + compteAdminIdentifiant +
 		` --new-password "$mdpadmin"; fi`
@@ -673,15 +673,15 @@ func creerCompteKeycloak(ctx context.Context, mdp string) error {
 // exist without its rights — present but powerless, which the interface reports
 // as healthy.
 func creerCompteNextcloud(ctx context.Context, mdp string) error {
-	// ON ATTEND QUE LE POD RÉPONDE, et c'est le point qui a échoué au premier
-	// essai : le déploiement peut exister et son pod ne pas être prêt — une
-	// image en cours de téléchargement, un init-container en cours. `kubectl
-	// exec` répond alors « not found », ce qui laisse croire à un déploiement
-	// absent alors que le sujet est un délai.
+	// WE WAIT FOR THE POD TO ANSWER, and that is the point which failed on
+	// the first try: the deployment can exist while its pod is not ready
+	// — an image being downloaded, an init-container in progress.
+	// `kubectl exec` then answers "not found", which makes one believe in
+	// a missing deployment when the subject is a delay.
 	//
-	// On ne rend PAS cette attente bloquante pour l'installation : elle est
-	// bornée, et son échec est rapporté par l'appelant, qui peut le traiter
-	// comme non fatal.
+	// We do NOT make this wait blocking for the installation: it is
+	// bounded, and its failure is reported by the caller, who can treat
+	// it as non-fatal.
 	attente := k8s.Command(ctx, "kubectl", "rollout", "status",
 		"deployment/nextcloud", "-n", nsFiles, "--timeout=600s")
 	if err := attente.Run(); err != nil {

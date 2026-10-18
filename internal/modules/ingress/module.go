@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright © MANDEM
 
-// Package ingress déclare la couche « ingress » (autorité TLS interne,
-// émetteurs Let's Encrypt, redirections HTTPS et Ingresses des applications)
-// comme module Core du registre.
+// Package ingress declares the "ingress" layer (internal TLS authority,
+// Let's Encrypt issuers, HTTPS redirections and the application Ingresses)
+// as a Core module of the registry.
 //
-// POURQUOI UN ENVELOPPEMENT : l'installation existe déjà dans
-// internal/ingress et reste pilotée par cmd/ceffio/install.go. Ce package
-// DÉCRIT la couche pour que l'état et le diagnostic la lisent dans le
-// registre.
+// WHY A WRAPPER: the install already exists in internal/ingress and remains
+// driven by cmd/ceffio/install.go. This package DESCRIBES the layer so that
+// the state and the diagnostic read it in the registry.
 package ingress
 
 import (
@@ -24,12 +23,12 @@ import (
 )
 
 const (
-	// Les namespaces où la couche pose des objets : la CA vit dans
-	// cert-manager (Certificate ceffio-ca + secret ceffio-ca-tls), et les
-	// Ingresses + middlewares de redirection vivent dans les namespaces
-	// des applications (boucle de redirectionManifest,
-	// internal/ingress/ingress.go). La couche n'a AUCUN pod à elle :
-	// Traefik est fourni par le runtime (kube-system).
+	// The namespaces where the layer lays down objects: the CA lives in
+	// cert-manager (Certificate ceffio-ca + secret ceffio-ca-tls), and the
+	// Ingresses + redirection middlewares live in the application
+	// namespaces (redirectionManifest loop, internal/ingress/ingress.go).
+	// The layer has NO pod of its own: Traefik is provided by the runtime
+	// (kube-system).
 	nsSystem   = "ceffio-system"
 	nsCertMgr  = "cert-manager"
 	nsFiles    = "ceffio-files"
@@ -40,15 +39,15 @@ const (
 	nsMail     = "ceffio-mail"
 )
 
-// ingressModule est le module « ingress ».
+// ingressModule is the "ingress" module.
 type ingressModule struct{}
 
 func init() { module.Register(&ingressModule{}) }
 
-// Info décrit la couche. Requires volontairement vide : l'ordre du socle
-// (ingress appliqué AVANT les blocs OIDC, car le SSO de Stalwart vérifie
-// son discovery sur https://keycloak.<domain>) appartient à la séquence
-// explicite de cmd/ceffio/install.go.
+// Info describes the layer. Requires deliberately empty: the order of the
+// core (ingress applied BEFORE the OIDC blocks, because Stalwart's SSO
+// checks its discovery on https://keycloak.<domain>) belongs to the
+// explicit sequence of cmd/ceffio/install.go.
 func (m *ingressModule) Info() module.Info {
 	return module.Info{
 		ID:          "ingress",
@@ -57,33 +56,33 @@ func (m *ingressModule) Info() module.Info {
 		Kind:        module.Core,
 		Default:     true,
 
-		// ceffio-system est BIEN listé : ingress.Deploy y pose un
-		// Middleware de redirection HTTPS. Traefik résout
-		// « <namespace>-<nom>@kubernetescrd », donc le middleware doit
-		// vivre dans le même namespace que l'Ingress qui le référence
-		// — et l'Ingress de la console vit dans ceffio-system. Il y
-		// pose aussi les Middlewares et Ingresses des namespaces des
-		// applications, et la CA dans cert-manager.
+		// ceffio-system IS indeed listed: ingress.Deploy lays down an
+		// HTTPS redirection Middleware there. Traefik resolves
+		// "<namespace>-<name>@kubernetescrd", so the middleware must
+		// live in the same namespace as the Ingress that references it
+		// — and the console's Ingress lives in ceffio-system. It also
+		// lays down the Middlewares and Ingresses of the application
+		// namespaces there, and the CA in cert-manager.
 		Namespaces: []string{nsSystem, nsCertMgr, nsFiles, nsIdentity, nsOffice, nsVault, nsVideo, nsMail},
 	}
 }
 
-// Install délègue à ingress.Deploy, inchangé — le registre décrit, la
-// séquence de cmd/ceffio/install.go reste maître de l'ordre du socle.
+// Install delegates to ingress.Deploy, unchanged — the registry describes,
+// the sequence of cmd/ceffio/install.go remains master of the core order.
 func (m *ingressModule) Install(ctx context.Context, env module.Env) error {
 	return coucheIngress.Deploy(ctx, env.Domain)
 }
 
-// State lit le cluster : la CA interne (Certificate ceffio-ca dans
-// cert-manager) et l'Ingress de Nextcloud (cloud.<domain>, dans
-// ceffio-files) doivent exister.
+// State reads the cluster: the internal CA (Certificate ceffio-ca in
+// cert-manager) and the Nextcloud Ingress (cloud.<domain>, in ceffio-files)
+// must exist.
 //
-// POURQUOI ces deux objets : ce sont les deux preuves que ingress.Deploy a
-// abouti — caManifest est appliqué en premier (la CA est « créée TOUJOURS »),
-// ingressesManifest en dernier. Vérifier le premier et le dernier borne
-// toute la séquence sans rejouer les sept middlewares un par un. On vérifie
-// l'EXISTENCE, pas la santé : un certificat Ready ou non est l'affaire de
-// cert-manager, que le module « platform » observe déjà.
+// WHY these two objects: they are the two proofs that ingress.Deploy went
+// through — caManifest is applied first (the CA is "created ALWAYS"),
+// ingressesManifest last. Checking the first and the last bounds the whole
+// sequence without replaying the seven middlewares one by one. We check
+// EXISTENCE, not health: whether a certificate is Ready or not is
+// cert-manager's business, which the "platform" module already observes.
 func (m *ingressModule) State(ctx context.Context, env module.Env) module.State {
 	if env.Kube == nil {
 		return module.State{Status: module.Unknown, Detail: "no Kubernetes client in the environment"}
@@ -94,9 +93,9 @@ func (m *ingressModule) State(ctx context.Context, env module.Env) module.State 
 		}
 		return module.State{Status: module.Unknown, Detail: fmt.Sprintf("reading the internal CA secret: %v", err)}
 	}
-	// L'Ingress « cloud » porte le nom du sub (ingressesManifest :
-	// name: %[1]s = r.sub). Son absence dit que la phase des Ingresses
-	// n'a pas abouti, même si la CA est là.
+	// The "cloud" Ingress carries the name of the sub (ingressesManifest:
+	// name: %[1]s = r.sub). Its absence says that the Ingresses phase did
+	// not go through, even if the CA is there.
 	if _, err := env.Kube.NetworkingV1().Ingresses(nsFiles).Get(ctx, "cloud", metav1.GetOptions{}); err != nil {
 		if apierrors.IsNotFound(err) {
 			return module.State{Status: module.Degraded, Detail: "internal CA present, but the public Ingresses are not"}
@@ -106,8 +105,8 @@ func (m *ingressModule) State(ctx context.Context, env module.Env) module.State 
 	return module.State{Status: module.Installed}
 }
 
-// Uninstall refuse : sans Ingress ni TLS, plus aucun service n'est
-// joignable — le socle se retire avec le cluster (ceffio uninstall).
+// Uninstall refuses: without Ingress nor TLS, no service is reachable
+// anymore — the core is removed with the cluster (ceffio uninstall).
 func (m *ingressModule) Uninstall(ctx context.Context, env module.Env) error {
 	return socle.ErreurSocleIndemontable(m.Info().ID)
 }

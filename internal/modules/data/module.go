@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright © MANDEM
 
-// Package data déclare la couche « data » (opérateur CloudNativePG,
-// PostgreSQL, Valkey) comme module Core du registre.
+// Package data declares the "data" layer (CloudNativePG operator,
+// PostgreSQL, Valkey) as a Core module of the registry.
 //
-// POURQUOI UN ENVELOPPEMENT : l'installation existe déjà dans internal/data
-// et reste pilotée par cmd/ceffio/install.go. Ce package DÉCRIT la couche
-// pour que l'état et le diagnostic la lisent dans le registre.
+// WHY A WRAPPER: the install already exists in internal/data and remains
+// driven by cmd/ceffio/install.go. This package DESCRIBES the layer so that
+// the state and the diagnostic read it in the registry.
 package data
 
 import (
@@ -18,20 +18,21 @@ import (
 )
 
 const (
-	// Le namespace des bases (internal/data/data.go, pgNamespace).
+	// The namespace of the databases (internal/data/data.go, pgNamespace).
 	nsData = "ceffio-data"
-	// L'opérateur CNPG vit dans SON namespace (chart Helm) : la couche
-	// l'installe et l'attend prêt — l'état doit le lire là.
+	// The CNPG operator lives in ITS OWN namespace (Helm chart): the layer
+	// installs it and waits for it to be ready — the state must read it
+	// there.
 	nsCNPG = "cnpg-system"
 )
 
-// dataModule est le module « data ».
+// dataModule is the "data" module.
 type dataModule struct{}
 
 func init() { module.Register(&dataModule{}) }
 
-// Info décrit la couche. Requires volontairement vide : l'ordre du socle
-// appartient à la séquence explicite de cmd/ceffio/install.go.
+// Info describes the layer. Requires deliberately empty: the order of the
+// core belongs to the explicit sequence of cmd/ceffio/install.go.
 func (m *dataModule) Info() module.Info {
 	return module.Info{
 		ID:          "data",
@@ -53,14 +54,15 @@ func (m *dataModule) Info() module.Info {
 	}
 }
 
-// Install délègue à data.Deploy, inchangé — voir la note de platform :
-// le registre décrit, l'installateur reste maître de l'ordre du socle.
+// Install delegates to data.Deploy, unchanged — see the note in platform:
+// the registry describes, the installer remains master of the core order.
 func (m *dataModule) Install(ctx context.Context, env module.Env) error {
 	return coucheData.Deploy(ctx)
 }
 
-// State lit le cluster : l'opérateur CNPG prêt (deployPostgres l'attend),
-// et les pods du cluster PostgreSQL et de Valkey prêts dans ceffio-data.
+// State reads the cluster: the CNPG operator ready (deployPostgres waits
+// for it), and the pods of the PostgreSQL cluster and of Valkey ready in
+// ceffio-data.
 func (m *dataModule) State(ctx context.Context, env module.Env) module.State {
 	return socle.EtatLePlusBas(
 		socle.EtatDuDeploiement(ctx, env, nsCNPG, "cnpg-cloudnative-pg"),
@@ -69,8 +71,8 @@ func (m *dataModule) State(ctx context.Context, env module.Env) module.State {
 	)
 }
 
-// Uninstall refuse : retirer PostgreSQL effacerait les données de toute la
-// suite — le socle se retire avec le cluster (ceffio uninstall).
+// Uninstall refuses: removing PostgreSQL would erase the data of the whole
+// suite — the core is removed with the cluster (ceffio uninstall).
 func (m *dataModule) Uninstall(ctx context.Context, env module.Env) error {
 	return socle.ErreurSocleIndemontable(m.Info().ID)
 }

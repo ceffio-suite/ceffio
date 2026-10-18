@@ -16,7 +16,7 @@ func TestChoixIssuer(t *testing.T) {
 			t.Errorf("%s : %s -> %s, attendu %s", c.domaine, c.quoi, got, c.attendu)
 		}
 	}
-	// La variable force le choix
+	// The variable forces the choice
 	t.Setenv("CEFFIO_TLS_ISSUER", "ca")
 	if got := issuerPour("ceffio.org"); got != issuerCA {
 		t.Errorf("CEFFIO_TLS_ISSUER=ca ignore sur un domaine public")

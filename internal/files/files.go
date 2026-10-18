@@ -280,28 +280,29 @@ spec:
 
 func waitNextcloudReady(ctx context.Context) error {
 	fmt.Println("∙ waiting for Nextcloud Ready + installation...")
-	// 900 SECONDES, ET CE N'EST PAS UNE MARGE DE SÉCURITÉ : c'est une mesure.
+	// 900 SECONDS, AND THIS IS NOT A SAFETY MARGIN: it is a measurement.
 	//
-	// MESURÉ sur un disque neuf, et c'est le from scratch qui l'a montré :
-	// Nextcloud a mis 6 min 4 s à devenir Ready (12:29:43 → 12:35:47). Les
-	// 300 s d'origine expiraient donc avant, l'installation s'arrêtait sur
+	// MEASURED on a fresh disk, and it is the from-scratch run that showed
+	// it: Nextcloud took 6 min 4 s to become Ready (12:29:43 → 12:35:47).
+	// The original 300 s therefore expired first, and the installation
+	// stopped on
 	//
 	//	error: timed out waiting for the condition
 	//	ceffio: nextcloud not ready: exit status 1
 	//
-	// alors que Nextcloud était parfaitement installé — vérifié juste après :
-	// `php occ status` répondait installed: true, version 34.0.3.2.
+	// while Nextcloud was perfectly installed — verified right after:
+	// `php occ status` answered installed: true, version 34.0.3.2.
 	//
-	// L'essentiel de ces six minutes est l'ATTACHEMENT DU VOLUME LONGHORN :
-	// sur un volume neuf, il faut provisionner la réplique, formater, puis
-	// attacher. Sur une machine réinstallée, le volume existe déjà et
-	// l'attachement est immédiat — ce qui explique que le défaut ne se voyait
-	// pas avant de tester sur du vide.
+	// Most of those six minutes is the LONGHORN VOLUME ATTACHMENT: on a
+	// fresh volume the replica must be provisioned, formatted, then
+	// attached. On a reinstalled machine the volume already exists and the
+	// attachment is immediate — which is why the defect was invisible
+	// before testing on an empty machine.
 	//
-	// Le même relèvement est appliqué aux autres couches qui attendent un pod
-	// adossé à un volume (identity, data, console, ingress, mail) : la cause
-	// est identique et un délai plus court à un seul endroit recréerait le
-	// problème au composant suivant.
+	// The same raising is applied to the other layers that wait for a pod
+	// backed by a volume (identity, data, console, ingress, mail): the
+	// cause is identical, and a shorter timeout in a single place would
+	// recreate the problem at the next component.
 	cmd := k8s.Command(ctx, "kubectl", "rollout", "status",
 		"deployment/nextcloud", "-n", ns, "--timeout=900s")
 	cmd.Stdout = os.Stdout
@@ -452,24 +453,24 @@ func ConfigureOIDC(ctx context.Context, domain string) error {
 	out, err := runOccOutputPodEnv(ctx, pod, envSecret, clientSecret,
 		"user_oidc:provider", nomProvider,
 		"-c", clientID, "-d", discovery, "--clientsecret-env="+envSecret,
-		// L'IDENTIFIANT DU COMPTE EST CELUI DE KEYCLOAK, PAS UN UUID.
+		// THE ACCOUNT IDENTIFIER IS KEYCLOAK'S, NOT A UUID.
 		//
-		// user_oidc utilise le claim `sub` par défaut, et `uniqueUid` vaut 1 :
-		// la première connexion SSO créait donc un SECOND compte, nommé d'après
-		// l'UUID Keycloak, à côté du compte local adminceffio :
+		// user_oidc uses the `sub` claim by default, and `uniqueUid` is 1:
+		// the first SSO login therefore created a SECOND account, named
+		// after the Keycloak UUID, next to the local adminceffio account:
 		//
-		//	adminceffio        groupes: [admin, everyone]        ← le bon, admin
-		//	1dbf6e678875d9...  groupes: [everyone]              ← le compte SSO
+		//	adminceffio        groupes: [admin, everyone]        ← the right one, admin
+		//	1dbf6e678875d9...  groupes: [everyone]              ← the SSO account
 		//
-		// L'utilisateur se connectait avec le second, qui n'est pas
-		// administrateur, et Nextcloud répondait « Le compte connecté doit être
-		// un administrateur » — un message qui accuse les droits alors que le
-		// sujet est l'identité du compte.
+		// The user logged in with the second one, which is not an
+		// administrator, and Nextcloud answered « Le compte connecté doit être
+		// un administrateur » — a message that blames the rights when the
+		// subject is the account's identity.
 		//
-		// Ce n'est pas cosmétique : c'est l'exigence de l'opérateur, un seul
-		// identifiant identique dans TOUS les systèmes. Deux comptes pour une
-		// même personne obligent à se souvenir de deux formes, et les droits
-		// accordés à l'une ne valent pas pour l'autre.
+		// This is not cosmetic: it is the operator's requirement, a single
+		// identical identifier in ALL systems. Two accounts for one person
+		// force remembering two forms, and the rights granted to one do not
+		// apply to the other.
 		"--mapping-uid=preferred_username",
 		"--unique-uid=0",
 		"--mapping-display-name=name",

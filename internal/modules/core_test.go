@@ -11,19 +11,17 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/module"
 )
 
-// idsSocle liste les dix couches du socle, devenues des modules Core.
-// L'ordre reprend celui de la séquence d'installation
-// (cmd/ceffio/install.go), pour que la table ci-dessous reste lisible comme
-// le produit lui-même.
+// idsSocle lists the ten core layers, now Core modules. The order follows
+// the one of the install sequence (cmd/ceffio/install.go), so that the
+// table below stays readable like the product itself.
 var idsSocle = []string{
 	"platform", "data", "vault", "identity", "files",
 	"office", "talk", "ingress", "mail", "console",
 }
 
-// entreeCatalogue est la COPIE de référence d'une ligne de
-// catalogueServices (internal/console/status.go). Dupliquée volontairement :
-// le test doit casser si l'une des deux tables dérive, pas suivre
-// silencieusement la seconde.
+// entreeCatalogue is the REFERENCE COPY of a row of catalogueServices
+// (internal/console/status.go). Duplicated deliberately: the test must
+// break if either table drifts, not silently follow the second one.
 type entreeCatalogue struct {
 	sub       string
 	nom       string
@@ -31,11 +29,11 @@ type entreeCatalogue struct {
 	technique bool
 	sso       bool
 	pods      []string
-	modulaire string // ID du module qui doit porter cette exposition
+	modulaire string // ID of the module that must carry this exposure
 }
 
-// catalogueReference reprend les 6 entrées de catalogueServices telles
-// qu'elles existaient avant la modularisation, avec le module attendu.
+// catalogueReference reproduces the 6 entries of catalogueServices as they
+// existed before the modularization, with the expected module.
 var catalogueReference = []entreeCatalogue{
 	{"cloud", "Nextcloud", "Files, sharing and collaboration", false, true,
 		[]string{"nextcloud"}, "files"},
@@ -51,15 +49,15 @@ var catalogueReference = []entreeCatalogue{
 		[]string{"janus", "talk-signaling", "coturn", "nats"}, "talk"},
 }
 
-// TestChaqueEntreeCatalogueVitDansExactementUnModule est le garde-fou de la
-// migration : chaque exposition publique de l'ancien catalogueServices doit
-// se retrouver dans EXACTEMENT UN module du registre — ni zéro (perdue au
-// passage), ni deux (dupliquée, la page de statut l'afficherait deux fois).
+// TestChaqueEntreeCatalogueVitDansExactementUnModule is the migration guard:
+// every public exposure of the former catalogueServices must end up in
+// EXACTLY ONE module of the registry — neither zero (lost along the way),
+// nor two (duplicated, the status page would display it twice).
 //
-// POURQUOI vérifier les CHAMPS et pas seulement le Sub : un Service
-// recopié avec un SSO ou un PodPrefixes faux ne casserait aucun test
-// d'existence, mais changerait silencieusement la réponse de /api/status
-// que le lot B5 doit reproduire à l'identique.
+// WHY check the FIELDS and not only the Sub: a Service copied with a wrong
+// SSO or a wrong PodPrefixes would break no existence test, but would
+// silently change the answer of /api/status that batch B5 must reproduce
+// identically.
 func TestChaqueEntreeCatalogueVitDansExactementUnModule(t *testing.T) {
 	tout := module.All()
 
@@ -81,7 +79,7 @@ func TestChaqueEntreeCatalogueVitDansExactementUnModule(t *testing.T) {
 			t.Errorf("catalog entry %q was lost: no module declares a Service with this Sub", ref.sub)
 			continue
 		case 1:
-			// attendu
+			// expected
 		default:
 			t.Errorf("catalog entry %q is duplicated across modules %s: it must live in exactly one",
 				ref.sub, strings.Join(trouveDans, ", "))
@@ -112,10 +110,10 @@ func TestChaqueEntreeCatalogueVitDansExactementUnModule(t *testing.T) {
 	}
 }
 
-// TestLesDixCouchesDuSocleSontDesModulesCore vérifie le contrat commun des
-// dix modules Core : enregistrés, Kind Core, Default=true (sémantique :
-// `ceffio install` les pose tous), des namespaces réels déclarés, et un
-// refus explicite de désinstallation par couche.
+// TestLesDixCouchesDuSocleSontDesModulesCore checks the common contract of
+// the ten Core modules: registered, Kind Core, Default=true (semantics:
+// `ceffio install` lays them all down), real namespaces declared, and an
+// explicit refusal of per-layer uninstall.
 func TestLesDixCouchesDuSocleSontDesModulesCore(t *testing.T) {
 	for _, id := range idsSocle {
 		m, ok := module.Get(id)
@@ -142,20 +140,21 @@ func TestLesDixCouchesDuSocleSontDesModulesCore(t *testing.T) {
 			}
 		}
 
-		// Uninstall DOIT refuser : les dix couches sont le produit. Un
-		// retrait par couche laisserait une suite amnésique qui se
-		// croirait saine — l'erreur explicite est le comportement.
+		// Uninstall MUST refuse: the ten layers are the product. A
+		// per-layer removal would leave an amnesiac suite that believes
+		// itself healthy — the explicit error is the behavior.
 		if err := m.Uninstall(context.Background(), module.Env{}); err == nil {
 			t.Errorf("module %q: Uninstall must refuse — core layers are removed with the cluster only", id)
 		}
 	}
 }
 
-// TestMailNeFaitPasSemblantDInstaller vérifie le cas délicat du lot :
-// mail.Deploy exige les réglages du relais SMTP que Env ne porte pas. Le
-// module doit refouver net, avec une erreur qui nomme le VRAI installateur
-// — jamais déléguer avec un relais vide (un Stalwart sans relais tourne,
-// reçoit, et n'envoie rien : une installation silencieusement cassée).
+// TestMailNeFaitPasSemblantDInstaller checks the delicate case of the
+// batch: mail.Deploy requires the SMTP relay settings that Env does not
+// carry. The module must refuse outright, with an error that names the REAL
+// installer — never delegate with an empty relay (a Stalwart without a
+// relay runs, receives, and sends nothing: a silently broken
+// installation).
 func TestMailNeFaitPasSemblantDInstaller(t *testing.T) {
 	m, ok := module.Get("mail")
 	if !ok {
@@ -170,9 +169,9 @@ func TestMailNeFaitPasSemblantDInstaller(t *testing.T) {
 	}
 }
 
-// TestEtatSansClientDitInconnu vérifie la règle transversale des lectures
-// d'état : sans client Kubernetes dans Env, on répond Unknown — jamais
-// Absent, qui est un fait observé et non un défaut de point de vue.
+// TestEtatSansClientDitInconnu checks the transversal rule of the state
+// reads: without a Kubernetes client in Env, we answer Unknown — never
+// Absent, which is an observed fact and not a lack of point of view.
 func TestEtatSansClientDitInconnu(t *testing.T) {
 	for _, id := range idsSocle {
 		m, ok := module.Get(id)
@@ -186,10 +185,10 @@ func TestEtatSansClientDitInconnu(t *testing.T) {
 	}
 }
 
-// TestPasDeCollisionAvecLesModulesOptionnels vérifie que les IDs du socle ne
-// recouvrent pas ceux des modules à la carte (Register paniquerait au
-// démarrage sur une collision, mais un renommage futur doit être attrapé
-// ici, avec un message lisible, plutôt qu'en panique d'init).
+// TestPasDeCollisionAvecLesModulesOptionnels checks that the core IDs do
+// not overlap with those of the optional modules (Register would panic at
+// startup on a collision, but a future rename must be caught here, with a
+// readable message, rather than in an init panic).
 func TestPasDeCollisionAvecLesModulesOptionnels(t *testing.T) {
 	optionnels := []string{"exapps-daemon", "live-transcription", "recording"}
 	vus := map[string]bool{}

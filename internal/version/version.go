@@ -28,45 +28,42 @@ import (
 	"strings"
 )
 
-// Binary, Commit et Date décrivent le binaire lui-même. Elles sont injectées
-// à la compilation par les workflows CI/release via
+// Binary, Commit and Date describe the binary itself. They are injected at
+// compile time by the CI/release workflows via
 // -ldflags "-X github.com/ceffio-suite/ceffio/internal/version.Binary=...".
 //
-// POURQUOI ICI ET PAS DANS package main : ces valeurs doivent être lisibles
-// par le code interne (ImageTag pour construire les références d'images),
-// pas seulement par cobra pour `--version`. Les garder dans main les rendait
-// invisibles du reste du programme et obligeaient les ldflags à viser un
-// symbole que personne d'autre ne pouvait atteindre.
+// WHY HERE AND NOT IN package main: these values must be readable by the
+// internal code (ImageTag, to build the image references), not only by cobra
+// for `--version`. Keeping them in main made them invisible to the rest of the
+// program and forced the ldflags to target a symbol nobody else could reach.
 var (
 	Binary = "0.0.0-dev"
 	Commit = ""
 	Date   = ""
 )
 
-// reRelease reconnaît un tag de release (`v0.6.0`, `v0.6.0-rc.1`) : seule
-// une version de release peut servir de tag d'image tel quel, un build de
-// développement doit être identifié par le contenu du binaire.
+// reRelease recognizes a release tag (`v0.6.0`, `v0.6.0-rc.1`): only a
+// release version can serve as an image tag as-is, a development build must be
+// identified by the content of the binary.
 var reRelease = regexp.MustCompile(`^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$`)
 
-// cheminExecutable est une variable de package plutôt qu'un appel direct à
-// os.Executable pour que les tests puissent la remplacer : sans cela, le tag
-// de développement dépendrait du vrai binaire de test en cours d'exécution,
-// donc de la machine qui lance `go test` — impossible à vérifier
-// déterministiquement.
+// cheminExecutable is a package variable rather than a direct call to
+// os.Executable so that tests can replace it: without that, the development
+// tag would depend on the real test binary currently running, hence on the
+// machine launching `go test` — impossible to verify deterministically.
 var cheminExecutable = os.Executable
 
-// ImageTag retourne le tag d'image Docker correspondant au binaire en cours.
+// ImageTag returns the Docker image tag corresponding to the current binary.
 //
-// POURQUOI CE DOUBLE RÉGIME : un binaire de release porte une version
-// publique (v0.6.0 → tag 0.6.0). Un build de développement n'a pas de
-// version fiable — deux développeurs peuvent avoir le même "0.0.0-dev" avec
-// du code différent. On identifie alors le binaire par le hachage de son
-// contenu : même binaire, même tag ; binaire différent, tag différent.
+// WHY THIS DOUBLE REGIME: a release binary carries a public version
+// (v0.6.0 → tag 0.6.0). A development build has no reliable version — two
+// developers can have the same "0.0.0-dev" with different code. We then
+// identify the binary by the hash of its content: same binary, same tag;
+// different binary, different tag.
 //
-// La valeur retournée ne doit JAMAIS être vide : elle devient un tag
-// d'image Docker, et une référence `registry/image:` (tag vide) est
-// invalide — le déploiement échouerait avec un message qui ne dirait pas
-// d'où vient le problème.
+// The returned value must NEVER be empty: it becomes a Docker image tag, and a
+// `registry/image:` reference (empty tag) is invalid — the deployment would
+// fail with a message that would not say where the problem comes from.
 func ImageTag() string {
 	if reRelease.MatchString(Binary) {
 		return strings.TrimPrefix(Binary, "v")
@@ -74,8 +71,8 @@ func ImageTag() string {
 
 	chemin, err := cheminExecutable()
 	if err != nil {
-		// Impossible de localiser le binaire : on retourne un tag fixe
-		// plutôt qu'une chaîne vide (voir commentaire de la fonction).
+		// Cannot locate the binary: we return a fixed tag rather than an
+		// empty string (see the function's comment).
 		return "dev-inconnu"
 	}
 
@@ -89,8 +86,8 @@ func ImageTag() string {
 	if _, err := io.Copy(h, f); err != nil {
 		return "dev-inconnu"
 	}
-	// 12 caractères hexadécimaux : assez long pour éviter les collisions
-	// pratiques, assez court pour rester lisible dans `kubectl get pods`.
+	// 12 hexadecimal characters: long enough to avoid practical collisions,
+	// short enough to stay readable in `kubectl get pods`.
 	return "dev-" + hex.EncodeToString(h.Sum(nil))[:12]
 }
 

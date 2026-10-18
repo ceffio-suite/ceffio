@@ -70,7 +70,7 @@ func (r ResultatDNS) OK(attendue string) bool {
 	return false
 }
 
-// Verifier interroge le DNS pour chaque nom et rend le detail.
+// Verifier queries the DNS for each name and returns the detail.
 //
 // IT RESOLVES RATHER THAN PINGS. An ICMP echo can be filtered while the name
 // is perfectly correct, and then the check reports a DNS problem where there
@@ -90,7 +90,7 @@ func Verifier(ctx context.Context, noms []string) []ResultatDNS {
 	return res
 }
 
-// Rapport décrit les problèmes de DNS, sans rien tenter.
+// Rapport describes the DNS problems, without attempting anything.
 //
 // THE LIST OF EXPECTED NAMES IS BUILT FROM THE DOMAIN, so it grows with the
 // product. Each one is a real host the deployment will serve: forgetting one
@@ -117,7 +117,7 @@ func Rapport(resultats []ResultatDNS, attendue string, domainePublic bool) []str
 	return problemes
 }
 
-// AdresseLocale rend l'adresse que le DNS doit annoncer pour cet hôte.
+// AdresseLocale returns the address the DNS must announce for this host.
 //
 // ANNOUNCED ADDRESS, NOT INTERFACE ADDRESS. On a machine behind NAT they
 // differ, and the certificate is issued for the name: the operator must point

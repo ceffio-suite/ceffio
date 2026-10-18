@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright © MANDEM
 
-// Package identity déclare la couche « identity » (Keycloak, le SSO) comme
-// module Core du registre.
+// Package identity declares the "identity" layer (Keycloak, the SSO) as a
+// Core module of the registry.
 //
-// POURQUOI UN ENVELOPPEMENT : l'installation existe déjà dans
-// internal/identity et reste pilotée par cmd/ceffio/install.go. Ce package
-// DÉCRIT la couche pour que l'état et le diagnostic la lisent dans le
-// registre.
+// WHY A WRAPPER: the install already exists in internal/identity and
+// remains driven by cmd/ceffio/install.go. This package DESCRIBES the layer
+// so that the state and the diagnostic read it in the registry.
 package identity
 
 import (
@@ -18,17 +17,17 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/modules/socle"
 )
 
-// Le namespace de Keycloak (internal/identity/identity.go, ns).
+// The namespace of Keycloak (internal/identity/identity.go, ns).
 const nsIdentity = "ceffio-identity"
 
-// identityModule est le module « identity ».
+// identityModule is the "identity" module.
 type identityModule struct{}
 
 func init() { module.Register(&identityModule{}) }
 
-// Info décrit la couche. Requires volontairement vide : l'ordre du socle
-// (identité APRÈS data, car Keycloak a besoin de sa base) appartient à la
-// séquence explicite de cmd/ceffio/install.go.
+// Info describes the layer. Requires deliberately empty: the order of the
+// core (identity AFTER data, because Keycloak needs its database) belongs
+// to the explicit sequence of cmd/ceffio/install.go.
 func (m *identityModule) Info() module.Info {
 	return module.Info{
 		ID:          "identity",
@@ -44,10 +43,10 @@ func (m *identityModule) Info() module.Info {
 		// socle.StandardPermission).
 		Permissions: []module.Permission{socle.StandardPermission(nsIdentity)},
 
-		// Reprise EXACTE de l'entrée « keycloak » de catalogueServices
-		// (internal/console/status.go) : mêmes textes, même SSO=false —
-		// Keycloak EST la porte d'entrée du SSO, il ne passe pas par
-		// lui-même.
+		// EXACT copy of the "keycloak" entry of catalogueServices
+		// (internal/console/status.go): same texts, same SSO=false —
+		// Keycloak IS the entry point of the SSO, it does not go through
+		// itself.
 		Services: []module.Service{
 			{
 				Sub:         "keycloak",
@@ -61,19 +60,20 @@ func (m *identityModule) Info() module.Info {
 	}
 }
 
-// Install délègue à identity.Deploy, inchangé — le registre décrit, la
-// séquence de cmd/ceffio/install.go reste maître de l'ordre du socle.
+// Install delegates to identity.Deploy, unchanged — the registry describes,
+// the sequence of cmd/ceffio/install.go remains master of the core order.
 func (m *identityModule) Install(ctx context.Context, env module.Env) error {
 	return coucheIdentity.Deploy(ctx)
 }
 
-// State lit le cluster : le Deployment keycloak prêt dans ceffio-identity.
+// State reads the cluster: the Deployment keycloak ready in
+// ceffio-identity.
 func (m *identityModule) State(ctx context.Context, env module.Env) module.State {
 	return socle.EtatDuDeploiement(ctx, env, nsIdentity, "keycloak")
 }
 
-// Uninstall refuse : sans identité, plus personne ne peut se connecter à
-// rien — le socle se retire avec le cluster (ceffio uninstall).
+// Uninstall refuses: without identity, nobody can log in to anything
+// anymore — the core is removed with the cluster (ceffio uninstall).
 func (m *identityModule) Uninstall(ctx context.Context, env module.Env) error {
 	return socle.ErreurSocleIndemontable(m.Info().ID)
 }

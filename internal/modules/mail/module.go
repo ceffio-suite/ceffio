@@ -1,23 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright © MANDEM
 
-// Package mail déclare la couche « mail » (Stalwart) comme module Core du
-// registre.
+// Package mail declares the "mail" layer (Stalwart) as a Core module of the
+// registry.
 //
-// POURQUOI UN ENVELOPPEMENT : l'installation existe déjà dans internal/mail
-// et reste pilotée par cmd/ceffio/install.go. Ce package DÉCRIT la couche
-// pour que l'état et le diagnostic la lisent dans le registre.
+// WHY A WRAPPER: the install already exists in internal/mail and remains
+// driven by cmd/ceffio/install.go. This package DESCRIBES the layer so that
+// the state and the diagnostic read it in the registry.
 //
-// LE CAS PARTICULIER DE CE MODULE — Install NE DÉLÈGUE PAS :
-// mail.Deploy exige les réglages du relais SMTP sortant (hôte, port,
-// utilisateur, mot de passe) que module.Env ne porte pas, et pour cause :
-// ce sont des données de l'opérateur saisies par la commande install
-// (--smtp-relais, …). Le port 25 sortant est bloqué par les FAI (vérifié),
-// donc un Stalwart déployé SANS relais recevrait mais n'enverrait jamais —
-// une installation silencieusement cassée. Plutôt que de déléguer avec un
-// relais vide et faire semblant, Install retourne une erreur explicite :
-// la séquence d'installation, qui détient les réglages, reste la seule à
-// installer cette couche.
+// THE PARTICULAR CASE OF THIS MODULE — Install DOES NOT DELEGATE:
+// mail.Deploy requires the outbound SMTP relay settings (host, port, user,
+// password) that module.Env does not carry, and rightly so: they are
+// operator data entered by the install command (--smtp-relais, …). Outbound
+// port 25 is blocked by ISPs (verified), so a Stalwart deployed WITHOUT a
+// relay would receive but never send — a silently broken installation.
+// Rather than delegate with an empty relay and pretend, Install returns an
+// explicit error: the install sequence, which holds the settings, remains
+// the only one to install this layer.
 package mail
 
 import (
@@ -28,23 +27,23 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/modules/socle"
 )
 
-// PAS D'IMPORT DE internal/mail ICI, et c'est voulu : ce module n'appelle
-// JAMAIS mail.Deploy (voir Install). Conserver un import inutilisable sous
-// prétexte de lien symbolique ferait croire à une délégation qui n'existe
-// pas. La couche est décrite, pas pilotée.
+// NO IMPORT OF internal/mail HERE, and it is deliberate: this module NEVER
+// calls mail.Deploy (see Install). Keeping an unusable import for the sake
+// of a symbolic link would suggest a delegation that does not exist. The
+// layer is described, not driven.
 
-// Le namespace de Stalwart (internal/mail/mail.go, ns).
+// The namespace of Stalwart (internal/mail/mail.go, ns).
 const nsMail = "ceffio-mail"
 
-// mailModule est le module « mail ».
+// mailModule is the "mail" module.
 type mailModule struct{}
 
 func init() { module.Register(&mailModule{}) }
 
-// Info décrit la couche. Requires volontairement vide : l'ordre du socle
-// (mail après ingress, car le SSO de Stalwart vérifie son discovery OIDC
-// sur https://keycloak.<domain>) appartient à la séquence explicite de
-// cmd/ceffio/install.go.
+// Info describes the layer. Requires deliberately empty: the order of the
+// core (mail after ingress, because Stalwart's SSO checks its OIDC
+// discovery on https://keycloak.<domain>) belongs to the explicit sequence
+// of cmd/ceffio/install.go.
 func (m *mailModule) Info() module.Info {
 	return module.Info{
 		ID:          "mail",
@@ -64,28 +63,27 @@ func (m *mailModule) Info() module.Info {
 	}
 }
 
-// Install refuse, EXPLICITEMENT.
+// Install refuses, EXPLICITLY.
 //
-// POURQUOI UNE ERREUR PLUTÔT QU'UNE DÉLÉGATION APPROXIMATIVE : appeler
-// mail.Deploy avec un relais vide produirait un Stalwart qui tourne, qui
-// reçoit, et qui n'envoie RIEN — le pire état possible, parce que tout
-// paraîtrait installé. Env n'a pas les réglages du relais et ne doit pas
-// les avoir (un mot de passe SMTP n'est pas une donnée de cluster). La
-// seule réponse honnête est de dire qui, et pourquoi, installe cette
-// couche.
+// WHY AN ERROR RATHER THAN AN APPROXIMATE DELEGATION: calling mail.Deploy
+// with an empty relay would produce a Stalwart that runs, that receives,
+// and that sends NOTHING — the worst possible state, because everything
+// would look installed. Env does not have the relay settings and must not
+// have them (an SMTP password is not cluster data). The only honest answer
+// is to say who installs this layer, and why.
 func (m *mailModule) Install(ctx context.Context, env module.Env) error {
 	return fmt.Errorf("mail is installed by the install sequence, which holds the SMTP relay settings; " +
 		"the registry describes it but does not install it")
 }
 
-// State lit le cluster : le Deployment stalwart prêt dans ceffio-mail.
+// State reads the cluster: the Deployment stalwart ready in ceffio-mail.
 func (m *mailModule) State(ctx context.Context, env module.Env) module.State {
 	return socle.EtatDuDeploiement(ctx, env, nsMail, "stalwart")
 }
 
-// Uninstall refuse : la couche fait partie du produit (Kind Core) ; les
-// boîtes mail des utilisateurs vivent dans son volume. Le socle se retire
-// avec le cluster (ceffio uninstall).
+// Uninstall refuses: the layer is part of the product (Kind Core); the
+// users' mailboxes live in its volume. The core is removed with the cluster
+// (ceffio uninstall).
 func (m *mailModule) Uninstall(ctx context.Context, env module.Env) error {
 	return socle.ErreurSocleIndemontable(m.Info().ID)
 }

@@ -28,45 +28,45 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/version"
 )
 
-// MÉCANISME DE L'IMAGE CONSOLE — UN SEUL MANIFESTE, EN LIGNE COMME HORS LIGNE.
+// CONSOLE IMAGE MECHANISM — ONE SINGLE MANIFEST, ONLINE AS WELL AS OFFLINE.
 //
-// La référence d'image est unique et calculée : imageRepo + le tag dérivé de
-// la version du BINAIRE en cours d'exécution (version.ImageTag()). Plus aucun
-// tag n'est écrit à la main : un tag oublié faisait tourner l'ancienne image
-// indéfiniment (buildAndImportImage saute la reconstruction si le tag existe
-// déjà dans containerd).
+// The image reference is unique and computed: imageRepo + the tag derived
+// from the version of the BINARY currently running (version.ImageTag()). No
+// tag is written by hand anymore: a forgotten tag kept the old image running
+// indefinitely (buildAndImportImage skips the rebuild if the tag already
+// exists in containerd).
 //
-// POURQUOI ghcr.io ET PLUS localhost/ : avec localhost/, l'image n'existait
-// que construite sur place, et le manifeste du pod différait selon que la
-// machine pouvait ou non joindre un registre. Avec la référence GHCR, le
-// Deployment appliqué est le MÊME dans les deux cas (imagePullPolicy:
-// IfNotPresent) : si l'image est déjà dans containerd — importée localement
-// ou tirée plus tôt — le kubelet la sert sans réseau ; sinon il tire la
-// version publiée depuis GHCR. Une installation en ligne et une installation
-// hors ligne convergent donc vers le même manifeste.
+// WHY ghcr.io AND NOT localhost/ ANYMORE: with localhost/, the image only
+// existed once built on site, and the pod manifest differed depending on
+// whether the machine could reach a registry or not. With the GHCR
+// reference, the applied Deployment is the SAME in both cases
+// (imagePullPolicy: IfNotPresent): if the image is already in containerd —
+// imported locally or pulled earlier — the kubelet serves it without
+// network; otherwise it pulls the published version from GHCR. An online
+// installation and an offline installation therefore converge on the same
+// manifest.
 //
-// Ordre de décision dans buildAndImportImage :
-//  1. l'image est déjà présente dans containerd → ne rien faire ;
-//  2. version de RELEASE (tag ne commençant pas par "dev-") → tenter un
-//     `crictl pull` de l'image publiée ; en cas d'échec (machine hors
-//     ligne), construire et importer localement ;
-//  3. version de DÉVELOPPEMENT (tag "dev-…", jamais publié) → construire
-//     et importer localement, sans tentative de pull.
+// Decision order in buildAndImportImage:
+//  1. the image is already present in containerd → do nothing;
+//  2. RELEASE version (tag not starting with "dev-") → attempt a
+//     `crictl pull` of the published image; on failure (offline machine),
+//     build and import locally;
+//  3. DEVELOPMENT version (tag "dev-…", never published) → build and
+//     import locally, with no pull attempt.
 const (
 	deployNS   = "ceffio-system"
 	deployName = "ceffio-admin"
-	// imageRepo : dépôt public des images console publiées par la CI.
+	// imageRepo: public repository of the console images published by the CI.
 	imageRepo = "ghcr.io/ceffio-suite/ceffio-console"
 )
 
-// imageRef est l'UNIQUE référence d'image utilisée par la console (build,
-// import, manifeste du Deployment, vérifications).
+// imageRef is the ONE AND ONLY image reference used by the console (build,
+// import, Deployment manifest, verifications).
 //
-// Variable de package initialisée une fois, et non une constante : le tag
-// vient de version.ImageTag(), qui est une fonction — interdite dans une
-// const Go. L'initialiser une seule fois évite aussi de re-hacher le binaire
-// (~40 Mo) à chaque appel, ImageTag() calculant le hachage du binaire pour
-// les builds de développement.
+// A package variable initialized once, and not a constant: the tag comes
+// from version.ImageTag(), which is a function — forbidden in a Go const.
+// Initializing it once also avoids re-hashing the binary (~40 MB) on every
+// call, ImageTag() computing the binary hash for development builds.
 var imageRef = imageRepo + ":" + version.ImageTag()
 
 // Deploy installs the administration console IN the cluster (Phase 11):
@@ -119,9 +119,9 @@ func Deploy(ctx context.Context, domain string) error {
 // buildAndImportImage guarantees the console image in containerd k3s.
 // Idempotent: skips if the image is already present.
 //
-// Trois chemins, dans l'ordre (voir l'en-tête du fichier pour le pourquoi) :
-// image déjà présente → rien ; release → crictl pull, sinon construction
-// locale ; développement → construction locale uniquement.
+// Three paths, in order (see the file header for the why): image already
+// present → nothing; release → crictl pull, otherwise local build;
+// development → local build only.
 //
 // Design constraints (learned from scratch builds) — the target machine is a
 // PRODUCTION server, not a dev workstation:
@@ -133,18 +133,18 @@ func Deploy(ctx context.Context, domain string) error {
 //     imported into the k3s containerd via ctr. Requiring `docker build`/`save`
 //     is unjustifiable on a K3s host.
 func buildAndImportImage(ctx context.Context) error {
-	// 1. Déjà présente dans containerd : ne rien faire. C'est le cas normal
-	//    d'un redéploiement, et aussi celui d'une machine en ligne où le
-	//    kubelet a déjà tiré l'image depuis GHCR.
+	// 1. Already present in containerd: do nothing. This is the normal case
+	//    of a redeployment, and also that of an online machine where the
+	//    kubelet has already pulled the image from GHCR.
 	if imagePresent(ctx) {
 		fmt.Println("∙ console image already present (" + imageRef + ")")
 		return nil
 	}
 
-	// 2. Version de RELEASE : l'image est publiée sur GHCR, on tente d'abord
-	//    de la tirer. En cas d'échec (machine hors ligne, registre
-	//    injoignable), on retombe sur la construction locale — le manifeste
-	//    reste le même grâce à imagePullPolicy: IfNotPresent.
+	// 2. RELEASE version: the image is published on GHCR, we first try to
+	//    pull it. On failure (offline machine, unreachable registry), we
+	//    fall back to the local build — the manifest stays the same thanks
+	//    to imagePullPolicy: IfNotPresent.
 	if !strings.HasPrefix(version.ImageTag(), "dev-") {
 		fmt.Println("∙ release build: pulling console image " + imageRef)
 		if pullImage(ctx) {
@@ -153,11 +153,11 @@ func buildAndImportImage(ctx context.Context) error {
 		fmt.Println("∙ pull failed (offline?): falling back to local build + import")
 	}
 
-	// 3. Version de DÉVELOPPEMENT : le tag "dev-<hachage>" n'est jamais
-	//    publié, la construction locale est le seul chemin possible.
+	// 3. DEVELOPMENT version: the tag "dev-<hash>" is never published, the
+	//    local build is the only possible path.
 	fmt.Println("∙ building + importing console image " + imageRef)
 
-	// Construction locale, en quatre temps (a à d) :
+	// Local build, in four steps (a to d):
 
 	// a. Binary to embed: the running one (already a Ceffio executable).
 	self, err := os.Executable()
@@ -403,29 +403,29 @@ func sha256Hex(b []byte) string {
 }
 
 func imagePresent(ctx context.Context) bool {
-	// On compare sur la référence COMPLÈTE (dépôt + tag), pas sur un
-	// fragment : "ceffio-console" seul matcherait n'importe quelle autre
-	// image du même dépôt, et "ghcr.io" d'autres images Ceffio.
+	// We compare on the COMPLETE reference (repository + tag), not on a
+	// fragment: "ceffio-console" alone would match any other image of the
+	// same repository, and "ghcr.io" other Ceffio images.
 	out, err := exec.CommandContext(ctx, "sh", "-c",
 		"sudo ctr -n k8s.io -a /run/k3s/containerd/containerd.sock images ls -q | grep -F '"+imageRef+"'").CombinedOutput()
 	return err == nil && strings.Contains(string(out), imageRef)
 }
 
-// pullImage tente de tirer l'image publiée depuis GHCR via crictl.
-// Retourne true si l'image est visible du CRI après le pull.
+// pullImage attempts to pull the published image from GHCR via crictl.
+// Returns true if the image is visible to the CRI after the pull.
 //
-// POURQUOI crictl ET PAS ctr : le pull doit atterrir dans le namespace
-// k8s.io avec le résolveur du kubelet (authentification, miroirs), sinon le
-// pod resterait en ImagePullBackOff malgré une image « présente ». crictl
-// parle au CRI exactement comme le kubelet.
+// WHY crictl AND NOT ctr: the pull must land in the k8s.io namespace with
+// the kubelet's resolver (authentication, mirrors), otherwise the pod would
+// stay in ImagePullBackOff despite an image "present". crictl talks to the
+// CRI exactly like the kubelet.
 //
-// L'échec n'est PAS une erreur : une machine hors ligne doit pouvoir
-// déployer, l'appelant retombe alors sur la construction locale.
+// Failure is NOT an error: an offline machine must be able to deploy, and
+// the caller then falls back to the local build.
 func pullImage(ctx context.Context) bool {
-	// Même approche que le reste du fichier : `sh -c` avec `command -v`
-	// pour tester la disponibilité, et sudo car le socket containerd
-	// n'est lisible que par root. k3s fournit son propre crictl
-	// (`k3s crictl`) quand aucun crictl système n'est installé.
+	// Same approach as the rest of the file: `sh -c` with `command -v` to
+	// test availability, and sudo because the containerd socket is only
+	// readable by root. k3s ships its own crictl (`k3s crictl`) when no
+	// system crictl is installed.
 	pull := k8s.Command(ctx, "sh", "-c", strings.Join([]string{
 		"(command -v crictl >/dev/null && sudo crictl pull " + imageRef + ") ||",
 		"(command -v k3s >/dev/null && sudo k3s crictl pull " + imageRef + ")",
@@ -605,8 +605,8 @@ kind: ClusterRole
 metadata:
   name: ceffio-admin
 rules:
-# LECTURE, au niveau cluster : l'onglet Overview, les certificats et
-# l'infrastructure lisent pods, ingress et certificates de TOUS les namespaces.
+# READ, at cluster level: the Overview tab, the certificates and the
+# infrastructure read pods, ingress and certificates of ALL namespaces.
 - apiGroups: [""]
   resources: [pods, namespaces]
   verbs: [get, list, watch]
@@ -620,36 +620,36 @@ rules:
   resources: [certificates]
   verbs: [get, list, watch]
 ---
-# LA CONSOLE ADMINISTRE TOUTE LA PLATEFORME, PAS SEULEMENT DEUX NAMESPACES.
+# THE CONSOLE ADMINISTERS THE WHOLE PLATFORM, NOT JUST TWO NAMESPACES.
 #
-# Le déploiement de la plateforme, la lecture de l'état, les certificats, les
-# applications Nextcloud, les ExApp : tout passe par cette console. Un droit
-# limité à ceffio-exapps et ceffio-system l'empêchait d'administrer ce
-# qu'elle est censée administrer, et l'erreur remontait sous forme de refus RBAC
-# au moment du clic :
+# Deploying the platform, reading its state, the certificates, the Nextcloud
+# applications, the ExApps: everything goes through this console. A right
+# limited to ceffio-exapps and ceffio-system prevented it from administering
+# what it is supposed to administer, and the error surfaced as an RBAC
+# denial at the moment of the click:
 #
 #   User "system:serviceaccount:ceffio-system:ceffio-admin" cannot create
 #   resource "namespaces" …
 #
-# LE PÉRIMÈTRE EST CELUI DES NAMESPACES DE LA PLATEFORME, et il est délibérément
-# plus étroit qu'un cluster-admin :
+# THE SCOPE IS THAT OF THE PLATFORM NAMESPACES, and it is deliberately
+# narrower than a cluster-admin:
 #
-#   - un ClusterRole pour les ressources qui n'appartiennent à aucun namespace
-#     (namespaces eux-mêmes, et les définitions de rôles) ;
-#   - un RoleBinding dans chaque namespace ceffio-* et ceffio-exapps,
-#     qui donne l'écriture là où la plateforme vit ;
-#   - AUCUN droit sur kube-system, longhorn-system ou cert-manager : ce sont les
-#     briques d'infrastructure, elles ne se pilotent pas depuis cette console.
+#   - a ClusterRole for the resources that belong to no namespace
+#     (the namespaces themselves, and the role definitions);
+#   - a RoleBinding in each ceffio-* namespace and ceffio-exapps,
+#     granting write access where the platform lives;
+#   - NO right on kube-system, longhorn-system or cert-manager: those are
+#     infrastructure building blocks, they are not driven from this console.
 #
-# Le namespace est le seul objet cluster-wide, et c'est inévitable : en créer un
-# n'appartient à aucun namespace.
+# The namespace is the only cluster-wide object, and that is unavoidable:
+# creating one belongs to no namespace.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: ceffio-admin
 rules:
-# Lecture sur tout le cluster : l'onglet Infrastructure et la page Certificats
-# listent pods, ingress et certificates de l'ensemble de la plateforme.
+# Cluster-wide read: the Infrastructure tab and the Certificates page
+# list pods, ingress and certificates of the whole platform.
 - apiGroups: [""]
   resources: [pods, namespaces]
   verbs: [get, list, watch]
@@ -662,26 +662,26 @@ rules:
 - apiGroups: [cert-manager.io]
   resources: [certificates]
   verbs: [get, list, watch]
-# Écriture sur les objets qui n'appartiennent à aucun namespace.
-# create et update, PAS delete : l'installation crée le namespace et le
-# déployeur n'y touche plus ensuite. « Remove » retire les charges et les
-# volumes, jamais le namespace — il appartient à la plateforme, pas à la
-# console. Retirer delete réduit le droit au strict nécessaire.
+# Write access on the objects that belong to no namespace.
+# create and update, NOT delete: the installation creates the namespace and
+# the deployer never touches it afterwards. "Remove" removes the workloads
+# and the volumes, never the namespace — it belongs to the platform, not to
+# the console. Removing delete reduces the right to the strict minimum.
 - apiGroups: [""]
   resources: [namespaces]
   verbs: [create, update, patch]
-# PAS DE DROIT SUR clusterroles, ET C'EST UNE RÈGLE DE SÉCURITÉ, PAS UN CHOIX.
+# NO RIGHT ON clusterroles, AND THAT IS A SECURITY RULE, NOT A CHOICE.
 #
-# La console avait ce droit et s'en servait pour créer le ClusterRole dont elle
-# avait besoin — ce que Kubernetes refuse :
+# The console had this right and used it to create the ClusterRole it
+# needed — which Kubernetes refuses:
 #
 #	attempting to grant RBAC permissions not currently held
 #
-# Un compte ne peut pas s'accorder ce qu'il ne détient pas : c'est la protection
-# contre l'élévation de privilèges. Tous les droits RBAC sont donc posés par le
-# DÉPLOYEUR, qui tourne avec un kubeconfig administrateur, et la console ne fait
-# que les consommer. Retirer ce droit rend l'erreur impossible plutôt que de la
-# corriger après coup.
+# An account cannot grant itself what it does not hold: that is the
+# protection against privilege escalation. All RBAC rights are therefore
+# laid down by the DEPLOYER, which runs with an administrator kubeconfig,
+# and the console only consumes them. Removing this right makes the error
+# impossible rather than fixing it after the fact.
 ---
 # NAMESPACE-SCOPED RIGHTS, GENERATED FROM THE MODULE REGISTRY.
 #

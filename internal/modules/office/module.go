@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright © MANDEM
 
-// Package office déclare la couche « office » (ONLYOFFICE Document Server)
-// comme module Core du registre.
+// Package office declares the "office" layer (ONLYOFFICE Document Server)
+// as a Core module of the registry.
 //
-// POURQUOI UN ENVELOPPEMENT : l'installation existe déjà dans internal/office
-// et reste pilotée par cmd/ceffio/install.go. Ce package DÉCRIT la couche
-// pour que l'état et le diagnostic la lisent dans le registre.
+// WHY A WRAPPER: the install already exists in internal/office and remains
+// driven by cmd/ceffio/install.go. This package DESCRIBES the layer so that
+// the state and the diagnostic read it in the registry.
 package office
 
 import (
@@ -17,17 +17,18 @@ import (
 	coucheOffice "github.com/ceffio-suite/ceffio/internal/office"
 )
 
-// Le namespace d'ONLYOFFICE (internal/office/office.go, ns).
+// The namespace of ONLYOFFICE (internal/office/office.go, ns).
 const nsOffice = "ceffio-office"
 
-// officeModule est le module « office ».
+// officeModule is the "office" module.
 type officeModule struct{}
 
 func init() { module.Register(&officeModule{}) }
 
-// Info décrit la couche. Requires volontairement vide : l'ordre du socle
-// (office APRÈS files, car le connecteur s'active via occ dans le pod
-// Nextcloud) appartient à la séquence explicite de cmd/ceffio/install.go.
+// Info describes the layer. Requires deliberately empty: the order of the
+// core (office AFTER files, because the connector is activated via occ in
+// the Nextcloud pod) belongs to the explicit sequence of
+// cmd/ceffio/install.go.
 func (m *officeModule) Info() module.Info {
 	return module.Info{
 		ID:          "office",
@@ -43,11 +44,11 @@ func (m *officeModule) Info() module.Info {
 		// socle.StandardPermission).
 		Permissions: []module.Permission{socle.StandardPermission(nsOffice)},
 
-		// Reprise EXACTE de l'entrée « office » de catalogueServices
-		// (internal/console/status.go), commentaire compris : technique,
-		// car personne n'y accède directement — mais le NAVIGATEUR charge
-		// l'éditeur depuis cette adresse (DocumentServerUrl), donc la
-		// retirer de l'exposition casserait l'édition des documents.
+		// EXACT copy of the "office" entry of catalogueServices
+		// (internal/console/status.go), comment included: technical,
+		// because nobody accesses it directly — but the BROWSER loads
+		// the editor from this address (DocumentServerUrl), so removing
+		// it from the exposure would break document editing.
 		Services: []module.Service{
 			{
 				Sub:         "office",
@@ -61,20 +62,20 @@ func (m *officeModule) Info() module.Info {
 	}
 }
 
-// Install délègue à office.Deploy, inchangé — le registre décrit, la
-// séquence de cmd/ceffio/install.go reste maître de l'ordre du socle.
+// Install delegates to office.Deploy, unchanged — the registry describes,
+// the sequence of cmd/ceffio/install.go remains master of the core order.
 func (m *officeModule) Install(ctx context.Context, env module.Env) error {
 	return coucheOffice.Deploy(ctx)
 }
 
-// State lit le cluster : le Deployment onlyoffice prêt dans ceffio-office.
+// State reads the cluster: the Deployment onlyoffice ready in ceffio-office.
 func (m *officeModule) State(ctx context.Context, env module.Env) module.State {
 	return socle.EtatDuDeploiement(ctx, env, nsOffice, "onlyoffice")
 }
 
-// Uninstall refuse : la couche fait partie du produit (Kind Core) ; la
-// retirer casserait l'édition des documents sans que rien ne le dise.
-// Le socle se retire avec le cluster (ceffio uninstall).
+// Uninstall refuses: the layer is part of the product (Kind Core); removing
+// it would break document editing without anything saying so. The core is
+// removed with the cluster (ceffio uninstall).
 func (m *officeModule) Uninstall(ctx context.Context, env module.Env) error {
 	return socle.ErreurSocleIndemontable(m.Info().ID)
 }
