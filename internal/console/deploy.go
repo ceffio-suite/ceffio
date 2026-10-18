@@ -57,7 +57,7 @@ const (
 	deployNS   = "ceffio-system"
 	deployName = "ceffio-admin"
 	// imageRepo: public repository of the console images published by the CI.
-	imageRepo = "ghcr.io/ceffio-suite/ceffio-console"
+	imageRepo = "ghcr.io/ceffio-suite/ceffio"
 )
 
 // imageRef is the ONE AND ONLY image reference used by the console (build,
@@ -404,8 +404,8 @@ func sha256Hex(b []byte) string {
 
 func imagePresent(ctx context.Context) bool {
 	// We compare on the COMPLETE reference (repository + tag), not on a
-	// fragment: "ceffio-console" alone would match any other image of the
-	// same repository, and "ghcr.io" other Ceffio images.
+	// fragment: "ceffio" alone would match every other Ceffio image of the
+	// same organisation, and "ghcr.io" all of them.
 	out, err := exec.CommandContext(ctx, "sh", "-c",
 		"sudo ctr -n k8s.io -a /run/k3s/containerd/containerd.sock images ls -q | grep -F '"+imageRef+"'").CombinedOutput()
 	return err == nil && strings.Contains(string(out), imageRef)
