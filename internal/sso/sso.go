@@ -96,29 +96,29 @@ func clientsOIDC(domain string) []client {
 			// THE RETURN ADDRESS IS THE WEBUI'S OWN CALLBACK PATH, on the
 			// public mail host — Stalwart serves it, and the address has to
 			// match what it sends or Keycloak refuses the redirect.
-			// LE CLIENT DE L'INTERFACE WEB EST PUBLIC, ET ELLE GÉNÈRE SON PROPRE PKCE.
+			// THE WEB INTERFACE'S CLIENT IS PUBLIC, AND IT GENERATES ITS OWN PKCE.
 			//
-			// Ce n'est PAS un client confidentiel comme nextcloud ou openbao : le
-			// WebUI de Stalwart est une application navigateur, elle ne peut pas
-			// garder un secret. Elle ouvre l'échange authorization-code avec un
-			// client id et un code_verifier, sans secret.
+			// This is NOT a confidential client like nextcloud or openbao: the
+			// Stalwart WebUI is a browser application, it cannot
+			// keep a secret. It opens the authorization-code exchange with a
+			// client id and a code_verifier, without a secret.
 			//
-			// Le déclarer confidentiel produit exactement le refus qu'on a vu :
-			// le navigateur arrive sur la page d'erreur du fournisseur, alors que
-			// côté Stalwart tout est configuré.
+			// Declaring it confidential produces exactly the refusal we saw:
+			// the browser lands on the provider's error page, while
+			// everything is configured on the Stalwart side.
 			//
-			// LES DEUX CHEMINS DE RETOUR SONT /account ET /admin : l'interface
-			// construite dynamiquement `{origine}{chemin}/oauth/callback`, et elle
-			// sert les deux espaces. Les lister tous les deux évite un refus de
-			// redirection selon la page d'où l'on vient.
+			// THE TWO RETURN PATHS ARE /account AND /admin: the interface
+			// dynamically builds `{origin}{path}/oauth/callback`, and it
+			// serves both spaces. Listing both avoids a redirect
+			// refusal depending on which page we come from.
 			app:       "stalwart-webui",
 			id:        "stalwart-webui",
 			audience:  true,
 			redirects: fmt.Sprintf("https://mail.%s/account/oauth/callback,https://mail.%s/admin/oauth/callback", domain, domain),
-			// L'INTERFACE REVIENT SUR SA PAGE DE CONNEXION APRÈS DÉCONNEXION.
-			// Les deux espaces, comme pour les redirections : le chemin de
-			// retour dépend de l'espace qu'on quitte, et n'en déclarer qu'un
-			// ferait échouer la déconnexion de l'autre.
+			// THE INTERFACE RETURNS TO ITS LOGIN PAGE AFTER SIGN-OUT.
+			// Both spaces, as for the redirects: the return
+			// path depends on the space being left, and declaring only one
+			// would fail the sign-out of the other.
 			postLogout: fmt.Sprintf("https://mail.%s/account/login,https://mail.%s/admin/login", domain, domain),
 			public:     true,
 		},
@@ -164,29 +164,29 @@ func assurerUnClient(ctx context.Context, c client) error {
 		return fmt.Errorf("OIDC client %s: %w", c.id, err)
 	}
 
-	// UN CLIENT PUBLIC N'A PAS DE SECRET, ET ON S'ARRÊTE LÀ.
+	// A PUBLIC CLIENT HAS NO SECRET, AND WE STOP THERE.
 	//
-	// Toute la suite de cette fonction consiste à générer un secret, à le poser
-	// dans Keycloak et à le stocker dans le coffre pour que l'application le
-	// lise. Un client public n'en a aucun : le WebUI de Stalwart est une
-	// application navigateur, il s'authentifie par PKCE.
+	// The whole rest of this function consists of generating a secret, placing
+	// it in Keycloak and storing it in the vault so the application
+	// reads it. A public client has none: the Stalwart WebUI is a
+	// browser application, it authenticates by PKCE.
 	//
-	// Continuer malgré tout écrirait un secret dans le coffre et sur un client
-	// qui refuse les secrets — l'installation annoncerait un client prêt, et la
-	// connexion échouerait sans que rien ne relie les deux.
-	// L'AUDIENCE DU JETON, POUR LES CLIENTS QUI LA VÉRIFIENT.
+	// Continuing anyway would write a secret into the vault and onto a client
+	// that refuses secrets — the installation would announce a ready client,
+	// and the login would fail with nothing linking the two.
+	// THE TOKEN'S AUDIENCE, FOR THE CLIENTS THAT VERIFY IT.
 	//
-	// Stalwart déclare `requireAudience: stalwart-webui` sur son annuaire
-	// OIDC : il refuse tout jeton dont l'audience ne correspond pas. Keycloak,
-	// lui, ne met JAMAIS le clientId appelant dans `aud` de sa propre
-	// initiative — la revue de ses propres changements le dit noir sur blanc :
-	// « the RP client id is never on the aud list ». Sans mapper explicite, le
-	// claim est absent, et Stalwart renvoie vers son formulaire local après
-	// une connexion Keycloak pourtant réussie.
+	// Stalwart declares `requireAudience: stalwart-webui` on its OIDC
+	// directory: it refuses every token whose audience does not match.
+	// Keycloak, for its part, NEVER puts the calling clientId in `aud` on
+	// its own initiative — the review of its own changes says it in black
+	// and white: "the RP client id is never on the aud list". Without an
+	// explicit mapper, the claim is absent, and Stalwart sends the user
+	// back to its local form after an otherwise successful Keycloak login.
 	//
-	// LA BOUCLE EST DONC FERMÉE : ce n'est pas un défaut d'authentification,
-	// c'est un claim manquant. Le symptôme ne le dit pas — l'utilisateur voit
-	// une page de connexion là où il vient de s'authentifier.
+	// THE LOOP IS THEREFORE CLOSED: this is not an authentication failure,
+	// it is a missing claim. The symptom does not say so — the user sees a
+	// login page right where they just authenticated.
 	if c.audience {
 		if err := assurerMapperAudience(ctx, uuid, c.id); err != nil {
 			return err
@@ -282,35 +282,35 @@ func AssurerClientCoffre(ctx context.Context, domain string) error {
 func ensureClient(ctx context.Context, clientID, redirects, postLogout string, public bool) (string, error) {
 	uuid, err := clientUUID(ctx, clientID)
 
-	// LES PROPRIÉTÉS SONT POSÉES DANS LES DEUX CAS, création ET MISE À JOUR.
+	// THE PROPERTIES ARE PLACED IN BOTH CASES, creation AND update.
 	//
-	// La version précédente rendait la main dès que le client existait, ce qui
-	// rendait toute propriété ajoutée plus tard INAPPLICABLE : un client déjà
-	// présent — sur toute installation existante — n'aurait jamais reçu sa
-	// liste de redirections de déconnexion, et le défaut serait resté visible
-	// après le correctif censé le réparer.
+	// The previous version returned as soon as the client existed, which
+	// made any property added later INAPPLICABLE: an already-present
+	// client — on every existing installation — would never have received
+	// its sign-out redirect list, and the defect would have stayed visible
+	// after the fix meant to repair it.
 	//
-	// C'est exactement le piège que ce fichier documente ailleurs : une fonction
-	// idempotente doit comparer ce qui est déclaré à ce qui est posé, pas
-	// supposer que l'existence suffit.
+	// That is exactly the trap this file documents elsewhere: an idempotent
+	// function must compare what is declared against what is placed, not
+	// assume that existence suffices.
 	corps := []string{
 		"-s", "enabled=true",
 		"-s", "protocol=openid-connect",
 		"-s", fmt.Sprintf("publicClient=%t", public),
 		"-s", `redirectUris=["` + strings.ReplaceAll(redirects, ",", `","`) + `"]`,
 	}
-	// LA LISTE DE DÉCONNEXION EST DISTINCTE, et c'est la source du défaut : un
-	// client dont on a rempli les redirections de connexion peut malgré tout
-	// refuser de revenir où que ce soit après un sign-out.
-	// KEYCLOAK 26 N'A PLUS DE CHAMP postLogoutRedirectUris : c'est devenu un
-	// ATTRIBUT, et le poser comme champ est refusé —
+	// THE SIGN-OUT LIST IS DISTINCT, and that is the source of the defect: a
+	// client whose login redirects were filled can still refuse to come
+	// back anywhere after a sign-out.
+	// KEYCLOAK 26 NO LONGER HAS A postLogoutRedirectUris FIELD: it became
+	// an ATTRIBUTE, and placing it as a field is refused —
 	//
 	//	Unrecognized field "postLogoutRedirectUris"
 	//
-	// Le séparateur est ## et non une virgule : c'est la convention de Keycloak
-	// pour les listes stockées dans un attribut. Une virgule y serait lue comme
-	// un seul chemin contenant une virgule, et la déconnexion échouerait
-	// toujours sur « Invalid redirect uri ».
+	// The separator is ## and not a comma: that is Keycloak's convention
+	// for lists stored in an attribute. A comma there would be read as a
+	// single path containing a comma, and the sign-out would still fail
+	// on "Invalid redirect uri".
 	if postLogout != "" {
 		corps = append(corps,
 			"-s", `attributes."post.logout.redirect.uris"=`+
@@ -325,9 +325,9 @@ func ensureClient(ctx context.Context, clientID, redirects, postLogout string, p
 			"-s", `attributes."pkce.code.challenge.method"=S256`)
 	}
 
-	// LE CLIENT N'EXISTE PAS ENCORE : on le crée avec les mêmes propriétés,
-	// puis on s'arrête. Une seule définition de ce qu'un client doit être,
-	// plutôt que deux listes d'arguments à tenir synchronisées.
+	// THE CLIENT DOES NOT EXIST YET: we create it with the same properties,
+	// then stop. A single definition of what a client must be,
+	// rather than two argument lists to keep in sync.
 	if err != nil || uuid == "" {
 		out, err := runKcadm(ctx, append([]string{"create", "clients",
 			"-s", "clientId=" + clientID}, corps...)...)
@@ -341,8 +341,8 @@ func ensureClient(ctx context.Context, clientID, redirects, postLogout string, p
 		return id, nil
 	}
 
-	// IL EXISTE : on lui repose ses propriétés, pour que les corrections
-	// suivantes atteignent aussi les installations déjà en place.
+	// IT EXISTS: we place its properties again, so that subsequent fixes
+	// also reach installations already in place.
 	if _, err := runKcadm(ctx, append([]string{"update", "clients/" + uuid}, corps...)...); err != nil {
 		return "", err
 	}
@@ -514,9 +514,9 @@ func assurerMapperAudience(ctx context.Context, uuid, clientID string) error {
 		"-s", "protocolMapper=oidc-audience-mapper",
 		"-s", `config."included.client.audience"=`+clientID,
 		"-s", `config."access.token.claim"=true`,
-		// L'ID TOKEN N'EST PAS CONCERNÉ : c'est le jeton d'accès que le
-		// vérificateur présente, et ajouter l'audience aux deux ne servirait
-		// qu'à élargir ce qui circule.
+		// THE ID TOKEN IS NOT CONCERNED: it is the access token that the
+		// verifier presents, and adding the audience to both would only
+		// widen what circulates.
 		"-s", `config."id.token.claim"=false`); err != nil {
 		return fmt.Errorf("audience mapper for %s: %w", clientID, err)
 	}

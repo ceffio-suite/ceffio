@@ -192,28 +192,28 @@ func (s *Server) handleAdminRotate(w http.ResponseWriter, r *http.Request) {
 // rotKeycloak sets the password via the realm's admin API, CREATING THE ACCOUNT
 // IF IT DOES NOT EXIST YET.
 //
-// # POURQUOI LA CRÉATION EST ICI, ET PAS AILLEURS
+// # WHY THE CREATION IS HERE, AND NOWHERE ELSE
 //
-// L'installation crée le realm « ceffio » et configure l'authentification de
-// adminceffio (rôle OIDC côté vault, redirection SSO) — mais elle ne crée
-// JAMAIS l'utilisateur. Deux choses différentes, et les confondre a produit
-// exactement ce que l'opérateur voyait :
+// The installation creates the « ceffio » realm and configures adminceffio's
+// authentication (OIDC role on the vault side, SSO redirect) — but it NEVER
+// creates the user. Two different things, and confusing them produced
+// exactly what the operator saw:
 //
 //	missing from the directory
 //	missing from Nextcloud
 //	WITHOUT admin rights
 //	inactive account
 //
-// Vérifié sur le realm : `kcadm get users -r ceffio` rendait `[ ]`. Le realm
-// existait, l'identité non. Déclarer un rôle OIDC pour
-// adminceffio@ceffio.local ne crée pas cet utilisateur : ça dit seulement
-// comment le reconnaître s'il se présente un jour.
+// Verified on the realm: `kcadm get users -r ceffio` returned `[ ]`. The
+// realm existed, the identity did not. Declaring an OIDC role for
+// adminceffio@ceffio.local does not create that user: it only says how to
+// recognize them if they ever show up.
 //
-// LA ROTATION EST L'ENDROIT NATUREL, parce qu'elle est déjà le seul chemin qui
-// sait poser un mot de passe, et parce que créer-puis-poser est idempotent :
-// sur un compte absent il le crée, sur un compte existant il le met à jour.
-// Une fonction de création séparée aurait dupliqué la gestion du mot de passe,
-// avec deux endroits où diverger.
+// ROTATION IS THE NATURAL PLACE, because it is already the only path that
+// knows how to set a password, and because create-then-set is idempotent:
+// on an absent account it creates it, on an existing account it updates it.
+// A separate creation function would have duplicated the password handling,
+// with two places to diverge.
 //
 // temporary=false: the user will not have to change it at first sign-in —
 // they just noted it down, asking again would be absurd.
@@ -326,35 +326,35 @@ func (s *Server) rotNextcloud(r *http.Request, mdp string) error {
 	// occ reads OC_PASS when --password-from-env is provided. So we inject the
 	// variable into the command executed in the pod.
 	//
-	// LE COMPTE EST CRÉÉ S'IL N'EXISTE PAS, comme pour Keycloak.
+	// THE ACCOUNT IS CREATED IF IT DOES NOT EXIST, like for Keycloak.
 	//
-	// `occ user:resetpassword` ÉCHOUE sur un compte absent — « User does not
-	// exist » — et l'installation ne crée jamais adminceffio dans Nextcloud :
-	// l'authentification passe par SSO, mais SSO crée l'utilisateur à sa
-	// PREMIÈRE connexion, ce qui n'a lieu qu'après que l'opérateur ait pu se
-	// connecter. Sans cette création, le compte n'existe nulle part et la
-	// rotation ne peut rien faire : c'est l'état « Nextcloud : ABSENT ».
+	// `occ user:resetpassword` FAILS on an absent account — « User does not
+	// exist » — and the installation never creates adminceffio in Nextcloud:
+	// authentication goes through SSO, but SSO creates the user at their
+	// FIRST sign-in, which only happens after the operator could sign in.
+	// Without this creation, the account exists nowhere and rotation cannot
+	// do anything: that is the « Nextcloud : ABSENT » state.
 	//
-	// POURQUOI --password-from-env PLUTÔT QUE --password : l'argument serait
-	// lisible dans la table des processus du pod.
+	// WHY --password-from-env RATHER THAN --password: the argument would be
+	// readable in the pod's process table.
 	//
-	// L'ORDRE COMPTE : on crée d'abord (ignore si déjà présent), on pose le
-	// mot de passe ensuite. Les deux commandes sont séparées parce que la
-	// première doit pouvoir échouer sans interrompre la seconde — `user:add`
-	// sur un compte existant est une erreur, et la traiter comme fatale ferait
-	// échouer la rotation sur un système parfaitement sain.
-	// OC_PASS EST EXPORTÉ UNE FOIS POUR TOUTE LA SÉQUENCE, et non posé devant
-	// une seule commande. `occ user:add --password-from-env` lit la MÊME
-	// variable que resetpassword : mesuré dans le pod,
+	// THE ORDER MATTERS: we create first (ignore if already present), we set
+	// the password afterwards. The two commands are separate because the
+	// first must be able to fail without interrupting the second — `user:add`
+	// on an existing account is an error, and treating it as fatal would
+	// fail the rotation on a perfectly healthy system.
+	// OC_PASS IS EXPORTED ONCE FOR THE WHOLE SEQUENCE, and not set in front
+	// of a single command. `occ user:add --password-from-env` reads the SAME
+	// variable as resetpassword: measured in the pod,
 	//
 	//	--password-from-env given, but NC_PASS/OC_PASS is empty!
 	//
-	// La poser devant une seule des deux aurait fait échouer la création en
-	// silence (>/dev/null || true), et le compte n'aurait jamais existé — le
-	// symptôme exact que cette correction élimine.
+	// Setting it in front of only one of the two would have made the
+	// creation fail silently (>/dev/null || true), and the account would
+	// never have existed — the exact symptom this fix eliminates.
 	//
-	// `export` plutôt que préfixe : les quatre commandes s'exécutent dans le
-	// même shell, la variable doit donc survivre de l'une à l'autre.
+	// `export` rather than a prefix: the four commands run in the same
+	// shell, so the variable must survive from one to the next.
 	script := "export OC_PASS=" + shellQuote(mdp) + "; " +
 		"php occ user:add --password-from-env " + shellQuote(compteAdmin) + " >/dev/null 2>&1 || true; " +
 		"php occ group:add admin >/dev/null 2>&1 || true; " +
@@ -368,16 +368,15 @@ func (s *Server) rotNextcloud(r *http.Request, mdp string) error {
 	return nil
 }
 
-// L'ÉTAPE user:add DU DÉPLOIEMENT INITIAL EST DANS rotNextcloud, ET NULLE PART
-// AILLEURS. Un compte Nextcloud créé sans mot de passe ne peut pas se connecter,
-// et en créer un ici demanderait de générer un second mot de passe — donc deux
-// secrets pour une seule identité, ce que l'opérateur refuse explicitement.
-// La rotation les crée tous les deux avec LE MÊME mot de passe, dans le même
-// geste.
+// THE user:add STEP OF THE INITIAL DEPLOYMENT IS IN rotNextcloud, AND NOWHERE
+// ELSE. A Nextcloud account created without a password cannot sign in, and
+// creating one here would require generating a second password — so two
+// secrets for a single identity, which the operator explicitly refuses.
+// Rotation creates both with THE SAME password, in the same move.
 //
-// LE GROUPE admin EST AJOUTÉ APRÈS. Sans lui le compte s'authentifie et ne peut
-// rien faire — pire qu'un compte absent, puisque l'interface le compterait
-// comme présent.
+// THE admin GROUP IS ADDED AFTERWARDS. Without it the account authenticates
+// and can do nothing — worse than an absent account, since the interface
+// would count it as present.
 
 // ---------------------------------------------------------------------------
 // Stalwart

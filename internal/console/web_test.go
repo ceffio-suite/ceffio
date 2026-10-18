@@ -78,9 +78,9 @@ func TestChaqueBoutonAppelleUneFonctionExposee(t *testing.T) {
 	}
 }
 
-// TestLesFonctionsExposeesExistent : l'inverse. Exposer un nom qui n'existe pas
-// donnerait `undefined` sur window, et le bouton échouerait avec « is not a
-// function » — bruyant, mais tout aussi cassé.
+// TestLesFonctionsExposeesExistent: the inverse. Exposing a name that does not
+// exist would give `undefined` on window, and the button would fail with
+// « is not a function » — loud, but just as broken.
 func TestLesFonctionsExposeesExistent(t *testing.T) {
 	source := lireIndex(t)
 
@@ -88,9 +88,9 @@ func TestLesFonctionsExposeesExistent(t *testing.T) {
 	for _, m := range reWindow.FindAllStringSubmatch(source, -1) {
 		exposees[m[1]] = true
 	}
-	// Les affectations de variables (window.refresh = async () => {}) n'ont pas
-	// de déclaration `function` : on ne vérifie que celles qui prétendent
-	// désigner une fonction nommée.
+	// Variable assignments (window.refresh = async () => {}) have no
+	// `function` declaration: we only check those that claim to designate
+	// a named function.
 	declarees := map[string]bool{}
 	reFunc := regexp.MustCompile(`(?:async\s+)?function\s+([a-zA-Z_][a-zA-Z0-9_]*)`)
 	for _, m := range reFunc.FindAllStringSubmatch(source, -1) {
@@ -99,11 +99,12 @@ func TestLesFonctionsExposeesExistent(t *testing.T) {
 
 	var fantomes []string
 	for nom := range exposees {
-		// Une lambda affectée directement n'est pas dans `declarees` : on la
-		// reconnaît à sa forme, avec OU SANS parenthèses autour du paramètre.
-		// `window.resetPwd = async id => {` avait été manqué par la première
-		// version de ce test, qui ne cherchait que `async (` — un faux positif
-		// apprend à ignorer le test, exactement ce qu'il faut éviter.
+		// A lambda assigned directly is not in `declarees`: we recognize it
+		// by its shape, WITH OR WITHOUT parentheses around the parameter.
+		// `window.resetPwd = async id => {` had been missed by the first
+		// version of this test, which only looked for `async (` — a false
+		// positive teaches you to ignore the test, exactly what must be
+		// avoided.
 		direct := regexp.MustCompile(
 			`window\.` + regexp.QuoteMeta(nom) + `\s*=\s*(async\s*)?(\(|function|[a-zA-Z_]+\s*=>|\(\s*\)\s*=>)`).
 			MatchString(source)

@@ -31,6 +31,11 @@ With --bundle, produces a support archive to hand to the maintainer:
 it contains NO secret (no Secret value, no password, no private key),
 only states and redacted logs.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// The layers come from the module registry, not from the
+			// hardcoded stack.Layers table: a namespace the registry
+			// declares (ceffio-mail, ceffio-exapps…) must be diagnosed
+			// even when no one remembers to update a static list.
+			useRegistryLayers()
 			st := stack.Collect(cmd.Context())
 			findings := diagnose(st)
 			report := stack.Report{State: st, Findings: findings}
@@ -96,11 +101,17 @@ func diagnose(st *stack.State) []stack.Finding {
 	for _, l := range st.Layers {
 		switch {
 		case l.Total == 0:
-			// "video" is genuinely optional (--video option): its absence is
-			// a warning. Any other missing layer is critical: the platform
-			// does not deliver the service it announces.
+			// A namespace declared ONLY by Optional modules (e.g.
+			// ceffio-exapps: exapps-daemon, live-transcription) is
+			// genuinely optional — the operator may never have asked
+			// for it, and its absence is a warning, not a critical
+			// failure. Any other missing layer is critical: the
+			// platform does not deliver the service it announces.
+			// (The old rule keyed on the layer NAME "video", a
+			// leftover of a --video flag; the registry answers the
+			// question from Kind instead.)
 			sev := "critical"
-			if l.Name == "video" {
+			if namespaceOnlyOptional(l.Namespace) {
 				sev = "warning"
 			}
 			f = append(f, stack.Finding{

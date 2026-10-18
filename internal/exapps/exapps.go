@@ -54,21 +54,21 @@ const (
 	// reach anything of ours.
 	nsExapps = "ceffio-exapps"
 
-	// HARP VIT DANS LE NAMESPACE DES EXAPP, PAS DANS ceffio-system.
+	// HARP LIVES IN THE EXAPP NAMESPACE, NOT IN ceffio-system.
 	//
-	// Il y était, et c'était une erreur de conception : HaRP EST le déployeur
-	// d'ExApp. Il crée les Deployments, Services, Ingress et volumes DANS
-	// ceffio-exapps, et son rôle doit donc y être défini.
+	// It used to live there, and that was a design mistake: HaRP IS the ExApp
+	// deployer. It creates the Deployments, Services, Ingresses and volumes
+	// INSIDE ceffio-exapps, and its Role must therefore be defined there.
 	//
-	// L'argument inverse — « garder ses permissions à l'écart des charges qu'il
-	// crée » — se retourne contre lui-même : un déployeur séparé de ce qu'il
-	// déploie a besoin de droits PLUS larges, pas plus étroits. Un Role dans
-	// ceffio-exapps suffit, et il n'a alors aucun accès à ceffio-system, où
-	// vivent la console, OpenBao et les autres composants de la plateforme.
+	// The opposite argument — "keep its permissions away from the workloads it
+	// creates" — turns against itself: a deployer separated from what it
+	// deploys needs WIDER rights, not narrower ones. A Role in ceffio-exapps
+	// is enough, and it then has no access to ceffio-system, where the
+	// console, OpenBao and the other platform components live.
 	//
-	// MESURÉ : le déployeur tournait dans ceffio-system pendant que les
-	// applications s'installaient dans ceffio-exapps, et le Role de chaque
-	// ExApp devait être créé à distance, dans un namespace étranger.
+	// MEASURED: the deployer ran in ceffio-system while the applications
+	// installed into ceffio-exapps, and the Role of each ExApp had to be
+	// created remotely, in a foreign namespace.
 	nsHarp = nsExapps
 
 	nomHarp   = "appapi-harp"
@@ -120,19 +120,19 @@ func Preparer(ctx context.Context) error {
 func Deploy(ctx context.Context, domain string) error {
 	fmt.Println("\nDeploying the ExApp deploy daemon (HaRP)...")
 
-	// ON ATTEND QUE LE NAMESPACE SOIT LÀ, PAS QU'IL DISPARAISSE.
+	// WE WAIT FOR THE NAMESPACE TO BE THERE, NOT TO DISAPPEAR.
 	//
-	// J'avais écrit ici l'inverse — AttendreDisparition au lieu d'AttendreExistence —
-	// et le résultat était un déploiement qui ne faisait RIEN : la fonction
-	// attendait la disparition d'un namespace qui existait déjà, jusqu'à son
-	// délai de deux minutes, puis échouait. Mesuré : sept minutes sans qu'aucune
-	// ressource ne soit créée, et un journal qui s'arrêtait sur
+	// I had written the opposite here — AttendreDisparition instead of
+	// AttendreExistence — and the result was a deployment that did NOTHING:
+	// the function waited for an already existing namespace to disappear,
+	// until its two-minute timeout, then failed. Measured: seven minutes
+	// without a single resource created, and a log that stopped at
 	//
 	//	Deploying the ExApp deploy daemon (HaRP)...
 	//
-	// L'intention était de gérer l'enchaînement « Remove » puis « Deploy », où
-	// le namespace est encore en Terminating. Cela demande d'attendre son
-	// EXISTENCE stable — pas son absence.
+	// The intent was to handle the "Remove" then "Deploy" sequence, where the
+	// namespace is still Terminating. That requires waiting for its stable
+	// EXISTENCE — not its absence.
 	if err := creerNamespace(ctx); err != nil {
 		return err
 	}
@@ -642,20 +642,20 @@ func Remove(ctx context.Context) error {
 	//
 	// LE NAMESPACE N'EST PAS SUPPRIMÉ, et c'est délibéré.
 	//
-	// Il est créé par l'installation et il lui appartient : le supprimer ici
-	// ferait dépendre sa survie d'un clic dans la console, alors que la console
-	// n'est qu'un client de la plateforme et non son propriétaire.
+	// It is created by the installation and belongs to it: deleting it here
+	// would make its survival depend on a click in the console, while the
+	// console is only a client of the platform, not its owner.
 	//
-	// Ce que « Remove » doit rendre, c'est ce que le déployeur a apporté :
-	// sa charge de travail, son Service, son Ingress, son compte de service,
-	// ses rôles. On les supprime, on libère les volumes, et le namespace reste
-	// — vide, prêt pour un prochain déploiement.
+	// What "Remove" must give back is what the deployer brought in: its
+	// workload, its Service, its Ingress, its service account, its roles. We
+	// delete those, we free the volumes, and the namespace stays — empty,
+	// ready for a next deployment.
 	//
-	// LA CONSÉQUENCE PRATIQUE EST AUSSI UNE SIMPLIFICATION : les droits
-	// d'écriture de la console vivent dans ce namespace. Le détruire les
-	// emportait avec lui (supprimer un namespace supprime ses RoleBindings), et
-	// le déploiement suivant devait les reposer avant de pouvoir travailler.
-	// Un namespace stable supprime cette classe entière de pannes.
+	// THE PRACTICAL CONSEQUENCE IS ALSO A SIMPLIFICATION: the console's write
+	// rights live in this namespace. Destroying it carried them along
+	// (deleting a namespace deletes its RoleBindings), and the next
+	// deployment had to lay them down again before it could work. A stable
+	// namespace removes that entire class of failures.
 	cliSupp, err := k8sapi.Nouveau()
 	if err == nil {
 		for _, forme := range []string{
@@ -670,10 +670,9 @@ func Remove(ctx context.Context) error {
 		}
 	}
 
-	// Les volumes des applications, eux, doivent disparaître : ils portent des
-	// données téléchargées (les modèles de transcription pèsent plusieurs
-	// gigaoctets) et les garder ferait survivre un composant qu'on vient de
-	// désinstaller.
+	// The application volumes, on the other hand, must go: they carry
+	// downloaded data (the transcription models weigh several gigabytes) and
+	// keeping them would let a component we just uninstalled survive.
 	if err := supprimerPVC(ctx, nsExapps); err != nil {
 		return err
 	}
@@ -684,15 +683,15 @@ func Remove(ctx context.Context) error {
 
 // supprimerPVC removes the ExApp volumes, which is what actually frees disk.
 //
-// POURQUOI LES VOLUMES ET PAS LE NAMESPACE : c'est le volume qui porte les
-// données, et un namespace vide ne coûte rien. Supprimer le namespace emportait
-// aussi les RoleBindings de la console, qu'il fallait ensuite reposer — pour un
-// gain nul. On supprime donc exactement ce qui a un coût.
+// WHY THE VOLUMES AND NOT THE NAMESPACE: the volume is what carries the
+// data, and an empty namespace costs nothing. Deleting the namespace also
+// carried away the console's RoleBindings, which then had to be laid down
+// again — for zero gain. So we delete exactly what has a cost.
 //
-// UN ÉCHEC N'EST PAS FATAL : un volume déjà absent est le cas normal au second
-// clic, et un volume encore attaché à une charge en cours de suppression le
-// sera aussi une seconde plus tard. On rapporte ce qu'on a pu faire plutôt que
-// d'interrompre le reste du nettoyage.
+// A FAILURE IS NOT FATAL: an already absent volume is the normal case on the
+// second click, and a volume still attached to a workload being deleted will
+// be gone a second later too. We report what we could do rather than
+// interrupting the rest of the cleanup.
 func supprimerPVC(ctx context.Context, ns string) error {
 	cli, err := k8sapi.Nouveau()
 	if err != nil {

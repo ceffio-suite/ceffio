@@ -162,6 +162,40 @@ Two design points that required correction under real conditions:
   (`talk.<domain>`), which survives an address change — where a hard-coded
   value would silently stop working.
 
+## Modules
+
+Every feature of the suite — the ten core layers and the optional add-ons —
+is a **module**: a Go package implementing a single interface (`Info`,
+`Install`, `State`, `Uninstall`) and registering itself in a global registry.
+The registry is the catalog every frontend reads: `ceffio install
+--with/--without`, `ceffio module list|install|remove|status`, the console's
+Modules page, the status and doctor layer lists, and the console's RBAC grant
+are all generated from it — no feature list is hardcoded anywhere. Adding a
+feature means adding a module; see
+[`docs/adding-a-module.md`](docs/adding-a-module.md).
+
+**Core modules** are the product: `platform`, `data`, `vault`, `identity`,
+`files`, `office`, `talk`, `ingress`, `mail`, `console`. `ceffio install`
+deploys them in its own sequence, and they are removed only with the cluster
+(`ceffio uninstall`) — `ceffio module remove` refuses them.
+
+**Optional modules** are chosen by the operator, at install time
+(`--with`/`--without`) or afterwards (`ceffio module install <id>`, or the
+console's Modules page):
+
+| ID | Role | Resources | Requires | Installed by default |
+|---|---|---|---|---|
+| `recording` | Records Talk calls: a hidden participant joins the room, renders it and uploads the result to Nextcloud | — (workload limited to 2 GiB RAM, no model download) | — | **yes** (`--without recording` to skip) |
+| `exapps-daemon` | HaRP runs the containers Nextcloud asks for, speaking the Kubernetes API directly — prerequisite of every external application | — | — | no |
+| `live-transcription` | Transcribes speech live during a Talk call, on this server, with open source speech models; nothing is sent to a third party | ~9 GB disk, ~16 GB RAM | `exapps-daemon` (installed automatically with it) | no |
+
+Declared dependencies are expanded by the registry: asking for
+`live-transcription` installs `exapps-daemon` first, and `ceffio module
+remove exapps-daemon` is refused while an installed module requires it.
+Recording functionally needs the Talk layer (its install reads the signaling
+secret from the vault and says so if Talk is absent), but as a `Default`
+module it ships with the standard install, where Talk is always present.
+
 ## Installation
 
 The deployment is **idempotent**: running it again breaks nothing, it updates
@@ -178,9 +212,13 @@ Prerequisites:
 
 | Command | Role |
 |---|---|
-| `ceffio install` | deploy the full stack |
+| `ceffio install` | deploy the full stack — optional modules via `--with`/`--without` (catalog generated from the registry) |
 | `ceffio status` | state of the deployed services |
 | `ceffio doctor` | diagnostics (prerequisites, coherence, health) |
+| `ceffio module list` | every module of the registry with its state |
+| `ceffio module install <id>` | install an optional module and its dependencies |
+| `ceffio module remove <id>` | remove an optional module (`--yes` to skip confirmation) |
+| `ceffio module status <id>` | detailed state of a module (status, detail, blocked) |
 | `ceffio backup` | backup (databases, secrets, volumes) |
 | `ceffio restore` | restore from a backup |
 | `ceffio upgrade --plan` | show what would change, before changing it |

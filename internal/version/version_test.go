@@ -103,9 +103,9 @@ func TestOpenBaoDeclare(t *testing.T) {
 	}
 }
 
-// avecBinary exécute fn avec Binary remplacé, puis restaure la valeur :
-// les tests d'ImageTag modifient un état global du package, et un test qui
-// laisse sa valeur derrière lui fausse les suivants dans le même paquet.
+// avecBinary runs fn with Binary replaced, then restores the value: the
+// ImageTag tests modify a global state of the package, and a test that leaves
+// its value behind skews the following ones in the same package.
 func avecBinary(t *testing.T, valeur string, fn func()) {
 	t.Helper()
 	ancien := Binary
@@ -114,9 +114,9 @@ func avecBinary(t *testing.T, valeur string, fn func()) {
 	fn()
 }
 
-// TestImageTagRelease vérifie le régime « release » : un tag git v0.6.0 doit
-// produire le tag d'image 0.6.0, sans le « v » (les tags d'image Docker ne
-// le portent jamais dans ce dépôt).
+// TestImageTagRelease verifies the "release" regime: a git tag v0.6.0 must
+// produce the image tag 0.6.0, without the "v" (Docker image tags never carry
+// it in this repository).
 func TestImageTagRelease(t *testing.T) {
 	cas := []struct{ binaire, attendu string }{
 		{"v0.6.0", "0.6.0"},
@@ -132,13 +132,13 @@ func TestImageTagRelease(t *testing.T) {
 	}
 }
 
-// TestImageTagDev vérifie le régime « développement » : sans version de
-// release, le tag est dérivé du contenu du binaire (préfixe dev- + SHA-256
-// tronqué). On injecte un faux chemin via cheminExecutable pour ne pas
-// dépendre du vrai binaire de test.
+// TestImageTagDev verifies the "development" regime: without a release
+// version, the tag is derived from the content of the binary (dev- prefix +
+// truncated SHA-256). We inject a fake path via cheminExecutable so as not to
+// depend on the real test binary.
 func TestImageTagDev(t *testing.T) {
-	// Fichier temporaire au lieu du vrai exécutable : le hachage doit être
-	// calculé sur un contenu connu et stable pendant le test.
+	// Temporary file instead of the real executable: the hash must be
+	// computed on a content that is known and stable during the test.
 	fichier := filepath.Join(t.TempDir(), "faux-binaire")
 	if err := os.WriteFile(fichier, []byte("contenu de test"), 0o755); err != nil {
 		t.Fatal(err)
@@ -160,9 +160,9 @@ func TestImageTagDev(t *testing.T) {
 	}
 }
 
-// TestImageTagDevStable vérifie que deux appels successifs donnent le même
-// tag : un tag qui changerait entre la construction de l'image et son
-// déploiement referencerait une image inexistante.
+// TestImageTagDevStable verifies that two successive calls give the same tag:
+// a tag that would change between the image build and its deployment would
+// reference a nonexistent image.
 func TestImageTagDevStable(t *testing.T) {
 	fichier := filepath.Join(t.TempDir(), "faux-binaire")
 	if err := os.WriteFile(fichier, []byte("contenu de test"), 0o755); err != nil {
@@ -181,22 +181,22 @@ func TestImageTagDevStable(t *testing.T) {
 	})
 }
 
-// TestImageTagJamaisVide vérifie la promesse centrale de la fonction : même
-// quand le binaire est introuvable (chemin inexistant OU erreur
-// d'os.Executable), le tag n'est jamais vide. Un tag vide produirait une
-// référence d'image invalide et casserait le déploiement.
+// TestImageTagJamaisVide verifies the function's central promise: even when
+// the binary cannot be found (nonexistent path OR os.Executable error), the
+// tag is never empty. An empty tag would produce an invalid image reference
+// and break the deployment.
 func TestImageTagJamaisVide(t *testing.T) {
 	ancien := cheminExecutable
 	defer func() { cheminExecutable = ancien }()
 
 	avecBinary(t, "0.0.0-dev", func() {
-		// Cas 1 : os.Executable échoue.
+		// Case 1: os.Executable fails.
 		cheminExecutable = func() (string, error) { return "", fmt.Errorf("executable not found") }
 		if got := ImageTag(); got == "" {
 			t.Error("ImageTag() vide quand le chemin de l'exécutable est introuvable")
 		}
 
-		// Cas 2 : le chemin retourné ne pointe vers aucun fichier réel.
+		// Case 2: the returned path points at no real file.
 		cheminExecutable = func() (string, error) { return "/chemin/qui/nexiste/pas", nil }
 		if got := ImageTag(); got == "" {
 			t.Error("ImageTag() vide quand le binaire est illisible")

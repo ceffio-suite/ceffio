@@ -67,7 +67,7 @@ func Synthese(ctx context.Context, domain string) {
 // deployment did what it said, and a 502 here is the fastest way to notice a
 // component that came up but is not serving.
 func afficherServices(ctx context.Context, domain string) {
-	// sub, libellé, port interne
+	// sub, label, internal port
 	services := []struct {
 		sub, quoi string
 	}{
@@ -91,7 +91,7 @@ func afficherServices(ctx context.Context, domain string) {
 	fmt.Println()
 }
 
-// afficherCertificats montre ce qui signe chaque hôte et quand cela expire.
+// afficherCertificats shows what signs each host and when it expires.
 //
 // THE EXPIRY DATE IS THE POINT. Renewal is automatic, so the date is not a
 // deadline to act on — but an operator who can see "89 days" knows renewal is
@@ -111,7 +111,7 @@ func afficherCertificats(ctx context.Context) {
 		if len(f) != 4 || f[3] != "True" {
 			continue
 		}
-		// La date est tronquée au jour : l'heure n'apporte rien.
+		// The date is truncated to the day: the time adds nothing.
 		quand := f[2]
 		if len(quand) >= 10 {
 			quand = quand[:10]
@@ -177,7 +177,7 @@ func afficherCles(ctx context.Context, domain string) {
 	fmt.Println()
 }
 
-// afficherUtilitaires rappelle ce avec quoi on pilote la machine.
+// afficherUtilitaires reminds what the machine is driven with.
 //
 // These are installed by the storage layer; the list is short on purpose — the
 // point is to name the two that are NOT obvious (iscsiadm and multipath) and
@@ -195,9 +195,9 @@ func afficherUtilitaires() {
 	fmt.Println("  UTILITAIRES")
 	fmt.Println("  ─────────────────────────────────────────────────────────────────")
 	for _, u := range utils {
-		// La présence est VÉRIFIÉE : c'est ce qui distingue un rappel d'une
-		// affirmation. Un utilitaire absent se voit ici plutôt qu'au moment
-		// où on en a besoin.
+		// The presence is VERIFIED: that is what distinguishes a reminder
+		// from an assertion. A missing utility shows up here rather than at
+		// the moment it is needed.
 		fmt.Printf("  %-10s %-42s %s\n", u.nom, u.quoi, cheminUtilitaire(u.nom))
 	}
 	fmt.Println()
@@ -218,20 +218,20 @@ func cheminUtilitaire(nom string) string {
 
 // afficherCompteAdmin shows the administrator account and its password, ONCE.
 //
-// POURQUOI LE MOT DE PASSE EST AFFICHÉ ICI ET NON STOCKÉ POUR ÊTRE RELU : c'est
-// la seule fenêtre où l'opérateur en a besoin, et c'est le seul moment où il
-// peut le noter sans dépendre d'un système qui fonctionne. Après, il reste dans
-// le coffre — la rotation depuis la console existe précisément pour en créer un
-// nouveau sans jamais relire l'ancien.
+// WHY THE PASSWORD IS DISPLAYED HERE AND NOT STORED TO BE READ BACK: this is
+// the only window where the operator needs it, and the only moment they can
+// note it down without depending on a system that works. Afterwards it stays
+// in the vault — rotation from the console exists precisely to create a new
+// one without ever reading back the old one.
 //
-// SI LE COMPTE N'A PAS PU ÊTRE CRÉÉ, ON LE DIT ET ON N'INVENTE RIEN. Un mot de
-// passe affiché pour un compte inexistant ferait perdre plus de temps qu'un
-// avertissement honnête.
+// IF THE ACCOUNT COULD NOT BE CREATED, WE SAY SO AND WE INVENT NOTHING. A
+// password displayed for a nonexistent account would waste more time than an
+// honest warning.
 //
-// SÉPARATEUR ASCII : CE N'EST PAS DÉCORATIF. Le reste de la synthèse en utilise
-// parce qu'il est lu sur un terminal ; celui-ci est le seul bloc que l'opérateur
-// recopie ailleurs, et un cadre de caractères le rend repérable d'un coup d'œil
-// dans un défilement de plusieurs centaines de lignes.
+// ASCII SEPARATOR: IT IS NOT DECORATIVE. The rest of the summary uses one
+// because it is read on a terminal; this one is the only block the operator
+// copies elsewhere, and a character frame makes it easy to spot at a glance in
+// a scroll of several hundred lines.
 func afficherCompteAdmin(ctx context.Context, domain string) {
 	const identifiant = "adminceffio"
 

@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/ceffio-suite/ceffio/internal/k8s"
+	"github.com/ceffio-suite/ceffio/internal/k8sapi"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"github.com/ceffio-suite/ceffio/internal/vault"
 	"github.com/ceffio-suite/ceffio/internal/version"
@@ -54,9 +55,15 @@ var image = imageDuRegistre()
 
 // Deploy installs the recording server (Phase 14), idempotently:
 //  1. its secrets in the vault (its own, plus the signaling internal secret)
-//  2. the [recording] block in the signaling configuration
-//  3. the Deployment + Service
-//  4. the Talk setting that points Nextcloud at it
+//  2. the Deployment + Service
+//  3. the Talk setting that points Nextcloud at it
+//
+// NO [recording] BLOCK IN THE SIGNALING, and this is deliberate: that block
+// was tried then removed after checking against the signaling sources, where
+// grepping for "recording" returns NOTHING. The signaling takes no part in
+// recording — Talk calls the recording server directly over HTTP. The detail
+// is in internal/talk/talk.go. That comment used to announce step 2 while the
+// code did not perform it.
 func Deploy(ctx context.Context, domain string) error {
 	fmt.Println("\nDeploying the call recording server (Phase 14)...")
 
@@ -359,6 +366,63 @@ func brancherTalk(ctx context.Context, domain string) error {
 // it wrong leaves the recording button greyed out with no error anywhere.
 func reglageRecording(url, secret string) string {
 	return fmt.Sprintf(`{"servers":[{"server":%q}],"secret":%q}`, url, secret)
+}
+
+// Remove takes the recording server out, completely.
+//
+// EXACT MIRROR OF Deploy, in the reverse order of what matters:
+//  1. the Talk setting first — while the server still exists, an active
+//     recording button would point at a dead URL in the middle of the
+//     removal;
+//  2. then the Kubernetes resources: Deployment, Service, ServiceAccount.
+//
+// WHAT IS NOT DELETED, AND WHY:
+//   - the signaling configuration: there is NO [recording] block in it
+//     (see the detailed note in internal/talk/talk.go — verified against
+//     the signaling sources, which do not know that word). Talk calls the
+//     recorder directly over HTTP; there is therefore nothing to undo on
+//     that side.
+//   - the recording/server vault entry: the key stays there, like
+//     exapps.Remove leaves the HaRP key. Regenerating it at the next
+//     Deploy is pointless, and its presence costs nothing.
+//
+// Best effort on each deletion: an already absent resource is the normal
+// case on a second removal, and must not interrupt the others.
+func Remove(ctx context.Context) error {
+	fmt.Println("\nRemoving the call recording server...")
+
+	cli, err := k8sapi.Nouveau()
+	if err != nil {
+		return fmt.Errorf("Kubernetes client: %w", err)
+	}
+
+	// 1. the Talk setting. Through the Kubernetes API, not kubectl: this
+	// removal can be triggered from the console, whose container is
+	// distroless (no shell, no kubectl) — the same lesson as everywhere
+	// else in the project.
+	if pod, err := cli.PodDuDeploiement(ctx, "ceffio-files", "nextcloud", "nextcloud"); err == nil {
+		if _, err := cli.Executer(ctx, "ceffio-files", pod, "nextcloud",
+			"php", "occ", "config:app:delete", "spreed", "recording_servers"); err != nil {
+			// Not fatal: the setting may already be absent. Reported,
+			// not swallowed.
+			fmt.Printf("  note: clearing the Talk setting returned: %v\n", err)
+		}
+	}
+
+	// 2. the Kubernetes resources, in the same style as exapps.Remove:
+	// each deletion is independent.
+	for _, forme := range []string{
+		"Deployment/" + nom,
+		"Service/" + service,
+		"ServiceAccount/" + nom,
+	} {
+		if err := cli.SupprimerEfface(ctx, deployNS, forme); err != nil {
+			return err
+		}
+	}
+
+	fmt.Println("✓ Recording server removed (Talk setting cleared, workload and service deleted)")
+	return nil
 }
 
 // ---------------------------------------------------------------------------

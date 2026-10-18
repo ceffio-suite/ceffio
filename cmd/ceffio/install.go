@@ -20,9 +20,9 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/identity"
 	"github.com/ceffio-suite/ceffio/internal/ingress"
 	"github.com/ceffio-suite/ceffio/internal/mail"
+	"github.com/ceffio-suite/ceffio/internal/module"
 	"github.com/ceffio-suite/ceffio/internal/office"
 	"github.com/ceffio-suite/ceffio/internal/platform"
-	"github.com/ceffio-suite/ceffio/internal/recording"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"github.com/ceffio-suite/ceffio/internal/sso"
 	"github.com/ceffio-suite/ceffio/internal/stacks"
@@ -40,9 +40,19 @@ type installOptions struct {
 	mail            bool
 	office          bool
 	monitoring      bool
-	// Live transcription (Talk). Off unless asked: heavy, and its settings
-	// cannot be changed once installed.
+	// Live transcription (Talk). DEPRECATED FLAG, kept as an alias of
+	// `--with live-transcription`: it maps onto the registry selection
+	// instead of driving a hardcoded install block. Off unless asked:
+	// heavy, and its settings cannot be changed once installed.
 	liveTranscription bool
+
+	// Optional modules, selected from the registry (see
+	// selectedOptionalModules): `--with` adds, `--without` removes the
+	// Default ones. The flags' help text is GENERATED from module.All(),
+	// so a new module in the registry appears here without touching this
+	// file.
+	with    []string
+	without []string
 
 	// Outbound delivery relay. INDISPENSABLE in practice: outbound port 25 is
 	// blocked by consumer ISPs (verified on Free), so Stalwart cannot deliver
@@ -88,12 +98,22 @@ Examples:
 	f.BoolVar(&o.mail, "mail", false, "Enable mail")
 	f.BoolVar(&o.office, "office", true, "Enable ONLYOFFICE")
 	f.BoolVar(&o.monitoring, "monitoring", true, "Enable observability")
-	// Live transcription in Talk. OFF BY DEFAULT, and that is deliberate:
-	// ~2.5 GB image + ~6 GB of models + ~16 GB of RAM, and its two settings
-	// cannot be changed after installation (the app must be removed and
-	// reinstalled). An installation that does not want it should not carry it,
-	// and the administration console can install and remove it later.
-	f.BoolVar(&o.liveTranscription, "live-transcription", false, "Enable live transcription in Talk (heavy: ~9 GB disk, ~16 GB RAM)")
+	// Live transcription in Talk. DEPRECATED: superseded by
+	// `--with live-transcription`, which goes through the module registry
+	// like every other optional feature. The flag still works (it feeds the
+	// registry selection) and prints a deprecation notice; it will be
+	// removed in two minor versions. Keeping it avoids breaking scripts
+	// written against the previous release overnight.
+	f.BoolVar(&o.liveTranscription, "live-transcription", false,
+		"DEPRECATED: use --with live-transcription (removed in two minor versions)")
+	// Optional modules. The help text is built by walking the registry: it
+	// lists every Optional module with its resources and its dependencies,
+	// so `ceffio install --help` never drifts from what the binary can
+	// actually install.
+	f.StringSliceVar(&o.with, "with", nil,
+		"Optional modules to install, comma-separated (e.g. live-transcription). Known modules:"+optionalModulesHelp("", false))
+	f.StringSliceVar(&o.without, "without", nil,
+		"Default optional modules to SKIP, comma-separated (e.g. recording). Default modules:"+optionalModulesHelp("", true))
 	// Outbound relay. Default: none (Stalwart receives but does not send
 	// to the outside). Since outbound port 25 is blocked by ISPs, this relay
 	// is what makes mail actually usable.
@@ -111,6 +131,22 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 		return fmt.Errorf("--domain is required (e.g. --domain company.fr)")
 	}
 
+	// --live-transcription IS NOW AN ALIAS of --with live-transcription.
+	// The effect goes through the registry selection below; only the
+	// notice is specific to the old flag.
+	if o.liveTranscription {
+		fmt.Fprintln(os.Stderr, "warning: --live-transcription is deprecated: "+
+			"use --with live-transcription instead; it will be removed in two minor versions")
+	}
+
+	// Resolve the optional modules EARLY. An invalid --with/--without ID
+	// must fail here, before a cluster is provisioned — not forty minutes
+	// into the deployment (the same lesson as the DNS check below).
+	modulesOptionnels, err := selectedOptionalModules(o)
+	if err != nil {
+		return err
+	}
+
 	fmt.Println("Ceffio Installer")
 	fmt.Println()
 	fmt.Printf("Domain:     %s\n", o.domain)
@@ -119,7 +155,15 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	fmt.Printf("Mail:       %s\n", yesNo(o.mail))
 	fmt.Printf("Office:     %s\n", yesNo(o.office))
 	fmt.Printf("Monitoring: %s\n", yesNo(o.monitoring))
-	fmt.Printf("Transcription: %s\n", yesNo(o.liveTranscription))
+	if len(modulesOptionnels) == 0 {
+		fmt.Println("Modules:    none")
+	} else {
+		ids := make([]string, 0, len(modulesOptionnels))
+		for _, m := range modulesOptionnels {
+			ids = append(ids, m.Info().ID)
+		}
+		fmt.Printf("Modules:    %s\n", strings.Join(ids, ", "))
+	}
 	fmt.Println()
 
 	ctx := cmd.Context()
@@ -243,23 +287,23 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 		os.Setenv("BAO_MOTEUR", "kv")
 		fmt.Printf("∙ vault published for the following steps: %s (token not shown)\n", coffreBao.Adresse)
 	} else {
-		// CE N'EST PAS UN REPLI NEUTRE, et le dire ainsi était trompeur.
+		// THIS IS NOT A NEUTRAL FALLBACK, and saying so was misleading.
 		//
-		// Le message annonçait « secrets will stay in Kubernetes (expected
-		// behavior) », ce qui laisse croire que la suite s'accommode d'un vault
-		// absent. Elle ne s'en accommode PAS : la couche identity refuse de
-		// démarrer sans lui, et l'opérateur découvrait plus loin
+		// The message announced « secrets will stay in Kubernetes (expected
+		// behavior) », which suggests the rest copes with an absent vault. It
+		// does NOT: the identity layer refuses to start without it, and the
+		// operator discovered further down
 		//
 		//	vault unreadable for keycloak/db: no vault configured
 		//
-		// Une erreur qui accuse une configuration absente alors que le sujet
-		// est un vault qui n'a pas démarré.
+		// An error that blames a missing configuration while the subject is a
+		// vault that did not start.
 		//
-		// ON CONTINUE QUAND MÊME, parce que le déploiement de la plateforme
-		// (namespaces, ingress, StorageClass) n'a pas besoin du coffre et qu'il
-		// vaut mieux laisser la suite le tenter : une installation partielle
-		// mais diagnostiquable vaut mieux qu'un arrêt immédiat. Ce qui change,
-		// c'est que le message dit maintenant ce qui va se passer.
+		// WE CONTINUE ANYWAY, because the platform deployment (namespaces,
+		// ingress, StorageClass) does not need the vault and it is better to
+		// let the rest attempt it: a partial but diagnosable installation
+		// beats an immediate stop. What changes is that the message now says
+		// what is going to happen.
 		fmt.Println("  ⚠ vault unavailable — the identity layer will fail without it")
 		fmt.Println("    check `kubectl -n ceffio-vault get pods` and the openbao logs")
 	}
@@ -289,20 +333,20 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	// 10bis. THE LOCAL NEXTCLOUD ACCOUNT, and it belongs HERE rather than in the
 	// identity layer.
 	//
-	// L'ORDRE N'EST PAS UN DÉTAIL : la couche identity (Phase 4) crée le realm
-	// et le compte Keycloak, mais Nextcloud n'existe qu'à partir de la ligne
-	// ci-dessus. Créé trop tôt, le compte Nextcloud échouait et la plateforme
-	// démarrait avec une seule des deux portes d'entrée.
+	// THE ORDER IS NOT A DETAIL: the identity layer (Phase 4) creates the
+	// realm and the Keycloak account, but Nextcloud only exists from the line
+	// above onwards. Created too early, the Nextcloud account failed and the
+	// platform started with only one of the two entry doors.
 	//
-	// CE COMPTE EST LE CHEMIN DE SECOURS : il permet de se connecter en direct
-	// si Keycloak est indisponible. Une plateforme dont l'unique accès est une
-	// dépendance est une plateforme qu'une panne de cette dépendance enferme.
+	// THIS ACCOUNT IS THE FALLBACK PATH: it allows logging in directly if
+	// Keycloak is unavailable. A platform whose only access is a dependency is
+	// a platform that an outage of that dependency locks out.
 	//
-	// Idempotent : un compte présent est laissé tel quel, mot de passe compris.
+	// Idempotent: an existing account is left as-is, password included.
 	if err := identity.EnsureCompteNextcloud(ctx); err != nil {
-		// Non bloquant, et rapporté : Keycloak est ce que l'interface utilise,
-		// et interrompre une installation réussie pour le chemin de secours
-		// serait un mauvais échange. La console peut le créer plus tard.
+		// Non-blocking, and reported: Keycloak is what the interface uses,
+		// and interrupting a successful installation for the fallback path
+		// would be a bad trade. The console can create it later.
 		fmt.Printf("  ⚠ compte Nextcloud non créé : %v\n", err)
 		fmt.Println("    (créable depuis la page Administration de la console)")
 	}
@@ -389,17 +433,14 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 		return err
 	}
 
-	// 12ter. Call recording (Phase 14). AFTER the mail layer, and after Talk
-	// itself through the parallel phases above: the recorder authenticates
-	// against the signaling server and declares itself in Nextcloud, so both
-	// must already exist.
+	// 12ter. THE RECORDING SERVER IS NO LONGER DEPLOYED HERE.
 	//
-	// It is the heaviest component relative to the work it does — it drives a
-	// browser to capture the room — so it is deployed last, once everything it
-	// could starve is already running.
-	if err := recording.Deploy(ctx, o.domain); err != nil {
-		return err
-	}
+	// It used to be an unconditional recording.Deploy call at this exact
+	// spot. Recording is now a registry module (Optional, Default=true),
+	// installed with the other selected optional modules just below — the
+	// same behavior for a default install, plus `--without recording` for
+	// those who do not want it. Deploying it twice would only re-pay the
+	// rollout waits of an idempotent call.
 
 	// 12quater. THE EXAPP DEPLOY DAEMON IS NOT INSTALLED HERE, ON PURPOSE.
 	//
@@ -411,7 +452,9 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	// It is now installed from the administration console, where it belongs:
 	// the Applications page has a "Deploy the deployer" button, and the same
 	// page installs live transcription right after. An operator who wants
-	// neither never deploys it.
+	// neither never deploys it. From the CLI, `--with exapps-daemon` (and
+	// anything that requires it, e.g. `--with live-transcription`) installs
+	// it through the registry, in the optional-modules phase below.
 	//
 	// THE NAMESPACE IS STILL CREATED HERE, because it is cheap, because the
 	// console's write permissions live in it, and because waiting for it to
@@ -421,12 +464,19 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 		return err
 	}
 
-	// Live transcription is OPT-IN. It is installed only when asked, because
-	// of its weight and because its configuration is not revisable in place.
-	if o.liveTranscription {
-		if err := exapps.TranscriptionDeploye(ctx, o.domain); err != nil {
-			return err
-		}
+	// 12quinquies. OPTIONAL MODULES, DRIVEN BY THE REGISTRY.
+	//
+	// This replaces the former hardcoded `if o.liveTranscription {
+	// exapps.TranscriptionDeploye(...) }` block and the unconditional
+	// recording.Deploy call above: the selection comes from --with/--without
+	// (and the deprecated --live-transcription alias), the ORDER comes from
+	// module.All() (topological), and the dependencies of a selected module
+	// are pulled in automatically. Placement is deliberate — after the core
+	// sequence (every optional module builds on talk/files/ingress) and
+	// before the console (the console must observe the final state, and its
+	// summary runs last).
+	if err := installerModulesOptionnels(ctx, o, modulesOptionnels); err != nil {
+		return err
 	}
 
 	// Secrets vault: OpenBao when configured, Kubernetes otherwise.
@@ -583,6 +633,186 @@ func verifierPrerequis(ctx context.Context, o *installOptions, hw bootstrap.Hard
 			strings.Join(manquants, " "))
 	} else {
 		fmt.Println("  ✓ system packages")
+	}
+	return nil
+}
+
+// optionalModulesHelp builds the catalog part of the --with/--without help
+// text FROM THE REGISTRY: one line per Optional module, with its resources
+// and its dependencies.
+//
+// WHY GENERATED: a help text maintained by hand drifts from the registry the
+// day a module is added — and the drift is invisible until an operator
+// wonders why `--with new-module` "is not documented". Walking module.All()
+// makes the documentation a projection of what the binary can install.
+//
+// seulementDefaut narrows the list to the Default modules: --without only
+// has an effect on those (a non-default module is skipped by not asking for
+// it), so showing the others under a "Default modules" header would be a
+// lie.
+func optionalModulesHelp(intro string, seulementDefaut bool) string {
+	var b strings.Builder
+	b.WriteString(intro)
+	for _, m := range module.All() {
+		i := m.Info()
+		if i.Kind != module.Optional {
+			continue
+		}
+		if seulementDefaut && !i.Default {
+			continue
+		}
+		b.WriteString("\n  - " + i.ID)
+		if i.Default {
+			b.WriteString(" (installed by default)")
+		}
+		if i.Resources != "" {
+			b.WriteString(": " + i.Resources)
+		}
+		if len(i.Requires) > 0 {
+			b.WriteString(" [requires " + strings.Join(i.Requires, ", ") + "]")
+		}
+	}
+	return b.String()
+}
+
+// selectedOptionalModules resolves --with/--without (plus the deprecated
+// --live-transcription alias) into the ordered list of Optional modules the
+// installer must deploy, with their dependencies pulled in automatically.
+//
+// A module is selected when: (a) it is Default and not named by --without,
+// or (b) it is named by --with. The result follows module.All() order —
+// topological — so dependencies install before the modules that need them.
+//
+// Unknown IDs are an ERROR, not a warning: a typo in `--with
+// live-transcripion` must not silently produce an installation without the
+// feature the operator asked for.
+func selectedOptionalModules(o *installOptions) ([]module.Module, error) {
+	avec := map[string]bool{}
+	for _, id := range o.with {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		avec[id] = true
+	}
+	// The deprecated flag is a plain alias: its whole effect is to select
+	// the module through the registry.
+	if o.liveTranscription {
+		avec["live-transcription"] = true
+	}
+	sans := map[string]bool{}
+	for _, id := range o.without {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		sans[id] = true
+	}
+
+	// Validate every named ID against the registry, and check the flags do
+	// not contradict each other (--with X --without X asks for X and its
+	// absence at once; refusing is cheaper than picking a side silently).
+	for id := range avec {
+		m, ok := module.Get(id)
+		if !ok {
+			return nil, fmt.Errorf("--with: unknown module %q (optional modules: %s)",
+				id, strings.Join(optionalIDs(), ", "))
+		}
+		if m.Info().Kind != module.Optional {
+			return nil, fmt.Errorf("--with %s: %q is a core module, always installed by the sequence", id, id)
+		}
+	}
+	for id := range sans {
+		m, ok := module.Get(id)
+		if !ok {
+			return nil, fmt.Errorf("--without: unknown module %q (optional modules: %s)",
+				id, strings.Join(optionalIDs(), ", "))
+		}
+		if m.Info().Kind != module.Optional {
+			return nil, fmt.Errorf("--without %s: %q is a core module and cannot be excluded", id, id)
+		}
+		if avec[id] {
+			return nil, fmt.Errorf("module %q is both in --with and --without", id)
+		}
+	}
+
+	retenu := map[string]bool{}
+	for id := range avec {
+		retenu[id] = true
+	}
+	for _, m := range module.All() {
+		i := m.Info()
+		if i.Kind == module.Optional && i.Default && !sans[i.ID] {
+			retenu[i.ID] = true
+		}
+	}
+
+	// Pull the dependencies in, and SAY SO: an operator who asked only for
+	// live-transcription must see exapps-daemon appear rather than wonder
+	// where the extra namespace came from. The expansion is transitive
+	// (a dependency may itself require one), hence the recursion.
+	var expand func(m module.Module)
+	expand = func(m module.Module) {
+		for _, dep := range m.Info().Requires {
+			if retenu[dep] {
+				continue
+			}
+			retenu[dep] = true
+			fmt.Printf("∙ %s requires %s: adding it\n", m.Info().ID, dep)
+			if dm, ok := module.Get(dep); ok {
+				expand(dm)
+			}
+		}
+	}
+	for _, m := range module.All() {
+		if retenu[m.Info().ID] {
+			expand(m)
+		}
+	}
+
+	// Final list in REGISTRY order: module.All() is topological, so
+	// filtering it keeps a valid install sequence.
+	var out []module.Module
+	for _, m := range module.All() {
+		if retenu[m.Info().ID] {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+// installerModulesOptionnels deploys the selected Optional modules, in
+// registry order, through the module.Module contract.
+//
+// WHY THE REGISTRY AND NOT DIRECT CALLS: the modules already wrap the
+// existing installs (recording.Deploy, exapps.Deploy,
+// exapps.TranscriptionDeploye) behind idempotent Install methods — this is
+// exactly what B1-B3 built and tested. Calling the packages directly again
+// would fork the behavior between the CLI and the console, the two
+// frontends the registry exists to keep identical.
+func installerModulesOptionnels(ctx context.Context, o *installOptions, modules []module.Module) error {
+	if len(modules) == 0 {
+		fmt.Println("\n∙ optional modules: none selected")
+		return nil
+	}
+
+	// The Kubernetes client is built ONCE for the whole phase: the modules
+	// use Env.Kube for their state reads, and re-resolving the kubeconfig
+	// per module would multiply the failure points for no benefit.
+	kube, err := kubeClient()
+	if err != nil {
+		return fmt.Errorf("optional modules need a Kubernetes client: %w", err)
+	}
+	env := module.Env{Domain: o.domain, Kube: kube, Out: os.Stdout}
+
+	fmt.Printf("\n∙ optional modules from the registry (%d)\n", len(modules))
+	for _, m := range modules {
+		i := m.Info()
+		fmt.Printf("→ installing %s (%s)\n", i.ID, i.Title)
+		if err := m.Install(ctx, env); err != nil {
+			return fmt.Errorf("installing module %q: %w", i.ID, err)
+		}
+		fmt.Printf("✓ %s installed\n", i.ID)
 	}
 	return nil
 }

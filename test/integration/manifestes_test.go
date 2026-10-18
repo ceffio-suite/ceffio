@@ -35,8 +35,8 @@ import (
 	"testing"
 )
 
-// Les modules qui portent une StorageClass, avec la chaine qu'on attend dans
-// le manifeste genere.
+// The modules that carry a StorageClass, with the string expected in the
+// generated manifest.
 var modules = []struct {
 	paquet string
 	nom    string
@@ -47,17 +47,17 @@ var modules = []struct {
 	{"internal/data", "data"},
 }
 
-// TestAucunManifesteNADeFormatNonResolu balaie le source de chaque module et
-// refuse ce que Go ecrit quand un verbe ne peut pas etre resolu.
+// TestAucunManifesteNADeFormatNonResolu scans the source of each module and
+// rejects what Go writes when a verb cannot be resolved.
 //
-// « %!s(MISSING) » et « %![3]s(EXTRA ...) » sont injectes DANS la sortie : ils
-// arrivent donc tels quels dans le YAML, et kubectl echoue plus loin, sur une
-// ligne sans rapport. Aucun de ces marqueurs ne peut rester.
+// « %!s(MISSING) » and « %![3]s(EXTRA ...) » are injected INTO the output: they
+// therefore arrive as-is in the YAML, and kubectl fails further down, on an
+// unrelated line. None of these markers may remain.
 func TestAucunManifesteNADeFormatNonResolu(t *testing.T) {
 	for _, m := range modules {
 		t.Run(m.nom, func(t *testing.T) {
-			// On compile le paquet de test en isolant le manifeste, via go test
-			// sur le paquet lui-meme quand il expose le texte.
+			// We compile the test package isolating the manifest, via go test
+			// on the package itself when it exposes the text.
 			source := lireSource(t, m.paquet, m.nom)
 			if strings.Contains(source, "%!") {
 				t.Errorf("%s: un format non resolu est present dans le source", m.nom)
@@ -66,12 +66,12 @@ func TestAucunManifesteNADeFormatNonResolu(t *testing.T) {
 	}
 }
 
-// TestStorageClassNumeroteeEtNommee verifie le point precis qui a casse deux
-// fois : l'index pose devant storageClassName doit nommer la classe, pas autre
-// chose.
+// TestStorageClassNumeroteeEtNommee verifies the precise point that broke
+// twice: the index placed in front of storageClassName must name the class,
+// nothing else.
 //
-// On ne peut pas le savoir en compilant. On le sait en comparant l'index a la
-// position de l'argument dans la liste — exactement l'erreur humaine commise.
+// Compiling cannot tell us. We know it by comparing the index with the
+// position of the argument in the list — exactly the human error committed.
 func TestStorageClassNumeroteeEtNommee(t *testing.T) {
 	for _, m := range modules {
 		t.Run(m.nom, func(t *testing.T) {
@@ -86,8 +86,8 @@ func TestStorageClassNumeroteeEtNommee(t *testing.T) {
 			}
 			arg := strings.TrimSpace(args[idx-1])
 
-			// L'argument doit designer la classe de stockage. Selon les
-			// modules c'est storage.Classe() ou un parametre nomme classe.
+			// The argument must designate the storage class. Depending on
+			// the module it is storage.Classe() or a parameter named classe.
 			if !estArgumentDeClasse(arg) {
 				t.Errorf("%s: storageClassName porte l'index %d, qui designe %q "+
 					"et non la StorageClass — le manifeste recevra un bloc "+
@@ -103,7 +103,7 @@ func estArgumentDeClasse(arg string) bool {
 		arg == "classe" || strings.HasSuffix(arg, " classe")
 }
 
-// indexStorageClass lit l'index ecrit devant storageClassName.
+// indexStorageClass reads the index written in front of storageClassName.
 func indexStorageClass(t *testing.T, source string) int {
 	t.Helper()
 	for _, ligne := range strings.Split(source, "\n") {
@@ -131,28 +131,28 @@ func indexStorageClass(t *testing.T, source string) int {
 	return 0
 }
 
-// argumentsSprintf lit la liste passee au fmt.Sprintf DONT LE MANIFESTE PORTE
-// LA STORAGECLASS.
+// argumentsSprintf reads the list passed to the fmt.Sprintf WHOSE MANIFEST
+// CARRIES THE STORAGECLASS.
 //
-// TROIS PIEGES, tous rencontres en ecrivant ce test :
+// THREE TRAPS, all met while writing this test:
 //
-//  1. Le fichier contient plusieurs fmt.Sprintf. Prendre le premier ramene la
-//     liste d'arguments d'un autre manifeste (files.go en a un des la ligne
-//     102), et l'index teste ne veut plus rien dire.
-//  2. Un « `, » apparait dans les commentaires : « such as `deploy/nextcloud`,
-//     ... ». Partir du haut du fichier lit un commentaire.
-//  3. La fonction fmt.Sprintf qui porte le manifeste est celle dont le bloc se
-//     termine par storageClassName — c'est le seul ancrage fiable, parce que
-//     c'est precisement ce qu'on cherche a verifier.
+//  1. The file contains several fmt.Sprintf calls. Taking the first one brings
+//     back the argument list of another manifest (files.go has one from line
+//     102), and the tested index no longer means anything.
+//  2. A « `, » appears in the comments: « such as `deploy/nextcloud`, ... ».
+//     Starting from the top of the file reads a comment.
+//  3. The fmt.Sprintf call that carries the manifest is the one whose block
+//     ends with storageClassName — it is the only reliable anchor, because it
+//     is precisely what we are trying to verify.
 //
-// Un faux positif coute autant qu'un faux negatif : il apprend a ignorer le
-// test. D'ou l'ancrage sur le contenu plutot que sur la position.
+// A false positive costs as much as a false negative: it teaches one to ignore
+// the test. Hence the anchoring on content rather than on position.
 func argumentsSprintf(t *testing.T, source string) []string {
 	t.Helper()
 	lignes := strings.Split(source, "\n")
 
-	// On localise la ligne qui declare la StorageClass, puis on remonte au
-	// fmt.Sprintf qui ouvre ce bloc.
+	// We locate the line that declares the StorageClass, then go back up to
+	// the fmt.Sprintf that opens that block.
 	ligneClasse := -1
 	for i, l := range lignes {
 		if strings.Contains(l, "storageClassName:") || strings.Contains(l, "storageClass:") {
@@ -177,7 +177,7 @@ func argumentsSprintf(t *testing.T, source string) []string {
 		if !strings.Contains(ligne, "`, ") {
 			continue
 		}
-		// La liste peut deborder sur la ligne suivante.
+		// The list can spill over onto the next line.
 		bloc := ligne[strings.Index(ligne, "`, ")+3:]
 		if i+1 < len(lignes) && !strings.HasSuffix(strings.TrimSpace(bloc), ")") {
 			bloc += lignes[i+1]

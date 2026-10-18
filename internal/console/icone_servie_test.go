@@ -29,7 +29,7 @@ func TestIconesServies(t *testing.T) {
 		}
 		t.Logf("%s -> 200, %s, %d octets", c.chemin, c.typeMIME, rec.Body.Len())
 	}
-	// la page ne doit pas etre cassee
+	// the page must not be broken
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	if rec.Code != 200 {
