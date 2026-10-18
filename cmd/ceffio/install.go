@@ -401,7 +401,16 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	// Nothing here depends on an application: these are Ingress objects and a
 	// CA. Applying them first is always valid, and it makes the OIDC
 	// verification run against a real address.
-	if err := ingress.Deploy(ctx, o.domain); err != nil {
+	//
+	// The ACME settings are resolved ONCE, before the ingress layer, and
+	// reused by the optional-module phase further down. Resolving them twice
+	// would let the two halves of one installation disagree — and the ingress
+	// layer is where they decide which certificate gets issued.
+	reglagesACME, err := acme.DepuisEnvironnement()
+	if err != nil {
+		return err
+	}
+	if err := ingress.Deploy(ctx, o.domain, reglagesACME); err != nil {
 		return err
 	}
 

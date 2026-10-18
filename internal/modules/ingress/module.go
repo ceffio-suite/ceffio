@@ -68,10 +68,14 @@ func (m *ingressModule) Info() module.Info {
 	}
 }
 
-// Install delegates to ingress.Deploy, unchanged — the registry describes,
-// the sequence of cmd/ceffio/install.go remains master of the core order.
+// Install delegates to ingress.Deploy — the registry describes, the sequence
+// of cmd/ceffio/install.go remains master of the core order.
+//
+// The ACME settings come from Env, never from os.Getenv here: that is the
+// whole point of carrying them, and it is what makes a `module install ingress`
+// from the console act on the same challenge the installer used.
 func (m *ingressModule) Install(ctx context.Context, env module.Env) error {
-	return coucheIngress.Deploy(ctx, env.Domain)
+	return coucheIngress.Deploy(ctx, env.Domain, env.Acme)
 }
 
 // nsIngresses lists the namespaces where ingress.Deploy lays down an
