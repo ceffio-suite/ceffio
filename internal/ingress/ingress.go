@@ -160,6 +160,19 @@ func Deploy(ctx context.Context, domain string, reglages acme.Reglages) error {
 		fmt.Printf("∙ wildcard certificate requested (*.%s, single issuance)\n", domain)
 	}
 
+	// THE DNS-01 SOLVER, BEFORE THE CERTIFICATE CAN BE ANSWERED.
+	//
+	// Order matters here for a reason that costs minutes to notice: an issuer
+	// whose webhook solver is absent stays Pending forever. The wildcard
+	// Certificate above was just created, so the solver has to be in place
+	// before cert-manager starts working on it — otherwise the first issuance
+	// waits on a rollout that only happens later in the sequence.
+	//
+	// No-op under HTTP-01: there is nothing for the solver to answer.
+	if err := deployerWebhookDNS(ctx, reglages); err != nil {
+		return err
+	}
+
 	// KEYCLOAK'S PUBLIC HOSTNAME IS SET HERE, NOT LATER.
 	//
 	// It used to happen in AdoptURLs, which runs after the application
