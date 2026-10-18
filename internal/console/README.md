@@ -73,9 +73,17 @@ disable   → the application disappears from the interface, but stays on disk
 
 **How it works technically:** the console calls the **Nextcloud OCS API**
 (`/ocs/v2.php/cloud/apps`), with a dedicated service account
-(`ceffio-console`) and a revocable application password. It runs no command in
-the cluster and obtains no Kubernetes administration right: it makes
-authenticated HTTP calls, nothing else.
+(`ceffio-console`) and a revocable application password — authenticated HTTP
+calls for this page.
+
+CORRECTION — an earlier version of this paragraph claimed the console "runs no
+command in the cluster and obtains no Kubernetes administration right". That
+was FALSE, and worth stating plainly because it is the console's actual risk
+surface: it holds `pods/exec` in `ceffio-files` (how it runs `occ` for account
+management) and namespaced write rights in every `ceffio-*` namespace (how it
+deploys modules and HaRP). Only the application toggle described above is
+pure HTTP. The full list is in the root README's "Permissions required in the
+cluster", and `internal/console/deploy.go` is what grants it.
 
 > A first version went through Kubernetes Jobs running `occ` inside the
 > Nextcloud pod. That was a lot of moving parts — execution ServiceAccount,
@@ -176,9 +184,9 @@ right to write in the cluster — deployment remains the CLI's business.
 
 Handled by `ceffio install` (phase 11), which builds the image, loads it into
 the cluster and creates the ingress `admin.<domain>`. The published image is
-built by the
-[`ceffio-suite/ceffio-console`](https://github.com/ceffio-suite/ceffio-console)
-repository and versioned there. To rebuild it alone:
+built and versioned **by this repository** (`release.yml`, job
+`console-image`) as `ghcr.io/ceffio-suite/ceffio:<version>`. To rebuild it
+alone, from the repository root:
 
-    cd internal/console
-    docker build -t localhost/ceffio-console:<version> .
+    GOARCH=amd64 GOOS=linux go build -o dist/ceffio-linux-amd64 ./cmd/ceffio
+    docker buildx build --platform linux/amd64 -f build/console/Dockerfile .

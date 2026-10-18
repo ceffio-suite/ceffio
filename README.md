@@ -251,11 +251,19 @@ and the "Console image" section below.
 
 The console runs as a container image, built and published **by this
 repository** (the `release.yml` workflow, job `console-image`): every release
-tag `vX.Y.Z` publishes `ghcr.io/ceffio-suite/ceffio-console:X.Y.Z` for
+tag `vX.Y.Z` publishes `ghcr.io/ceffio-suite/ceffio:X.Y.Z` for
 `linux/amd64` and `linux/arm64`. `latest` follows stable versions only —
 never an `-rc` candidate. The image embeds the **exact binaries of the
 release** (byte for byte, verified against `checksums.txt`), never a separate
-recompilation. The former separate repository
+recompilation.
+
+The image is named `ceffio`, not `ceffio-console`, and that is deliberate: a
+GHCR package belongs to the repository that first published it, and a workflow
+in another repository cannot push to it — the attempt is refused with
+`denied: permission_denied: write_package` even with `packages: write`
+granted. The name `ceffio-console` was created by the former separate
+repository and stayed with it; `ceffio` is owned by this one. The former
+repository
 [`ceffio-suite/ceffio-console`](https://github.com/ceffio-suite/ceffio-console)
 is archived.
 
@@ -267,7 +275,7 @@ manually (for example against a cluster reachable through your kubeconfig):
 ```bash
 docker run --rm -p 8088:8088 \
   -v ~/.kube/config:/kubeconfig:ro -e KUBECONFIG=/kubeconfig \
-  ghcr.io/ceffio-suite/ceffio-console:X.Y.Z \
+  ghcr.io/ceffio-suite/ceffio:X.Y.Z \
   console --domain example.com --addr :8088
 ```
 

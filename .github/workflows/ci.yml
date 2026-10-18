@@ -148,16 +148,16 @@ jobs:
           retention-days: 90
 
   console-image:
-    # LE DOCKERFILE EST VÉRIFIÉ À CHAQUE PULL REQUEST, SANS RIEN POUSSER.
-    # Un Dockerfile cassé ne doit pas se découvrir le jour de la release :
-    # ce job construit l'image multi-architecture exactement comme le fait
-    # release.yml, mais sans --push. L'image « from scratch » n'exécute aucune
-    # instruction au build (pas de RUN) : les deux architectures se
-    # construisent sur le runner amd64 sans émulation.
+    # THE DOCKERFILE IS VERIFIED ON EVERY PULL REQUEST, WITHOUT PUSHING ANYTHING.
+    # A broken Dockerfile must not be discovered on release day: this job
+    # builds the multi-architecture image exactly as release.yml does, but
+    # without --push. The "from scratch" image executes no instruction at
+    # build time (no RUN): both architectures build on the amd64 runner
+    # without emulation.
     #
-    # Les binaires viennent des artefacts du job `binary` — comme dans
-    # release.yml, l'image n'est jamais construite à partir d'une compilation
-    # séparée qui pourrait diverger de ce qui est publié.
+    # The binaries come from the artifacts of the `binary` job — as in
+    # release.yml, the image is never built from a separate compilation that
+    # could diverge from what is published.
     name: build the console image (no push)
     runs-on: ubuntu-24.04
     needs: binary
@@ -175,12 +175,16 @@ jobs:
           path: tmp/arm64
 
       - name: Lay the binaries out as the Dockerfile expects
-        # Le Dockerfile copie dist/ceffio-linux-${TARGETARCH} : les artefacts
-        # de CI portent un nom versionné (ceffio-<VERSION>-linux-<arch>), on
-        # les remet en place sous le nom canonique. `find` plutôt qu'un chemin
-        # en dur : upload-artifact stocke les fichiers relativement à l'ancêtre
-        # commun des correspondances, la présence du préfixe `bin/` n'est donc
-        # pas garantie.
+        # The Dockerfile copies dist/ceffio-linux-${TARGETARCH}: the CI artifacts
+        # carry a versioned name (ceffio-<VERSION>-linux-<arch>), so they are
+        # put back under the canonical name. `find` rather than a hardcoded
+        # path: upload-artifact stores files relative to the common ancestor
+        # of the matches, so the presence of the `bin/` prefix is not
+        # guaranteed.
+        #
+        # chmod +x IS REQUIRED: download-artifact does not preserve the
+        # executable bit, and the release workflow's identical step failed on
+        # exactly that (see release.yml).
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -194,9 +198,9 @@ jobs:
       - uses: docker/setup-buildx-action@v3
 
       - name: Build the image for both architectures
-        # PAS DE --push : ce job n'a même pas `packages: write`, l'erreur
-        # serait structurelle et non accidentelle. Le tag local suffit à
-        # prouver que le build aboutit pour chaque plateforme.
+        # NO --push: this job does not even have `packages: write`, so a push
+        # would fail structurally rather than by accident. The local tag is
+        # enough to prove the build succeeds for each platform.
         run: |
           set -euo pipefail
           docker buildx build \
