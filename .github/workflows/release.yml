@@ -232,19 +232,34 @@ jobs:
           path: dist
 
       - name: Check the downloaded binaries against the release checksums
-        # Le téléchargement d'artefact passe par l'API GitHub, pas par la
-        # release ; cette vérification prouve que l'artefact et la release
-        # publiés par le job précédent sont bien les mêmes fichiers.
+        # The artifact download goes through the GitHub API, not the release;
+        # this check proves the artifact and the release published by the
+        # previous job are the same files.
         run: |
           set -euo pipefail
           ls -la dist/
+          # actions/download-artifact does NOT preserve the executable bit:
+          # the files arrive in 0644. Restore it here, then assert it — a
+          # `test -x` on a 0644 file fails, and that is exactly how this step
+          # failed the first time it ever ran (v0.6.0), while the identical
+          # step in ci.yml passed only because it happened to chmod first.
+          chmod +x dist/ceffio-linux-amd64 dist/ceffio-linux-arm64
           test -x dist/ceffio-linux-amd64
           test -x dist/ceffio-linux-arm64
-          # dist/checksums.txt n'est pas dans l'artefact (il n'est pas un
-          # binaire) : on le télécharge depuis la release pour comparer.
+          # dist/checksums.txt is not in the artifact (it is not a binary):
+          # download it from the release to compare. Retry, because the
+          # release asset is not always servable the instant the release is
+          # created, and this job starts seconds later.
           TAG="${{ needs.release.outputs.tag }}"
-          curl -fsSL -o /tmp/checksums.txt \
-            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/checksums.txt"
+          for i in 1 2 3 4 5; do
+            if curl -fsSL -o /tmp/checksums.txt \
+              "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/checksums.txt"; then
+              break
+            fi
+            echo "checksums.txt not servable yet (attempt $i) — retrying in 5s"
+            sleep 5
+          done
+          test -s /tmp/checksums.txt
           ( cd dist && sha256sum -c --ignore-missing /tmp/checksums.txt )
 
       - uses: docker/setup-buildx-action@v3
