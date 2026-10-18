@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ceffio-suite/ceffio/internal/acme"
 	"github.com/ceffio-suite/ceffio/internal/apps"
 	"github.com/ceffio-suite/ceffio/internal/bootstrap"
 	"github.com/ceffio-suite/ceffio/internal/cluster"
@@ -400,7 +401,28 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	// Nothing here depends on an application: these are Ingress objects and a
 	// CA. Applying them first is always valid, and it makes the OIDC
 	// verification run against a real address.
-	if err := ingress.Deploy(ctx, o.domain); err != nil {
+	//
+	// The ACME settings are resolved ONCE, before the ingress layer, and
+	// reused by the optional-module phase further down. Resolving them twice
+	// would let the two halves of one installation disagree — and the ingress
+	// layer is where they decide which certificate gets issued.
+	reglagesACME, err := acme.DepuisEnvironnement()
+	if err != nil {
+		return err
+	}
+	// The settings are also published in the vault, which is where the CONSOLE
+	// reads them from: its container declares no environment variable at all,
+	// so a value written only here would leave the TLS page reporting the
+	// default while the cluster runs another challenge.
+	//
+	// Non-blocking on purpose: the ingress layer below is what makes HTTPS
+	// work, and a vault that refuses this write must not cost the operator the
+	// whole installation over a display value.
+	if err := vault.PoserReglagesACME(ctx, reglagesACME); err != nil {
+		fmt.Printf("  ⚠ ACME settings not published to the vault (%v) — the console will "+
+			"show the default challenge; the certificates themselves are unaffected\n", err)
+	}
+	if err := ingress.Deploy(ctx, o.domain, reglagesACME); err != nil {
 		return err
 	}
 
@@ -803,7 +825,18 @@ func installerModulesOptionnels(ctx context.Context, o *installOptions, modules 
 	if err != nil {
 		return fmt.Errorf("optional modules need a Kubernetes client: %w", err)
 	}
-	env := module.Env{Domain: o.domain, Kube: kube, Out: os.Stdout}
+
+	// The ACME settings are resolved HERE and handed to the modules: a module
+	// never reads the environment itself. An invalid configuration stops the
+	// phase instead of installing modules that would act on settings nobody
+	// validated — the ingress module is precisely the one that writes a
+	// ClusterIssuer from them.
+	reglages, err := acme.DepuisEnvironnement()
+	if err != nil {
+		return err
+	}
+
+	env := module.Env{Domain: o.domain, Kube: kube, Out: os.Stdout, Acme: reglages}
 
 	fmt.Printf("\n∙ optional modules from the registry (%d)\n", len(modules))
 	for _, m := range modules {

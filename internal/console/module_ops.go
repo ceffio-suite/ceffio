@@ -188,6 +188,7 @@ func (s *Server) runOperation(id string, m module.Module, a action) {
 		Domain: s.Domain,
 		Kube:   s.kube,
 		Out:    journalWriter{id: id, ops: s.ops},
+		Acme:   s.acme,
 	}
 	go func() {
 		// The operation outlives every request: a canceled parent would

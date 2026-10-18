@@ -21,6 +21,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/ceffio-suite/ceffio/internal/acme"
 	"github.com/ceffio-suite/ceffio/internal/module"
 	"github.com/ceffio-suite/ceffio/internal/stack"
 	// Blank import: each module registers itself from the init() of its own
@@ -63,12 +64,23 @@ func kubeClient() (kubernetes.Interface, error) {
 // (socle.sansClient), which is the honest answer, and a hard failure here
 // would hide the catalog exactly when the operator needs it to understand
 // what is installed where.
+//
+// The ACME settings are the SAME rule for the same reason: a broken value must
+// not make `module list` fail, because listing the catalog is how an operator
+// discovers what is installed before fixing anything. An invalid setting is
+// reported on stderr and the historical HTTP-01 is used, so that a read-only
+// command keeps answering.
 func moduleEnv(domain string) module.Env {
-	env := module.Env{Domain: domain, Out: os.Stdout}
+	env := module.Env{Domain: domain, Out: os.Stdout, Acme: acme.HTTP01()}
 	if kube, err := kubeClient(); err == nil {
 		env.Kube = kube
 	} else {
 		fmt.Fprintf(os.Stderr, "⚠ no Kubernetes client (%v) — states will read \"unknown\"\n", err)
+	}
+	if reglages, err := acme.DepuisEnvironnement(); err == nil {
+		env.Acme = reglages
+	} else {
+		fmt.Fprintf(os.Stderr, "⚠ %v — assuming the %s challenge\n", err, acme.ChallengeHTTP)
 	}
 	return env
 }

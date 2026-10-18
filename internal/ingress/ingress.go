@@ -14,12 +14,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"github.com/ceffio-suite/ceffio/internal/k8s"
-	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"net"
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/ceffio-suite/ceffio/internal/acme"
+	"github.com/ceffio-suite/ceffio/internal/k8s"
+	"github.com/ceffio-suite/ceffio/internal/secrets"
 )
 
 // The two issuers a certificate can come from. Named once, referenced
@@ -29,14 +31,46 @@ import (
 const (
 	// issuerACME: Let's Encrypt. Trusted by every browser out of the box.
 	issuerACME = "ceffio-letsencrypt"
+	// issuerStaging: the staging endpoint of the SAME authority. Named here
+	// so the two issuers cannot drift apart: a manifest that creates one and
+	// references the other by a typo produces an Ingress asking for a
+	// certificate from an issuer that does not exist.
+	issuerStaging = "ceffio-letsencrypt-staging"
 	// issuerCA: our own authority, created by caManifest. For private names,
 	// and as the fallback the operator can force.
 	issuerCA = "ceffio-ca-issuer"
+
+	// nsCertManager: where the ACME credentials live.
+	//
+	// WHY cert-manager IS A PLATFORM NAMESPACE AND NOT A FOREIGN ONE: Ceffio
+	// installs the CA there (Certificate ceffio-ca + secret ceffio-ca-tls) and
+	// creates the ClusterIssuers there, so the console already declares it in
+	// the ingress module's Namespaces. The DNS provider token follows the same
+	// path as every other secret — written into OpenBao, rendered by the
+	// injector — instead of being a Kubernetes Secret someone creates by hand.
+	nsCertManager = "cert-manager"
+	// secretACME: the Kubernetes Secret the solver reads its credentials from.
+	// It is a PRODUCT of the injector, never a secret typed in by hand: a
+	// value written in two places is a value that eventually disagrees.
+	secretACME = "ceffio-acme-dns"
+	// nsSystem: where the wildcard certificate and the Traefik default
+	// TLSStore live. ceffio-system, not an application namespace: the
+	// certificate covers EVERY host of the domain, so tying its lifetime to
+	// one application would delete it the day that application is removed.
+	nsSystem = "ceffio-system"
+	// secretWildcard: the single Secret holding the wildcard certificate.
+	secretWildcard = "ceffio-wildcard-tls"
 )
 
 // Deploy applies idempotently the CA + the Ingresses for the domain.
 // domain: base domain, e.g. "company.fr" → cloud.company.fr, chat.company.fr...
-func Deploy(ctx context.Context, domain string) error {
+//
+// reglages carries the ACME challenge and the DNS provider of THIS
+// installation. It is a PARAMETER and not an os.Getenv call inside, for the
+// reason module.Env exists: a value read in several places is a value that
+// eventually disagrees with itself. The CLI install and the console both
+// resolve it once and hand it over.
+func Deploy(ctx context.Context, domain string, reglages acme.Reglages) error {
 	fmt.Printf("\nIngress / TLS (Phase 9) for domain=%s...\n", domain)
 
 	// The internal CA is created ALWAYS, even when Let's Encrypt signs the
@@ -68,10 +102,10 @@ func Deploy(ctx context.Context, domain string) error {
 				"expiry warnings, or force the internal authority with "+
 				"CEFFIO_TLS_ISSUER=ca", domain)
 		}
-		if err := apply(ctx, acmeManifest(email)); err != nil {
+		if err := apply(ctx, acmeManifest(email, reglages)); err != nil {
 			return err
 		}
-		fmt.Printf("∙ Let's Encrypt issuers ready (HTTP-01, account %s)\n", email)
+		fmt.Printf("∙ Let's Encrypt issuers ready (%s, account %s)\n", resumeChallenge(reglages), email)
 	} else {
 		fmt.Println("∙ internal authority only (private domain, or CEFFIO_TLS_ISSUER=ca)")
 	}
@@ -89,14 +123,53 @@ func Deploy(ctx context.Context, domain string) error {
 	// « middleware does not exist » and serves the route IN CLEAR, without
 	// failing the deployment — the worst possible outcome, since everything
 	// looks applied.
+	//
+	// THE EXEMPTION FOLLOWS THE CHALLENGE. Under HTTP-01 the
+	// /.well-known/acme-challenge path must stay reachable in clear: that IS
+	// the proof of domain control, and redirecting it breaks renewal. Under
+	// DNS-01 nothing is served on port 80 for ACME, so the exemption is dead
+	// weight and the redirection can be unconditional.
 	for _, ns := range []string{"ceffio-files", "ceffio-identity", "ceffio-office",
 		"ceffio-vault", "ceffio-video", "ceffio-system", "ceffio-mail"} {
-		if err := apply(ctx, redirectionManifest(ns)); err != nil {
+		if err := apply(ctx, redirectionManifest(ns, reglages)); err != nil {
 			return err
 		}
 	}
 
-	if err := apply(ctx, ingressesManifest(domain)); err != nil {
+	if err := apply(ctx, ingressesManifest(domain, reglages)); err != nil {
+		return err
+	}
+
+	// THE WILDCARD, WHEN THE CHALLENGE ALLOWS IT.
+	//
+	// The Ingresses above point at the shared Secret when DNS-01 is
+	// configured, so the Certificate has to exist for them to have something
+	// to serve. Applied AFTER them on purpose: a certificate can take minutes
+	// (a DNS challenge has to propagate), and Traefik serves its default
+	// certificate meanwhile — an honest "not ready yet" rather than a route
+	// that does not exist at all.
+	//
+	// WHAT IT FIXES, MEASURED: talk.<domain> and cloud.<domain> served
+	// Traefik's default certificate because HTTP-01 needs a service listening
+	// on port 80 for that exact name, and three hostnames of the suite have
+	// none. A wildcard covers every name, including the ones with no Ingress.
+	if w := certWildcardManifest(domain, reglages); w != "" {
+		if err := apply(ctx, w); err != nil {
+			return err
+		}
+		fmt.Printf("∙ wildcard certificate requested (*.%s, single issuance)\n", domain)
+	}
+
+	// THE DNS-01 SOLVER, BEFORE THE CERTIFICATE CAN BE ANSWERED.
+	//
+	// Order matters here for a reason that costs minutes to notice: an issuer
+	// whose webhook solver is absent stays Pending forever. The wildcard
+	// Certificate above was just created, so the solver has to be in place
+	// before cert-manager starts working on it — otherwise the first issuance
+	// waits on a rollout that only happens later in the sequence.
+	//
+	// No-op under HTTP-01: there is nothing for the solver to answer.
+	if err := deployerWebhookDNS(ctx, reglages); err != nil {
 		return err
 	}
 
@@ -819,7 +892,15 @@ func apply(ctx context.Context, manifest string) error {
 // an expiring certificate or an account problem. It comes from the operator
 // (CEFFIO_ACME_EMAIL) with no default — inventing an address would send
 // expiry warnings to somebody who does not exist.
-func acmeManifest(email string) string {
+//
+// THE SOLVER IS BUILT FROM THE SETTINGS, AND THE OLD COMMENT WAS WRONG. It
+// used to say that DNS-01 "would allow a wildcard, but it needs a provider
+// token in the cluster, and a wildcard certificate is not needed to serve
+// seven known hostnames". Both halves aged badly: the token is held in OpenBao
+// like every other secret, and one wildcard is exactly what removes the weekly
+// quota from the critical path — nine hostname-by-hostname issuances every
+// sixty days become one.
+func acmeManifest(email string, reglages acme.Reglages) string {
 	bloc := func(nom, url string) string {
 		return fmt.Sprintf(`apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
@@ -832,19 +913,63 @@ spec:
     privateKeySecretRef:
       name: %s-account
     solvers:
-    # HTTP-01 ONLY. The challenge is served by Traefik on port 80, which is
-    # already open for the Ingresses — no DNS credential to store, rotate or
-    # leak. DNS-01 would allow a wildcard, but it needs a provider token in
-    # the cluster, and a wildcard certificate is not needed to serve seven
-    # known hostnames.
-    - http01:
-        ingress:
-          class: traefik
-`, nom, url, email, nom)
+%s
+`, nom, url, email, nom, solveur(reglages))
 	}
-	return bloc("ceffio-letsencrypt", "https://acme-v02.api.letsencrypt.org/directory") +
+	return bloc(issuerACME, "https://acme-v02.api.letsencrypt.org/directory") +
 		"---\n" +
-		bloc("ceffio-letsencrypt-staging", "https://acme-staging-v02.api.letsencrypt.org/directory")
+		bloc(issuerStaging, "https://acme-staging-v02.api.letsencrypt.org/directory")
+}
+
+// solveur writes the `solvers:` block for the configured challenge.
+//
+// WHY THE WEBHOOK FORM EVEN FOR IN-TREE PROVIDERS: cert-manager accepts the
+// provider name as an opaque VALUE inside a free-form `config` block, so the
+// same manifest shape serves Cloudflare today and Scaleway or OVH tomorrow
+// with no change here. Writing a `cloudflare:` key instead would mean a branch
+// per host in this file, and a republished Ceffio for every new one.
+func solveur(reglages acme.Reglages) string {
+	if !reglages.DNS01() {
+		// HTTP-01: the challenge is served by Traefik on port 80, which is
+		// already open for the Ingresses. No credential to store, rotate or
+		// leak — but one certificate per hostname, and no wildcard possible.
+		return `    - http01:
+        ingress:
+          class: traefik`
+	}
+
+	// DNS-01: cert-manager publishes _acme-challenge.<zone> through the
+	// solver, and the challenge never touches the web server or port 80.
+	//
+	// WHY cnameStrategy IS LEFT ALONE (None): with `Follow`, cert-manager
+	// obeys ANY CNAME found at _acme-challenge.<domain> — including one
+	// synthesized by a wildcard record. A `*.example.com CNAME lb.example.org`
+	// then answers CNAME queries for _acme-challenge.example.com, and the
+	// challenge record is written in the wrong zone; Route 53 refuses with
+	// "not permitted in zone", and the cause is invisible in the certificate
+	// status. Operators who genuinely delegate the name can set it explicitly.
+	return fmt.Sprintf(`    - dns01:
+        webhook:
+          groupName: %s
+          solverName: libdns
+          config:
+            provider: %s
+            secretRef:
+              name: %s
+              namespace: %s`, reglages.WebhookGroup, reglages.Provider, secretACME, nsCertManager)
+}
+
+// resumeChallenge renders the challenge for the operator's log line.
+//
+// WHY NOT reglages.Challenge DIRECTLY: what the operator needs to read is the
+// pair (challenge, provider) — "dns01" alone does not say through which host
+// the records will be published, and that is the part that fails first when a
+// credential is wrong.
+func resumeChallenge(reglages acme.Reglages) string {
+	if !reglages.DNS01() {
+		return "HTTP-01"
+	}
+	return fmt.Sprintf("DNS-01 via %s", reglages.Provider)
 }
 
 // caManifest: self-signed CA (bootstrap issuer → CA certificate → CA issuer)
@@ -943,8 +1068,16 @@ type appRoute struct {
 // THE PATH IS ANCHORED (^) AND THE DOMAIN CAPTURED: the substitution rebuilds
 // the URL in https with the same host and the same path, without which a
 // redirection would lose the requested route.
-func redirectionManifest(ns string) string {
-	return fmt.Sprintf(`apiVersion: traefik.io/v1alpha1
+//
+// THE EXEMPTION IS CONDITIONAL ON THE CHALLENGE. Under HTTP-01 it is what
+// keeps renewal possible; under DNS-01 nothing is served on port 80 for ACME,
+// so the middleware collapses to a single unconditional rule. Keeping the
+// exemption in that case would not be wrong, but it would preserve the
+// /.well-known in-clear side effect for no reason at all — and a rule kept
+// "just in case" is a rule nobody dares remove later.
+func redirectionManifest(ns string, reglages acme.Reglages) string {
+	if !reglages.DNS01() {
+		return fmt.Sprintf(`apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: ceffio-redirect-https
@@ -983,6 +1116,31 @@ spec:
     scheme: https
     permanent: true
 `, ns, ns)
+	}
+
+	// DNS-01: the challenge record is published in the zone, never fetched
+	// from port 80, so there is no path to preserve. One unconditional rule,
+	// and the exemption machinery disappears with the reason for it.
+	return fmt.Sprintf(`apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: ceffio-redirect-https
+  namespace: %s
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: ceffio-redirect-https-fallback
+  namespace: %s
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+`, ns, ns)
 }
 
 // redirectionAnnotations returns the annotation forcing https on one Ingress.
@@ -1008,7 +1166,7 @@ func redirectionAnnotations(ns string) string {
 		ns + "-ceffio-redirect-https-fallback@kubernetescrd\n"
 }
 
-func ingressesManifest(domain string) string {
+func ingressesManifest(domain string, reglages acme.Reglages) string {
 	// One decision for the whole set: every host of a domain is signed by the
 	// same authority. Mixing them would mean some names show a browser warning
 	// and others do not, with no rule the operator could state.
@@ -1059,7 +1217,7 @@ spec:
   ingressClassName: traefik
   tls:
     - hosts: [%[3]s]
-      secretName: %[1]s-tls
+      secretName: %[8]s
   rules:
     - host: %[3]s
       http:
@@ -1071,7 +1229,77 @@ spec:
                 name: %[4]s
                 port:
                   number: %[6]d
-`, r.sub, r.namespace, host, r.service, ann, r.port, issuer)
+`, r.sub, r.namespace, host, r.service, ann, r.port, issuer, nomSecretTLS(r.sub, reglages))
 	}
 	return sb.String()
+}
+
+// nomSecretTLS returns the Secret an Ingress reads its certificate from.
+//
+// TWO REGIMES, AND THE REASON IS THE ACME CHALLENGE, NOT A PREFERENCE:
+//
+//	HTTP-01  one certificate per hostname, so one Secret per route. The name
+//	         is derived from the host, which is also how cert-manager names
+//	         the Secret it creates for an Ingress.
+//
+//	DNS-01   ONE wildcard certificate for the whole domain, in ONE Secret
+//	         (certWildcardManifest below). Every route points at it. That is the
+//	         point of the change: nine hostname-by-hostname issuances against
+//	         the Let's Encrypt weekly quota become a single certificate, and a
+//	         hostname added later is served WITHOUT any new issuance.
+//
+// WHY NOT ALWAYS THE WILDCARD: a wildcard cannot be obtained over HTTP-01.
+// Asking for it with the http01 solver would leave every Ingress pointing at a
+// Secret that never appears, and Traefik would serve its own default
+// certificate — the exact symptom this distinction removes.
+func nomSecretTLS(sub string, reglages acme.Reglages) string {
+	if reglages.DNS01() {
+		return secretWildcard
+	}
+	return sub + "-tls"
+}
+
+// certWildcardManifest creates the single certificate covering the domain and
+// every subdomain, plus the Traefik default TLSStore that makes it the
+// cluster-wide fallback.
+//
+// WHY A TLSStore IN ADDITION TO THE CERTIFICATE: a Secret is namespaced, and
+// the wildcard lives in ceffio-system while the Ingresses live in seven
+// different namespaces. Traefik resolves that with its `default` TLSStore: any
+// route without a more specific certificate gets this one — so a new
+// application, or a namespace nobody remembered to configure, is served in
+// HTTPS the moment it exists.
+//
+// WHY WILDCARD AND APEX IN THE SAME Certificate: Let's Encrypt treats them as
+// two identifiers but ONE issuance, and cert-manager publishes two TXT records
+// at the same _acme-challenge name. The libdns webhook merges them (GetRecords
+// + SetRecords); a solver that overwrites instead would loop forever without
+// saying why.
+func certWildcardManifest(domain string, reglages acme.Reglages) string {
+	if !reglages.DNS01() {
+		return ""
+	}
+	return fmt.Sprintf(`apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: %[1]s
+  namespace: %[2]s
+spec:
+  secretName: %[1]s
+  issuerRef:
+    name: %[3]s
+    kind: ClusterIssuer
+  dnsNames:
+    - %[4]s
+    - "*.%[4]s"
+---
+apiVersion: traefik.io/v1alpha1
+kind: TLSStore
+metadata:
+  name: default
+  namespace: %[2]s
+spec:
+  defaultCertificate:
+    secretName: %[1]s
+`, secretWildcard, nsSystem, issuerACME, domain)
 }

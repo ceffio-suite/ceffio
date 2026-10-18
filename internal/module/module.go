@@ -18,6 +18,8 @@ import (
 
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/ceffio-suite/ceffio/internal/acme"
 )
 
 // Module is a feature of the suite: something that can be installed,
@@ -152,8 +154,26 @@ type State struct {
 // share an established connection; a module does not have to know who calls
 // it, and Out lets it report its progress on the right channel (stdout for
 // the CLI, the operation log for the console).
+//
+// WHY Acme IS CARRIED HERE RATHER THAN READ FROM THE ENVIRONMENT BY EACH
+// MODULE: the settings of one installation must have ONE answer. A module
+// calling os.Getenv("CEFFIO_ACME_CHALLENGE") would work in isolation and then
+// silently disagree with the installer the first time the value is set in a
+// different place (a shell, a unit file, the console's own process). Passing
+// the resolved value means every module — and both frontends — see the same
+// configuration, and that a settings page can later feed it without any module
+// changing.
 type Env struct {
 	Domain string
 	Kube   kubernetes.Interface // k8s.io/client-go/kubernetes
 	Out    io.Writer            // CLI: stdout; console: the operation log
+
+	// Acme is the resolved ACME configuration (challenge, DNS provider).
+	//
+	// It is the zero value's business, not the module's, to be correct: a
+	// caller that does not fill it leaves Challenge empty, which the ingress
+	// module reads as "http01" — the historical behaviour. A read-only caller
+	// (a status view) should use acme.HTTP01() explicitly rather than rely on
+	// that, so that its answer does not depend on how it was constructed.
+	Acme acme.Reglages
 }
