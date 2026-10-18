@@ -37,6 +37,12 @@ func (m *officeModule) Info() module.Info {
 		Default:     true,
 		Namespaces:  []string{nsOffice},
 
+		// Permissions (batch B6): the console administers this namespace —
+		// the standard set reproduces what the former ClusterRole
+		// ceffio-admin-namespaces granted via its RoleBinding (see
+		// socle.StandardPermission).
+		Permissions: []module.Permission{socle.StandardPermission(nsOffice)},
+
 		// Reprise EXACTE de l'entrée « office » de catalogueServices
 		// (internal/console/status.go), commentaire compris : technique,
 		// car personne n'y accède directement — mais le NAVIGATEUR charge

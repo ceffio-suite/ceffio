@@ -42,6 +42,12 @@ func (m *filesModule) Info() module.Info {
 		Default:     true,
 		Namespaces:  []string{nsFiles},
 
+		// Permissions (batch B6): the console administers this namespace
+		// (workloads, config, the occ Role lives here) — the standard set
+		// reproduces what the former ClusterRole ceffio-admin-namespaces
+		// granted via its RoleBinding (see socle.StandardPermission).
+		Permissions: []module.Permission{socle.StandardPermission(nsFiles)},
+
 		// Reprise EXACTE des entrées « cloud » et « talk » de
 		// catalogueServices (internal/console/status.go) : mêmes textes,
 		// mêmes préfixes de pods, mêmes SSO=true (les deux passent par

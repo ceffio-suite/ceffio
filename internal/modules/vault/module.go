@@ -42,6 +42,12 @@ func (m *vaultModule) Info() module.Info {
 		Default:     true,
 		Namespaces:  []string{nsVault},
 
+		// Permissions (batch B6): the console administers this namespace —
+		// the standard set reproduces what the former ClusterRole
+		// ceffio-admin-namespaces granted via its RoleBinding (see
+		// socle.StandardPermission).
+		Permissions: []module.Permission{socle.StandardPermission(nsVault)},
+
 		// PAS de Services déclarés, et c'est un choix vérifié : l'Ingress
 		// bao.<domain> existe bien (internal/ingress, ingressesManifest —
 		// l'OIDC y renvoie le navigateur), mais il n'est PAS dans

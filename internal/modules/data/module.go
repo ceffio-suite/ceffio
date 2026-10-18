@@ -40,6 +40,16 @@ func (m *dataModule) Info() module.Info {
 		Kind:        module.Core,
 		Default:     true,
 		Namespaces:  []string{nsData, nsCNPG},
+
+		// Permissions (batch B6): the console administers ceffio-data —
+		// the standard set reproduces what the former ClusterRole
+		// ceffio-admin-namespaces granted via its RoleBinding (see
+		// socle.StandardPermission). cnpg-system gets NOTHING: the legacy
+		// grant excluded it — the operator's namespace is infrastructure,
+		// not driven from the console (the PostgreSQL CLUSTERS live in the
+		// application namespaces, and their postgresql.cnpg.io rights come
+		// with the standard set).
+		Permissions: []module.Permission{socle.StandardPermission(nsData)},
 	}
 }
 

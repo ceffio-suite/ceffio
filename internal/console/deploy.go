@@ -16,7 +16,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
+
+	rbacv1 "k8s.io/api/rbac/v1"
 
 	"github.com/ceffio-suite/ceffio/internal/ingress"
 	"github.com/ceffio-suite/ceffio/internal/k8s"
@@ -93,9 +96,18 @@ func Deploy(ctx context.Context, domain string) error {
 	// other components. The console is the ONLY service whose image contains
 	// no shell: it cannot "source" /secrets/env, it reads it itself at startup
 	// (secrets.ChargerDepuisFichier).
-	if err := applyConsoleManifest(ctx, domain); err != nil {
+
+	// The namespace-scoped rights are the SUM of the module registry (see
+	// AdminRights). Computed BEFORE the manifest: an empty sum must abort the
+	// deployment, not ship a console that denies every action.
+	rights, err := AdminRights()
+	if err != nil {
 		return err
 	}
+	if err := applyConsoleManifest(ctx, domain, rights); err != nil {
+		return err
+	}
+	printGrantedRights(rights)
 	if err := waitConsoleReady(ctx); err != nil {
 		return err
 	}
@@ -560,7 +572,7 @@ func dernierJeton(sortie string) string {
 // masked the failure: the pod started then answered "credentials missing" to
 // every request. We do NOT set optional: a missing secret must fail the pod,
 // not produce an unusable console.
-func applyConsoleManifest(ctx context.Context, domain string) error {
+func applyConsoleManifest(ctx context.Context, domain string, rights []NamespaceRights) error {
 	// THE SECRETS COME FROM THE VAULT, through the file the injector renders.
 	//
 	// THREE SOURCES: the console key, the Keycloak administration account, and
@@ -671,59 +683,17 @@ rules:
 # que les consommer. Retirer ce droit rend l'erreur impossible plutôt que de la
 # corriger après coup.
 ---
-# Un RoleBinding par namespace de la plateforme. Générés ici plutôt qu'écrits à
-# la main : la liste des namespaces évolue avec le produit, et un binding oublié
-# se traduirait par un refus RBAC au moment d'une action, sans lien visible avec
-# le déploiement.
-` + roleBindingsNamespaces() + `
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: ceffio-admin
-subjects:
-- kind: ServiceAccount
-  name: ceffio-admin
-  namespace: ` + deployNS + `
-roleRef:
-  kind: ClusterRole
-  name: ceffio-admin
-  apiGroup: rbac.authorization.k8s.io
----
-# ÉCRITURE DANS LES NAMESPACES DE LA PLATEFORME.
+# NAMESPACE-SCOPED RIGHTS, GENERATED FROM THE MODULE REGISTRY.
 #
-# Un RoleBinding par namespace, pas un droit cluster-wide : Kubernetes n'offre
-# pas de « tous les namespaces sauf ceux-là », donc la liste est explicite — et
-# être explicite est ici un avantage, parce qu'elle montre ce qui est administré
-# et ce qui ne l'est pas.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: ceffio-admin-namespaces
-rules:
-# Le cœur de la plateforme : charges, configuration, secrets applicatifs,
-# services, Ingress, volumes.
-- apiGroups: [""]
-  resources: [pods, services, configmaps, secrets, persistentvolumeclaims, serviceaccounts]
-  verbs: [get, list, watch, create, update, patch, delete]
-- apiGroups: [""]
-  resources: [pods/exec, pods/log]
-  verbs: [get, create]
-- apiGroups: ["apps"]
-  resources: [deployments, statefulsets, replicasets]
-  verbs: [get, list, watch, create, update, patch, delete]
-- apiGroups: ["networking.k8s.io"]
-  resources: [ingresses]
-  verbs: [get, list, watch, create, update, patch, delete]
-- apiGroups: ["cert-manager.io"]
-  resources: [certificates, certificaterequests]
-  verbs: [get, list, watch, create, update, patch, delete]
-- apiGroups: ["rbac.authorization.k8s.io"]
-  resources: [roles, rolebindings]
-  verbs: [get, list, watch, create, update, patch, delete]
-- apiGroups: ["postgresql.cnpg.io"]
-  resources: ["*"]
-  verbs: [get, list, watch, create, update, patch, delete]
+# One Role + one RoleBinding per namespace, carrying the SUM of what every
+# registered module declares in Info.Permissions (AdminRights below). They
+# replace the hand-written ClusterRole ceffio-admin-namespaces and its ten
+# RoleBindings: the console's rights now follow the catalog, so a module that
+# appears, moves or disappears updates the grant with no edit here — and a
+# hand-written binding forgotten used to surface only as an RBAC denial on the
+# first click, with no visible link to the deployment. The exact-reproduction
+# of the legacy grant is pinned by the non-regression test (rbac_nonregression_test.go).
+` + AdminRolesManifest(rights) + `
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -851,61 +821,280 @@ spec:
 	cmd.Stdin = strings.NewReader(manifest)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	// The pre-registry ClusterRole ceffio-admin-namespaces and its RoleBindings
+	// are deleted AFTER the new grant is applied: never leave a window where
+	// the console holds neither.
+	removeLegacyRBAC(ctx, rights)
+	return nil
 }
 
-// namespacesPlateforme: les namespaces que la console administre.
+// printGrantedRights shows, per namespace, what the console may now do.
 //
-// LA LISTE EST EXPLICITE, et c'est volontaire. Kubernetes n'offre pas de
-// « tous les namespaces sauf ceux-là » : accorder l'écriture au niveau cluster
-// donnerait aussi kube-system, longhorn-system et cert-manager — les briques
-// d'infrastructure, qui ne se pilotent pas depuis cette console.
-//
-// Un namespace absent de cette liste ne casse rien : le RoleBinding est créé
-// pour un namespace qui peut ne pas exister encore, et Kubernetes l'accepte. Il
-// prend effet dès que le namespace apparaît.
-var namespacesPlateforme = []string{
-	"ceffio-system",
-	"ceffio-files",
-	"ceffio-identity",
-	"ceffio-office",
-	"ceffio-video",
-	"ceffio-mail",
-	"ceffio-data",
-	"ceffio-vault",
-	"ceffio-observability",
-	// Les ExApp vivent ici : HaRP y déploie le conteneur de chaque application
-	// demandée depuis Nextcloud.
-	"ceffio-exapps",
+// WHY PRINT IT AT ALL: the grant is no longer a block of YAML an operator can
+// read in this file — it is computed from the registry at deploy time. The
+// printed list is what makes the computed privilege AUDITABLE on the very
+// terminal that ran the installation, and what lets a future operator diff
+// two installations when a module changed.
+func printGrantedRights(rights []NamespaceRights) {
+	fmt.Println("\n  CONSOLE RBAC — namespace-scoped rights (sum of the module registry)")
+	fmt.Println("  ───────────────────────────────────────────────────────────────────")
+	for _, r := range rights {
+		fmt.Printf("  %s:\n", r.Namespace)
+		for _, rule := range r.Rules {
+			group := rule.APIGroups[0]
+			if group == "" {
+				group = "(core)"
+			}
+			fmt.Printf("    %-28s %-46s [%s]\n", group, strings.Join(rule.Resources, ", "), strings.Join(rule.Verbs, ", "))
+		}
+	}
+	fmt.Println("  (cluster-scoped read rights and the occ account-management role stay in deploy.go)")
+	fmt.Println()
 }
 
-// roleBindingsNamespaces builds one RoleBinding per platform namespace,
-// referencing the shared ClusterRole above.
+// ─────────────────────────────────────────────────────────────────────────
+// CONSOLE RBAC, GENERATED FROM THE MODULE REGISTRY (batch B6).
 //
-// UN SEUL ClusterRole, PLUSIEURS RoleBindings : c'est la forme idiomatique
-// pour accorder les mêmes droits dans plusieurs namespaces. Dupliquer le Role
-// dans chacun créerait dix copies d'une même liste de règles, et dix endroits
-// où oublier une nouvelle règle.
-func roleBindingsNamespaces() string {
-	var sb strings.Builder
-	for _, ns := range namespacesPlateforme {
-		fmt.Fprintf(&sb, `apiVersion: rbac.authorization.k8s.io/v1
+// WHAT STAYS HARD-CODED, AND WHY: the cluster-scoped READ rights (the
+// ClusterRole ceffio-admin above: pods, namespaces, deployments, ingresses,
+// certificates for the dashboard and the certificates page), the namespace
+// create/update/patch right, and the ceffio-console-occ Role (account
+// management through occ in ceffio-files). These are the console's OWN
+// rights: they exist for the console itself, not for any module it manages,
+// so no module can declare them — and putting them in the registry would
+// mean a module removal could blind the dashboard.
+//
+// Everything else — the write rights inside the platform namespaces — is
+// the SUM of Info.Permissions across the registry, computed below.
+// ─────────────────────────────────────────────────────────────────────────
+
+// NamespaceRights is the complete set of rules the console holds in ONE
+// namespace: the union of every module's Info.Permissions entries for that
+// namespace, merged and canonically ordered.
+type NamespaceRights struct {
+	Namespace string
+	Rules     []rbacv1.PolicyRule
+}
+
+// AdminRights computes the namespace-scoped rights of the console as the SUM
+// of what every registered module declares in Info.Permissions.
+//
+// WHY THE SUM AND NOT A HAND-WRITTEN LIST: the console installs, observes
+// and removes whatever the registry contains. A hand-written ClusterRole
+// had to be updated by hand every time a module appeared or moved — and a
+// forgotten line surfaced as an RBAC denial on the first click, far from
+// the change that caused it. With the sum, the grant follows the catalog.
+//
+// The merge works on (namespace, apiGroup, resource, verb) TUPLES: two
+// modules declaring the same right contribute it once, and a module
+// declaring a subset of another's changes nothing. The result is therefore
+// order-independent, and the non-regression test can compare it, tuple by
+// tuple, with the grant the hand-written ClusterRole produced.
+//
+// An EMPTY sum is an error, not an empty manifest: deploying a console with
+// no namespace-scoped rights would produce a product that denies every
+// action, and the denial would look like a cluster problem, not like a
+// registry problem.
+func AdminRights() ([]NamespaceRights, error) {
+	// namespace → apiGroup → resource → verb set.
+	acc := map[string]map[string]map[string]map[string]bool{}
+
+	for _, m := range moduleAll() {
+		info := m.Info()
+		for _, p := range info.Permissions {
+			if p.Namespace == "" {
+				continue
+			}
+			for _, rule := range p.Rules {
+				// Rules narrowed to specific object names (or non-resource
+				// URLs) are REFUSED rather than merged: the tuple model
+				// cannot represent the restriction, and dropping
+				// resourceNames would silently WIDEN the grant.
+				if len(rule.ResourceNames) > 0 || len(rule.NonResourceURLs) > 0 {
+					return nil, fmt.Errorf("module %q declares resourceNames/nonResourceURLs in namespace %s: AdminRights cannot merge those without widening them", info.ID, p.Namespace)
+				}
+				groups := rule.APIGroups
+				if len(groups) == 0 {
+					// An absent apiGroups list means the core group.
+					groups = []string{""}
+				}
+				for _, g := range groups {
+					for _, res := range rule.Resources {
+						for _, verb := range rule.Verbs {
+							if acc[p.Namespace] == nil {
+								acc[p.Namespace] = map[string]map[string]map[string]bool{}
+							}
+							if acc[p.Namespace][g] == nil {
+								acc[p.Namespace][g] = map[string]map[string]bool{}
+							}
+							if acc[p.Namespace][g][res] == nil {
+								acc[p.Namespace][g][res] = map[string]bool{}
+							}
+							acc[p.Namespace][g][res][verb] = true
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if len(acc) == 0 {
+		return nil, fmt.Errorf("no registered module declares Permissions: refusing to deploy the console with zero namespace-scoped rights (empty registry, or the modules lost their declarations)")
+	}
+
+	namespaces := make([]string, 0, len(acc))
+	for ns := range acc {
+		namespaces = append(namespaces, ns)
+	}
+	// Sorted: the generated YAML must be byte-identical between two runs,
+	// or equality tests and `kubectl apply` diffs become unstable.
+	sort.Strings(namespaces)
+
+	out := make([]NamespaceRights, 0, len(namespaces))
+	for _, ns := range namespaces {
+		out = append(out, NamespaceRights{Namespace: ns, Rules: canonicalRules(acc[ns])})
+	}
+	return out, nil
+}
+
+// canonicalRules rebuilds PolicyRules from the accumulated tuples, in a
+// deterministic order: apiGroups sorted (the core group "" first), then
+// resources sharing the SAME verb set merged into one rule (the shape the
+// hand-written ClusterRole had), sorted by verb set then by resource list.
+func canonicalRules(byGroup map[string]map[string]map[string]bool) []rbacv1.PolicyRule {
+	groups := make([]string, 0, len(byGroup))
+	for g := range byGroup {
+		groups = append(groups, g)
+	}
+	sort.Strings(groups)
+
+	var rules []rbacv1.PolicyRule
+	for _, g := range groups {
+		// verbKey (sorted, comma-joined) → resources holding exactly those verbs.
+		byVerbs := map[string][]string{}
+		for res, verbs := range byGroup[g] {
+			key := strings.Join(sortedSet(verbs), ",")
+			byVerbs[key] = append(byVerbs[key], res)
+		}
+		keys := make([]string, 0, len(byVerbs))
+		for k := range byVerbs {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		for _, k := range keys {
+			resources := byVerbs[k]
+			sort.Strings(resources)
+			rules = append(rules, rbacv1.PolicyRule{
+				APIGroups: []string{g},
+				Resources: resources,
+				Verbs:     strings.Split(k, ","),
+			})
+		}
+	}
+	return rules
+}
+
+// sortedSet returns the keys of a set, sorted — the small helper that makes
+// every list leaving AdminRights deterministic.
+func sortedSet(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// AdminRolesManifest renders one Role + one RoleBinding per namespace,
+// bound to the console's ServiceAccount (ceffio-admin in deployNS).
+//
+// Exported for the same reason AdminRights is: the non-regression test
+// parses this exact YAML (what kubectl applies) back into rbacv1 objects and
+// compares it with the legacy grant — proving the pipeline end to end, not
+// just the intermediate data.
+//
+// WHY A Role PER NAMESPACE INSTEAD OF ONE ClusterRole + RoleBindings (the
+// previous shape): the rights are no longer the same everywhere — each
+// namespace carries exactly the sum its modules declared. A shared
+// ClusterRole could only express the union of ALL namespaces, which would
+// grant every module's rights everywhere: a wider privilege nobody decided.
+//
+// WHY THE OBJECTS ARE NAMED ceffio-console AND NOT ceffio-admin (the legacy
+// binding name): a RoleBinding's roleRef is IMMUTABLE in Kubernetes.
+// Re-applying the old bindings with a Role reference instead of the old
+// ClusterRole reference would be rejected on every existing installation.
+// Fresh names apply cleanly; removeLegacyRBAC deletes the old objects.
+func AdminRolesManifest(rights []NamespaceRights) string {
+	docs := make([]string, 0, 2*len(rights))
+	for _, r := range rights {
+		var role strings.Builder
+		role.WriteString("apiVersion: rbac.authorization.k8s.io/v1\nkind: Role\nmetadata:\n  name: ceffio-console\n  namespace: " + r.Namespace + "\nrules:\n")
+		for _, rule := range r.Rules {
+			fmt.Fprintf(&role, "- apiGroups: [%s]\n  resources: [%s]\n  verbs: [%s]\n",
+				quoteJoin(rule.APIGroups), quoteJoin(rule.Resources), quoteJoin(rule.Verbs))
+		}
+		docs = append(docs, role.String())
+		docs = append(docs, fmt.Sprintf(`apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: ceffio-admin
+  name: ceffio-console
   namespace: %s
 subjects:
 - kind: ServiceAccount
   name: ceffio-admin
   namespace: %s
 roleRef:
-  kind: ClusterRole
-  name: ceffio-admin-namespaces
+  kind: Role
+  name: ceffio-console
   apiGroup: rbac.authorization.k8s.io
----
-`, ns, deployNS)
+`, r.Namespace, deployNS))
 	}
-	return sb.String()
+	return strings.Join(docs, "---\n")
+}
+
+// quoteJoin renders a YAML flow sequence with every element quoted: the
+// wildcard resource "*" is not valid bare, and quoting uniformly keeps the
+// output deterministic without per-element rules.
+func quoteJoin(items []string) string {
+	quoted := make([]string, len(items))
+	for i, s := range items {
+		quoted[i] = `"` + s + `"`
+	}
+	return strings.Join(quoted, ", ")
+}
+
+// removeLegacyRBAC deletes the pre-registry namespace grant: the ClusterRole
+// ceffio-admin-namespaces and the RoleBindings ceffio-admin that referenced
+// it in every platform namespace.
+//
+// WHY DELETE RATHER THAN LEAVE: the stale objects grant exactly the rights
+// the generated Roles now grant, so leaving them would not break anything —
+// but the cluster would carry two overlapping grants, and the day the
+// registry NARROWS a right, the stale ClusterRole would silently keep it
+// alive. Deleting it is what makes the registry the single source of the
+// console's namespace-scoped rights.
+//
+// BEST-EFFORT, deliberately: on a fresh installation the objects do not
+// exist (--ignore-not-found), and a cleanup failure must not turn a
+// successful deployment into a failure. Deleting the ClusterRole alone
+// neutralizes every stale binding — a RoleBinding referencing a nonexistent
+// role grants nothing — including in namespaces the registry no longer
+// covers.
+func removeLegacyRBAC(ctx context.Context, rights []NamespaceRights) {
+	deleteQuietly := func(args ...string) {
+		cmd := k8s.Command(ctx, "kubectl", append([]string{"delete", "--ignore-not-found"}, args...)...)
+		cmd.Stdout = io.Discard
+		cmd.Stderr = io.Discard
+		_ = cmd.Run()
+	}
+	deleteQuietly("clusterrole", "ceffio-admin-namespaces")
+	for _, r := range rights {
+		deleteQuietly("rolebinding", "ceffio-admin", "--namespace", r.Namespace)
+	}
 }
 
 func waitConsoleReady(ctx context.Context) error {

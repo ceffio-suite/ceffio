@@ -43,6 +43,13 @@ func (m *talkModule) Info() module.Info {
 		Default:     true,
 		Namespaces:  []string{nsVideo},
 
+		// Permissions (batch B6): the console administers this namespace —
+		// the standard set reproduces what the former ClusterRole
+		// ceffio-admin-namespaces granted via its RoleBinding (see
+		// socle.StandardPermission). The Optional recording module declares
+		// a subset of it; the union is unchanged.
+		Permissions: []module.Permission{socle.StandardPermission(nsVideo)},
+
 		// Reprise EXACTE de l'entrée « spreed » de catalogueServices
 		// (internal/console/status.go) : technique (transport média, pas
 		// un accès humain), SSO=false, et les quatre préfixes de pods du

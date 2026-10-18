@@ -54,6 +54,12 @@ func (m *mailModule) Info() module.Info {
 		Default:     true,
 		Namespaces:  []string{nsMail},
 
+		// Permissions (batch B6): the console administers this namespace —
+		// the standard set reproduces what the former ClusterRole
+		// ceffio-admin-namespaces granted via its RoleBinding (see
+		// socle.StandardPermission).
+		Permissions: []module.Permission{socle.StandardPermission(nsMail)},
+
 		Warning: "Installed by the install sequence only: it needs the outbound SMTP relay settings, which the registry does not carry.",
 	}
 }

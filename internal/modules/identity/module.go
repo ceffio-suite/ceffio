@@ -38,6 +38,12 @@ func (m *identityModule) Info() module.Info {
 		Default:     true,
 		Namespaces:  []string{nsIdentity},
 
+		// Permissions (batch B6): the console administers this namespace —
+		// the standard set reproduces what the former ClusterRole
+		// ceffio-admin-namespaces granted via its RoleBinding (see
+		// socle.StandardPermission).
+		Permissions: []module.Permission{socle.StandardPermission(nsIdentity)},
+
 		// Reprise EXACTE de l'entrée « keycloak » de catalogueServices
 		// (internal/console/status.go) : mêmes textes, même SSO=false —
 		// Keycloak EST la porte d'entrée du SSO, il ne passe pas par
