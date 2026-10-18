@@ -209,8 +209,24 @@ func TestPasDeCollisionAvecLesModulesOptionnels(t *testing.T) {
 			t.Errorf("module %q: Kind = %v, expected module.Optional — the core layers must not absorb it", id, m.Info().Kind)
 		}
 	}
-	if len(module.All()) != len(idsSocle)+len(optionnels) {
-		t.Errorf("registry holds %d modules, expected %d (10 core + 3 optional)",
-			len(module.All()), len(idsSocle)+len(optionnels))
+	// WHY NOT "len(All()) == 13": a count freezes the registry at today's size.
+	// The whole point of the registry is that a feature can be ADDED — the
+	// demo module does exactly that — and a hard count turns every addition
+	// into a test failure. What this assertion actually defends is that the
+	// built-in lists below did not silently drift: every module they name
+	// exists with the right kind, and no OTHER module outside them is a core
+	// layer (a core layer missing from the list would go unchecked).
+	//
+	// Modules with a build tag (demo) are deliberately not enumerated: they
+	// are opt-in and must not change what the default build asserts.
+	for _, m := range module.All() {
+		i := m.Info()
+		if i.Kind != module.Core {
+			continue
+		}
+		if !vus[i.ID] {
+			t.Errorf("module %q is a core layer but is missing from the core/optional lists above: "+
+				"the list drifted from the registry", i.ID)
+		}
 	}
 }
