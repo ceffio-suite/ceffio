@@ -13,12 +13,13 @@ package ingress
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
 	coucheIngress "github.com/ceffio-suite/ceffio/internal/ingress"
 	"github.com/ceffio-suite/ceffio/internal/module"
 	"github.com/ceffio-suite/ceffio/internal/modules/socle"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -73,36 +74,68 @@ func (m *ingressModule) Install(ctx context.Context, env module.Env) error {
 	return coucheIngress.Deploy(ctx, env.Domain)
 }
 
-// State reads the cluster: the internal CA (Certificate ceffio-ca in
-// cert-manager) and the Nextcloud Ingress (cloud.<domain>, in ceffio-files)
-// must exist.
+// nsIngresses lists the namespaces where ingress.Deploy lays down an
+// Ingress — the redirectionManifest loop of internal/ingress/ingress.go,
+// minus cert-manager, which receives the CA and no Ingress.
 //
-// WHY these two objects: they are the two proofs that ingress.Deploy went
-// through — caManifest is applied first (the CA is "created ALWAYS"),
-// ingressesManifest last. Checking the first and the last bounds the whole
-// sequence without replaying the seven middlewares one by one. We check
-// EXISTENCE, not health: whether a certificate is Ready or not is
-// cert-manager's business, which the "platform" module already observes.
+// WHY A SEPARATE LIST FROM Info.Namespaces: Info.Namespaces says where the
+// layer puts OBJECTS (cert-manager holds the CA); this list says where the
+// observable PROOF of the layer lives. The two are not the same, and
+// conflating them is what produced the bug fixed below.
+var nsIngresses = []string{nsSystem, nsFiles, nsIdentity, nsOffice, nsVault, nsVideo, nsMail}
+
+// State reads the cluster: the Ingresses this layer lays down.
+//
+// WHY NOT THE INTERNAL CA SECRET, WHICH AN EARLIER VERSION READ: the console
+// cannot read it. The grant is the sum of what modules declare
+// (internal/console/deploy.go, AdminRights), and reading a Secret in
+// cert-manager is not part of it — verified on a fresh install:
+//
+//	reading the internal CA secret: secrets "ceffio-ca-tls" is forbidden:
+//	User "system:serviceaccount:ceffio-system:ceffio-admin" cannot get
+//	resource "secrets" in API group "" in the namespace "cert-manager"
+//
+// The state then reported "unknown" on EVERY installation, forever, for a
+// layer that had worked. The fix is to observe what the layer delivers AND
+// what the console is entitled to read — NOT to widen the grant: the RBAC
+// non-regression test exists precisely to refuse that, and a module that
+// needs a right to report on itself would be asking the wrong question.
+//
+// We check EXISTENCE, not health: whether a Certificate is Ready is
+// cert-manager's business, which the "platform" module observes.
 func (m *ingressModule) State(ctx context.Context, env module.Env) module.State {
 	if env.Kube == nil {
 		return module.State{Status: module.Unknown, Detail: "no Kubernetes client in the environment"}
 	}
-	if _, err := env.Kube.CoreV1().Secrets(nsCertMgr).Get(ctx, "ceffio-ca-tls", metav1.GetOptions{}); err != nil {
-		if apierrors.IsNotFound(err) {
-			return module.State{Status: module.Absent}
+
+	// One read per namespace: a bare error here (forbidden, unreachable)
+	// is genuinely unknown; only a successful read proves anything.
+	var missing []string
+	for _, ns := range nsIngresses {
+		list, err := env.Kube.NetworkingV1().Ingresses(ns).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return module.State{Status: module.Unknown,
+				Detail: fmt.Sprintf("listing the Ingresses of %s: %v", ns, err)}
 		}
-		return module.State{Status: module.Unknown, Detail: fmt.Sprintf("reading the internal CA secret: %v", err)}
-	}
-	// The "cloud" Ingress carries the name of the sub (ingressesManifest:
-	// name: %[1]s = r.sub). Its absence says that the Ingresses phase did
-	// not go through, even if the CA is there.
-	if _, err := env.Kube.NetworkingV1().Ingresses(nsFiles).Get(ctx, "cloud", metav1.GetOptions{}); err != nil {
-		if apierrors.IsNotFound(err) {
-			return module.State{Status: module.Degraded, Detail: "internal CA present, but the public Ingresses are not"}
+		if len(list.Items) == 0 {
+			missing = append(missing, ns)
 		}
-		return module.State{Status: module.Unknown, Detail: fmt.Sprintf("reading the cloud Ingress: %v", err)}
 	}
-	return module.State{Status: module.Installed}
+
+	switch len(missing) {
+	case 0:
+		return module.State{Status: module.Installed}
+	case len(nsIngresses):
+		// Nothing at all: the layer never ran. Reported as absent rather
+		// than degraded, so an operator sees "not installed" and not "half
+		// installed" — the two call for different actions.
+		return module.State{Status: module.Absent}
+	default:
+		sort.Strings(missing)
+		return module.State{Status: module.Degraded,
+			Detail: fmt.Sprintf("no Ingress in %s — the layer did not go through everywhere",
+				strings.Join(missing, ", "))}
+	}
 }
 
 // Uninstall refuses: without Ingress nor TLS, no service is reachable
