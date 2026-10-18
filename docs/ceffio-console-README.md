@@ -25,11 +25,25 @@ on every tag.
 
 | What | Where |
 |---|---|
-| Image | `ghcr.io/ceffio-suite/ceffio-console` (tags `X.Y.Z`, `latest` for stable versions only) |
+| Image | `ghcr.io/ceffio-suite/ceffio` (tags `X.Y.Z`, `latest` for stable versions only) |
 | Dockerfile | [`build/console/Dockerfile`](https://github.com/ceffio-suite/ceffio/blob/main/build/console/Dockerfile) in `ceffio` |
 | Publishing workflow | [`release.yml`](https://github.com/ceffio-suite/ceffio/blob/main/.github/workflows/release.yml), job `console-image` |
 | Console source code | [`internal/console`](https://github.com/ceffio-suite/ceffio/tree/main/internal/console) in `ceffio` |
 | Documentation | [README of `ceffio`](https://github.com/ceffio-suite/ceffio#console-image), section "Console image" |
+
+### About the image name
+
+The image is published as `ceffio`, not `ceffio-console`. A GHCR package
+belongs to the repository that first published it: the `ceffio-console`
+package was created here, and a workflow running in `ceffio-suite/ceffio`
+cannot push to it — the push is refused with
+`denied: permission_denied: write_package`, even with `packages: write`
+granted, because the check is against the package's owner and not against the
+workflow's own repository.
+
+The `ghcr.io/ceffio-suite/ceffio-console` package therefore still exists and
+remains pullable, with the tags it already had. It receives **nothing new**:
+every release of `ceffio` publishes to `ghcr.io/ceffio-suite/ceffio`.
 
 ## Correction to the previous README
 
