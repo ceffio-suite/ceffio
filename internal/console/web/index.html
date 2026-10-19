@@ -45,6 +45,19 @@
   .nav-item:hover{background:var(--panel);color:var(--txt)}
   .nav-item.active{background:linear-gradient(90deg,rgba(91,140,255,.16),rgba(56,189,248,.08));border-color:var(--line2);color:#fff}
   .nav-item svg{width:16px;height:16px;flex:0 0 16px}
+  /* Settings: the form is generated, so the styles are written once for every
+     module. A module-specific style would mean the page knows a feature. */
+  .settings-group{margin:14px 0 4px}
+  .settings-group h4{margin:0 0 4px;font-size:14px;font-weight:600;color:var(--txt)}
+  .settings-field{display:flex;flex-direction:column;gap:5px;margin:10px 0}
+  .settings-field label{font-size:13px;color:var(--muted);font-weight:500}
+  .settings-field input,.settings-field select{background:var(--panel);border:1px solid var(--line2);border-radius:8px;color:var(--txt);padding:8px 10px;font-size:13px;font-family:inherit}
+  .settings-field input[type=checkbox]{align-self:flex-start;width:16px;height:16px}
+  .settings-field small{color:var(--muted);font-size:12px}
+  .settings-actions{display:flex;gap:8px;margin-top:12px}
+  .settings-result{margin-top:8px;font-size:13px}
+  .settings-result.ok{color:#4ade80}
+  .settings-result.ko{color:#f87171}
   .side .foot{margin-top:auto;color:var(--faint);font-size:11px;padding:8px 12px;border-top:1px solid var(--line);line-height:1.6}
   .main{flex:1;min-width:0;display:flex;flex-direction:column}
   .topbar{display:flex;align-items:center;gap:14px;padding:14px 26px;border-bottom:1px solid var(--line);background:rgba(10,14,24,.75);backdrop-filter:blur(8px);position:sticky;top:0;z-index:5}
@@ -194,6 +207,10 @@
     <div class="nav-item" data-tab="infra">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><circle cx="7" cy="7" r="0.5" fill="currentColor"/><circle cx="7" cy="17" r="0.5" fill="currentColor"/></svg>
       Infrastructure
+    </div>
+    <div class="nav-item" data-tab="settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2 2 2 0 1 1-4 0 1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 4.6 15a2 2 0 1 1 0-4 1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 11 4.6a2 2 0 1 1 4 0 1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1A1.7 1.7 0 0 0 19.4 11a2 2 0 1 1 0 4z"/></svg>
+      Settings
     </div>
     <div class="foot" id="sideFoot">—</div>
   </aside>
@@ -391,6 +408,18 @@
           <tbody></tbody>
         </table>
       </section>
+
+      <!-- SETTINGS -->
+      <!-- GENERATED FROM THE API: this section learns nothing about any feature.
+           It asks /api/modules for the modules that declare settings, then draws
+           each form from the groups and fields the API returns. A module added
+           tomorrow appears here without this file changing — which is the whole
+           point of the settings contract, and what a test enforces. -->
+      <section class="section" id="tab-settings">
+        <h2 class="section-title">Settings</h2>
+        <p class="section-sub">Settings declared by each module. Secrets are never sent back to this page: a stored secret shows a placeholder, and leaving the field empty keeps it.</p>
+        <div id="settingsList"><p class="mut">Loading…</p></div>
+      </section>
     </div>
   </div>
 </div>
@@ -440,6 +469,7 @@
     certs:     ['TLS certificates', 'validity and expiry'],
     infra:     ['Infrastructure', 'internal layers and pods'],
     modules:   ['Optional modules', 'generated from the registry'],
+    settings:  ['Settings', 'declared by each module'],
   };
 
   document.querySelectorAll('.nav-item').forEach(el => el.onclick = () => {
@@ -453,6 +483,7 @@
     // Load on open: the state comes from the registry walk behind
     // /api/modules — the only place that knows what is installed.
     if (tab === 'modules') { loadModules(); }
+    if (tab === 'settings') { loadSettings(); }
   });
 
   setInterval(() => { $('clock').textContent = new Date().toLocaleTimeString('en-GB'); }, 1000);
@@ -1110,6 +1141,291 @@
     const v = st.version || '';
     if (!v) return '';
     return st.commit ? v + ' (' + String(st.commit).slice(0, 7) + ')' : v;
+  }
+
+  // --- Settings: drawn from what the API declares -----------------------------
+  //
+  // THIS CODE KNOWS NO FEATURE. It asks /api/modules which modules are
+  // configurable, then asks each one for its groups, and draws the fields from
+  // their declared type. A module added tomorrow appears here unchanged.
+  //
+  // WHY IT IS NOT A SPECIAL CASE PER MODULE: every field the API can describe
+  // is drawn by the five branches below, and a type that would need a sixth is
+  // a CONTRACT change — declared in internal/module, drawn here once — never a
+  // section written for one module.
+
+  async function loadSettings() {
+    const box = $('settingsList');
+    box.innerHTML = '<p class="mut">Loading…</p>';
+    let data;
+    try {
+      data = await api('/api/modules');
+    } catch (e) { box.innerHTML = '<p class="ko">' + esc(e.message) + '</p>'; return; }
+
+    // Only the modules that DECLARE settings. A Core module can be
+    // configurable: this is not the Modules section, where only optional ones
+    // carry an Install button.
+    const configurables = (data.modules || []).filter(m => m.configurable);
+    if (!configurables.length) {
+      box.innerHTML = '<p class="mut">No module declares settings.</p>';
+      return;
+    }
+
+    box.innerHTML = '';
+    for (const m of configurables) {
+      let vue;
+      try {
+        vue = await api('/api/modules/' + encodeURIComponent(m.id) + '/settings');
+      } catch (e) {
+        // One module failing to load must not hide the others.
+        const c = document.createElement('div');
+        c.className = 'card';
+        c.innerHTML = '<h3>' + esc(m.title || m.id) + '</h3><p class="ko">' + esc(e.message) + '</p>';
+        box.appendChild(c);
+        continue;
+      }
+      // The flag is carried on the object the drawing functions receive, so
+      // they do not need the whole settings response to decide.
+      m.__editable = vue.editable !== false;
+      box.appendChild(settingsCard(m, vue));
+    }
+  }
+
+  function settingsCard(m, vue) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    const h = document.createElement('h3');
+    h.textContent = m.title || m.id;
+    card.appendChild(h);
+    if (m.description) {
+      const d = document.createElement('p');
+      d.className = 'section-sub';
+      d.textContent = m.description;
+      card.appendChild(d);
+    }
+    if (!vue.editable) {
+      // Applied settings write into a component that must exist to read them.
+      const w = document.createElement('p');
+      w.className = 'mut';
+      w.textContent = 'This module is not installed: its settings cannot be applied yet.';
+      card.appendChild(w);
+    }
+    for (const g of (vue.groups || [])) {
+      card.appendChild(settingsGroup(m, g, vue.testable));
+    }
+    return card;
+  }
+
+  function settingsGroup(m, g, testable) {
+    const bloc = document.createElement('div');
+    bloc.className = 'settings-group';
+    const titre = document.createElement('h4');
+    titre.textContent = g.title || g.id;
+    bloc.appendChild(titre);
+    if (g.description) {
+      const d = document.createElement('p');
+      d.className = 'mut';
+      d.textContent = g.description;
+      bloc.appendChild(d);
+    }
+
+    const form = document.createElement('form');
+    form.onsubmit = (e) => { e.preventDefault(); sauverReglages(m, g, form); };
+
+    const valeurs = Object.assign({}, g.values || {});
+    for (const f of (g.fields || [])) {
+      form.appendChild(settingsField(f, valeurs));
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'settings-actions';
+    if (testable) {
+      const bt = document.createElement('button');
+      bt.type = 'button';
+      bt.className = 'btn-ghost';
+      bt.textContent = 'Test';
+      bt.onclick = () => testerReglages(m, g, form);
+      actions.appendChild(bt);
+    }
+    const bs = document.createElement('button');
+    // Never saves a module that is not installed: the values would be stored
+    // and applied nowhere, and the operator would believe them active.
+    bs.type = 'submit';
+    bs.className = 'btn-ghost';
+    bs.textContent = 'Save';
+    bs.disabled = (m.__editable === false);
+    actions.appendChild(bs);
+    form.appendChild(actions);
+
+    const res = document.createElement('div');
+    res.className = 'settings-result';
+    form.appendChild(res);
+
+    bloc.appendChild(form);
+    appliquerConditions(g, form, valeurs);
+    return bloc;
+  }
+
+  // settingsField draws ONE field, from its declared type. This is the only
+  // place a type is interpreted: a type added to the contract is drawn here
+  // once, and every module gains it.
+  function settingsField(f, valeurs) {
+    const wrap = document.createElement('div');
+    wrap.className = 'settings-field';
+    wrap.dataset.key = f.key;
+
+    const label = document.createElement('label');
+    label.textContent = f.label || f.key;
+    if (f.required) { label.textContent += ' *'; }
+    wrap.appendChild(label);
+
+    let input;
+    switch (f.type) {
+      case 'bool': {
+        input = document.createElement('input');
+        input.type = 'checkbox';
+        input.checked = (valeurs[f.key] === 'true');
+        break;
+      }
+      case 'choice': {
+        input = document.createElement('select');
+        for (const o of (f.options || [])) {
+          const opt = document.createElement('option');
+          opt.value = o.value;
+          opt.textContent = o.label || o.value;
+          input.appendChild(opt);
+        }
+        input.value = valeurs[f.key] || f.default || '';
+        break;
+      }
+      case 'number': {
+        input = document.createElement('input');
+        input.type = 'number';
+        input.value = valeurs[f.key] || f.default || '';
+        break;
+      }
+      case 'secret': {
+        input = document.createElement('input');
+        input.type = 'password';
+        // NEVER prefilled: the value is not sent to the page. The placeholder
+        // below says a value is stored, and an empty field keeps it.
+        input.value = '';
+        input.placeholder = (valeurs[f.key] === '••••')
+          ? 'already stored — leave empty to keep it'
+          : '';
+        break;
+      }
+      default: {
+        input = document.createElement('input');
+        input.type = 'text';
+        input.value = valeurs[f.key] || f.default || '';
+      }
+    }
+    input.name = f.key;
+    input.dataset.key = f.key;
+    wrap.appendChild(input);
+
+    if (f.help) {
+      const h = document.createElement('small');
+      h.className = 'mut';
+      h.textContent = f.help;
+      wrap.appendChild(h);
+    }
+    return wrap;
+  }
+
+  // appliquerConditions shows or hides the fields whose ShowWhen is unsatisfied.
+  //
+  // THE CONDITION IS DECLARED BY THE MODULE, applied here once and identically
+  // for every feature: a frontend deciding this itself would hard-code one
+  // module's logic. It is re-applied on every change, so the form follows the
+  // operator's choices without a reload.
+  function appliquerConditions(g, form, valeurs) {
+    const maj = () => {
+      for (const f of (g.fields || [])) {
+        if (!f.show_when) continue;
+        const champ = form.querySelector('[data-key="' + cssEchappe(f.key) + '"]');
+        if (!champ) continue;
+        const source = form.querySelector('[name="' + cssEchappe(f.show_when.key) + '"]');
+        if (!source) continue;
+        const montre = (source.value === f.show_when.equals);
+        champ.style.display = montre ? '' : 'none';
+      }
+    };
+    for (const f of (g.fields || [])) {
+      const source = form.querySelector('[name="' + cssEchappe(f.key) + '"]');
+      if (source) { source.addEventListener('change', maj); source.addEventListener('input', maj); }
+    }
+    maj();
+  }
+
+  function cssEchappe(s) { return String(s).replace(/["\\]/g, '\\$&'); }
+
+  // valeursDuFormulaire reads what the operator typed, in the shape the API
+  // expects: every field as a string.
+  function valeursDuFormulaire(form) {
+    const out = {};
+    form.querySelectorAll('input[name], select[name]').forEach(el => {
+      if (el.type === 'checkbox') { out[el.name] = el.checked ? 'true' : 'false'; }
+      else if (el.type === 'password' && el.value === '') { out[el.name] = ''; }
+      else { out[el.name] = el.value; }
+    });
+    return out;
+  }
+
+  async function sauverReglages(m, g, form) {
+    const res = form.querySelector('.settings-result');
+    res.className = 'settings-result';
+    res.textContent = '';
+    try {
+      await api('/api/modules/' + encodeURIComponent(m.id) + '/settings/' + encodeURIComponent(g.id), {
+        method: 'POST', body: JSON.stringify(valeursDuFormulaire(form)),
+      });
+      // Reload so a just-saved secret shows its placeholder: the answer is the
+      // current state, and the field must reflect what is now stored.
+      const vue = await api('/api/modules/' + encodeURIComponent(m.id) + '/settings');
+      const groupe = (vue.groups || []).find(x => x.id === g.id);
+      if (groupe) {
+        form.querySelectorAll('input[name], select[name]').forEach(el => {
+          const f = (g.fields || []).find(x => x.key === el.name);
+          if (!f) return;
+          if (f.type === 'secret') {
+            el.value = '';
+            el.placeholder = (groupe.values[f.key] === '••••')
+              ? 'already stored — leave empty to keep it' : '';
+          } else if (f.type === 'bool') {
+            el.checked = (groupe.values[f.key] === 'true');
+          } else if (document.activeElement !== el) {
+            el.value = groupe.values[f.key] || '';
+          }
+        });
+      }
+      res.className = 'settings-result ok';
+      res.textContent = 'Saved.';
+    } catch (e) {
+      // The message names the field: it comes from the server's validation.
+      res.className = 'settings-result ko';
+      res.textContent = e.message;
+    }
+  }
+
+  async function testerReglages(m, g, form) {
+    const res = form.querySelector('.settings-result');
+    res.className = 'settings-result';
+    res.textContent = 'Testing…';
+    try {
+      const r = await api('/api/modules/' + encodeURIComponent(m.id) + '/settings/' + encodeURIComponent(g.id) + '/test', {
+        method: 'POST', body: JSON.stringify(valeursDuFormulaire(form)),
+      });
+      res.className = 'settings-result ' + (r.ok ? 'ok' : 'ko');
+      // The steps are shown: a check that fails is only useful if the operator
+      // sees WHERE it failed.
+      const lignes = [r.detail || ''].concat(r.steps || []);
+      res.textContent = lignes.filter(Boolean).join(' · ');
+    } catch (e) {
+      res.className = 'settings-result ko';
+      res.textContent = e.message;
+    }
   }
 
   window.refresh = async () => {
