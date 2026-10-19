@@ -26,7 +26,21 @@ const (
 	officeImage = "docker.io/onlyoffice/documentserver:9.4.0.1"
 	ns          = "ceffio-office"
 	// ONLYOFFICE service name for the connector (internal URL).
-	officeService = "http://onlyoffice.ceffio-office.svc"
+	//
+	// THE TRAILING SLASH IS REQUIRED, and its absence is silent. The connector's
+	// DocumentService.php builds the conversion URL by CONCATENATION:
+	//     $urlToConverter = $documentServerUrl . "converter";
+	// Without the slash, "…svc" + "converter" gives "…svcconverter" — an
+	// unresolvable host, so EVERY document conversion fails (thumbnails,
+	// previews, PDF exports) while opening an editor still works: the editor
+	// uses another path. The symptom is a log full of
+	// "cURL error 6: Could not resolve host" and an "ONLYOFFICE indisponible"
+	// banner in Nextcloud, none of which point at a missing slash.
+	//
+	// internal/ingress writes the PUBLIC address with the same trailing slash.
+	// Both must keep it: they are two values of the same setting, read by the
+	// same code path.
+	officeService = "http://onlyoffice.ceffio-office.svc/"
 	// Nextcloud (ceffio-files namespace) for installing the connector.
 	nextcloudNS = "ceffio-files"
 )
@@ -228,12 +242,26 @@ func connectNextcloud(ctx context.Context) error {
 	if err := ensureOccApp(ctx, "onlyoffice"); err != nil {
 		return err
 	}
-	if err := runOcc(ctx, "config:app:set", "onlyoffice", "DocumentServerUrl", "--value="+officeService); err != nil {
-		return fmt.Errorf("DocumentServerUrl: %w", err)
-	}
 	if err := runOcc(ctx, "config:app:set", "onlyoffice", "DocumentServerInternalUrl", "--value="+officeService); err != nil {
 		return fmt.Errorf("DocumentServerInternalUrl: %w", err)
 	}
+	// DocumentServerUrl — the address the BROWSER loads the editor from — is
+	// deliberately NOT set here. internal/ingress owns it, because only that
+	// layer knows the public hostname and its TLS.
+	//
+	// WHY THIS MATTERS, and what it cost: this function used to write the
+	// INTERNAL address (.svc) here, and the ingress wrote the public one later
+	// in the sequence. A fresh install therefore ended up correct BY ORDER —
+	// the later write overwrote the earlier one. Every other path lost: an
+	// installation whose ingress wrote its value before this ran (or that
+	// never re-ran the ingress) kept a browser-facing URL pointing at
+	// "http://onlyoffice.ceffio-office.svc", a name that resolves INSIDE the
+	// cluster only. The browser could not load the editor and Nextcloud
+	// displayed "ONLYOFFICE indisponible, veuillez contacter votre
+	// administrateur" — while the Document Server itself was healthy and
+	// reachable, which is what made it expensive to diagnose.
+	//
+	// One writer per setting: the internal address here, the public one there.
 	// The ONLYOFFICE connector reads the "jwt_secret" key (AppConfig::$_jwtSecret),
 	// NOT "secret". Writing "secret" left the connector signing requests with an
 	// empty secret → the Document Server answered error -8 "Invalid token" and
