@@ -620,25 +620,6 @@ metadata:
   name: ceffio-admin
   namespace: ` + deployNS + `
 ---
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: ceffio-admin
-rules:
-# READ, at cluster level: the Overview tab, the certificates and the
-# infrastructure read pods, ingress and certificates of ALL namespaces.
-- apiGroups: [""]
-  resources: [pods, namespaces]
-  verbs: [get, list, watch]
-- apiGroups: ["apps"]
-  resources: [deployments]
-  verbs: [get, list, watch]
-- apiGroups: [networking.k8s.io]
-  resources: [ingresses]
-  verbs: [get, list, watch]
-- apiGroups: [cert-manager.io]
-  resources: [certificates]
-  verbs: [get, list, watch]
 ---
 # THE CONSOLE ADMINISTERS THE WHOLE PLATFORM, NOT JUST TWO NAMESPACES.
 #
@@ -682,6 +663,34 @@ rules:
 - apiGroups: [cert-manager.io]
   resources: [certificates]
   verbs: [get, list, watch]
+# THE MONITORING TAB reads the machine and the storage, which belong to no
+# namespace. FOUR ADDITIONS, ALL READ-ONLY:
+#
+#   - nodes: capacity and pressure conditions. Without it the page shows
+#     volumes and no machine, which answers half the question it exists for.
+#   - metrics.k8s.io: the LIVE consumption, served by the metrics server. It is
+#     a separate API group, so listing nodes does not grant it.
+#   - storage.k8s.io: the storage classes, to say which provisioner backs a
+#     volume rather than printing an empty column.
+#   - longhorn.io: the used space and the disk's fill. A claim reports only what
+#     it REQUESTED, so this is the ONLY source of what a volume holds — and the
+#     page exists because those two figures differ.
+#
+# WHY READ-ONLY IS NOT A DETAIL: these are the platform's disks. A console able
+# to create or delete a Longhorn volume could destroy data from a browser tab,
+# and none of the four rights above is needed for that.
+- apiGroups: [""]
+  resources: [nodes]
+  verbs: [get, list, watch]
+- apiGroups: [metrics.k8s.io]
+  resources: [nodes, pods]
+  verbs: [get, list]
+- apiGroups: [storage.k8s.io]
+  resources: [storageclasses]
+  verbs: [get, list]
+- apiGroups: [longhorn.io]
+  resources: [volumes, nodes, replicas, engines]
+  verbs: [get, list]
 # Write access on the objects that belong to no namespace.
 # create and update, NOT delete: the installation creates the namespace and
 # the deployer never touches it afterwards. "Remove" removes the workloads
