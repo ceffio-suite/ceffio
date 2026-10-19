@@ -26,7 +26,21 @@ const (
 	officeImage = "docker.io/onlyoffice/documentserver:9.4.0.1"
 	ns          = "ceffio-office"
 	// ONLYOFFICE service name for the connector (internal URL).
-	officeService = "http://onlyoffice.ceffio-office.svc"
+	//
+	// THE TRAILING SLASH IS REQUIRED, and its absence is silent. The connector's
+	// DocumentService.php builds the conversion URL by CONCATENATION:
+	//     $urlToConverter = $documentServerUrl . "converter";
+	// Without the slash, "…svc" + "converter" gives "…svcconverter" — an
+	// unresolvable host, so EVERY document conversion fails (thumbnails,
+	// previews, PDF exports) while opening an editor still works: the editor
+	// uses another path. The symptom is a log full of
+	// "cURL error 6: Could not resolve host" and an "ONLYOFFICE indisponible"
+	// banner in Nextcloud, none of which point at a missing slash.
+	//
+	// internal/ingress writes the PUBLIC address with the same trailing slash.
+	// Both must keep it: they are two values of the same setting, read by the
+	// same code path.
+	officeService = "http://onlyoffice.ceffio-office.svc/"
 	// Nextcloud (ceffio-files namespace) for installing the connector.
 	nextcloudNS = "ceffio-files"
 )
