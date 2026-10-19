@@ -79,14 +79,14 @@ func TestCouleursValides(t *testing.T) {
 	}
 }
 
-// TestToutesLesClesSontCouvertes : the settings really cover the nine keys of
-// the theme — five texts/colours plus four images.
+// TestToutesLesClesSontCouvertes : the settings really cover the eleven keys of
+// the theme — five texts/colours, two legal pages, four images.
 //
 // THE LIST IS READ FROM THE PACKAGE, never recopied here. A first version of
 // this test built its own list of expected keys; removing `slogan` from Deploy
 // then left it green, because it was checking its own description of the theme
-// instead of the theme. Reading textesEtCouleurs and images ties the test to
-// the code it protects.
+// instead of the theme. Reading textesEtCouleurs, images and the legal pages
+// ties the test to the code it protects.
 func TestToutesLesClesSontCouvertes(t *testing.T) {
 	posees := map[string]string{}
 	for _, kv := range textesEtCouleurs {
@@ -95,10 +95,17 @@ func TestToutesLesClesSontCouvertes(t *testing.T) {
 	for _, img := range images {
 		posees[img.Cle] = img.Nom
 	}
+	// The legal pages, with their defaults — which is what an installation
+	// gets when the environment says nothing.
+	pages := LegalPages{ImprintURL: ImprintURLDefaut, PrivacyURL: PrivacyURLDefaut}
+	for _, kv := range pages.clesLegales() {
+		posees[kv[0]] = kv[1]
+	}
 
-	// The theme is exactly these nine.
+	// The theme is exactly these eleven.
 	attendues := []string{
 		"name", "slogan", "url", "primary_color", "background_color",
+		"imprintUrl", "privacyUrl",
 		"logo", "logoheader", "favicon", "background",
 	}
 	for _, cle := range attendues {
@@ -108,15 +115,6 @@ func TestToutesLesClesSontCouvertes(t *testing.T) {
 	}
 	if len(posees) != len(attendues) {
 		t.Errorf("the theme sets %d keys, expected %d: %v", len(posees), len(attendues), posees)
-	}
-
-	// `imprintUrl` and `privacyUrl` are deliberately absent: they point at legal
-	// notices Ceffio does not host, and an empty link in a login footer is
-	// worse than no link.
-	for _, cle := range []string{"imprintUrl", "privacyUrl"} {
-		if _, ok := posees[cle]; ok {
-			t.Errorf("%q is set while Ceffio hosts no such page", cle)
-		}
 	}
 }
 
@@ -149,6 +147,117 @@ func TestPasDeSourceEmbarquee(t *testing.T) {
 	for _, s := range sources {
 		if _, err := assets.ReadFile(s); err == nil {
 			t.Errorf("%s is embedded in the binary: design sources belong in branding/", s)
+		}
+	}
+}
+
+// TestDepuisEnvironnement : the two legal-page variables are read, and a
+// malformed value is REFUSED rather than copied.
+//
+// WHY THE REFUSAL IS TESTED AND NOT ONLY THE HAPPY PATH: Nextcloud writes the
+// value into an href untouched. A value without a scheme becomes a relative
+// link resolved against the login page, so the visitor lands on
+// https://cloud.<domain>/ceffio.org/mentions and gets a 404 that looks like a
+// broken installation. Accepting it silently would produce exactly the dead
+// link the check exists to prevent.
+func TestDepuisEnvironnement(t *testing.T) {
+	cas := []struct {
+		nom        string
+		imprint    string
+		privacy    string
+		veutErreur bool
+		attendu    LegalPages
+	}{
+		{
+			nom:     "rien de configuré : aucune page",
+			attendu: LegalPages{},
+		},
+		{
+			nom:     "les deux URLs valides",
+			imprint: "https://ceffio.org/mentions-legales",
+			privacy: "https://ceffio.org/confidentialite",
+			attendu: LegalPages{
+				ImprintURL: "https://ceffio.org/mentions-legales",
+				PrivacyURL: "https://ceffio.org/confidentialite",
+			},
+		},
+		{
+			nom:     "http accepté (une installation interne peut ne pas avoir de TLS)",
+			imprint: "http://intranet.local/mentions",
+			attendu: LegalPages{ImprintURL: "http://intranet.local/mentions"},
+		},
+		{
+			nom:        "sans schéma : refusé",
+			imprint:    "ceffio.org/mentions-legales",
+			veutErreur: true,
+		},
+		{
+			nom:        "schéma exotique : refusé",
+			privacy:    "mailto:legal@ceffio.org",
+			veutErreur: true,
+		},
+		{
+			nom:     "espaces autour : nettoyés",
+			imprint: "  https://ceffio.org/mentions-legales  ",
+			attendu: LegalPages{ImprintURL: "https://ceffio.org/mentions-legales"},
+		},
+	}
+
+	for _, c := range cas {
+		t.Run(c.nom, func(t *testing.T) {
+			// t.Setenv restores the previous value automatically and forbids
+			// t.Parallel — which is what we want: these read the process
+			// environment, so they must not run concurrently.
+			t.Setenv(VariableImprintURL, c.imprint)
+			t.Setenv(VariablePrivacyURL, c.privacy)
+
+			obtenu, err := DepuisEnvironnement()
+			if c.veutErreur {
+				if err == nil {
+					t.Fatalf("expected a refusal, got %+v", obtenu)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if obtenu != c.attendu {
+				t.Errorf("got %+v, expected %+v", obtenu, c.attendu)
+			}
+		})
+	}
+}
+
+// TestClesLegalesIgnorentLeVide : an empty page is NOT written to Nextcloud.
+//
+// WHY THIS MATTERS: `occ theming:config imprintUrl ""` CLEARS the value. An
+// operator who configured the links once and then removed the variables must
+// not lose them — an absent setting means "do not touch", not "erase". The
+// default is applied by Deploy, not here, so this function must stay silent on
+// empty values.
+func TestClesLegalesIgnorentLeVide(t *testing.T) {
+	if cles := (LegalPages{}).clesLegales(); len(cles) != 0 {
+		t.Errorf("empty pages produced %d keys, expected none: %v", len(cles), cles)
+	}
+	une := LegalPages{ImprintURL: "https://ceffio.org/mentions-legales"}
+	cles := une.clesLegales()
+	if len(cles) != 1 || cles[0][0] != "imprintUrl" {
+		t.Errorf("one page produced %v, expected only imprintUrl", cles)
+	}
+}
+
+// TestPagesParDefautSontAbsolues : the shipped defaults are valid URLs.
+//
+// A default without a scheme is the trap this whole check exists for, and it
+// would be invisible: the default is applied AFTER DepuisEnvironnement, so it
+// never goes through the validation.
+func TestPagesParDefautSontAbsolues(t *testing.T) {
+	for nom, url := range map[string]string{
+		"imprintUrl": ImprintURLDefaut,
+		"privacyUrl": PrivacyURLDefaut,
+	} {
+		if !strings.HasPrefix(url, "https://") && !strings.HasPrefix(url, "http://") {
+			t.Errorf("default %s = %q is not an absolute URL", nom, url)
 		}
 	}
 }

@@ -31,6 +31,7 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/ceffio-suite/ceffio/internal/k8s"
@@ -84,6 +85,82 @@ const (
 	CouleurFond     = "#12151C" // ground behind the background image
 )
 
+// Variables d'environnement des pages légales.
+//
+// WHY THEY ARE SETTINGS AND NOT CONSTANTS: unlike the name or the colours,
+// which describe the product, these two links describe the OPERATOR. A
+// company running Ceffio must publish ITS OWN legal notices — the host, the
+// address, the data controller — and MANDEM's text would be wrong, and
+// misleading, on an installation belonging to someone else. Same reasoning as
+// the ACME settings: a value that varies per installation is read from the
+// environment once, never hard-coded.
+const (
+	VariableImprintURL = "CEFFIO_IMPRINT_URL"
+	VariablePrivacyURL = "CEFFIO_PRIVACY_URL"
+)
+
+// LegalPages holds the two links shown at the bottom of the login page.
+//
+// EMPTY IS A VALID VALUE, and the common one: most installations publish
+// neither page. Nextcloud then shows no link at all, which is the correct
+// outcome — a link pointing at a 404 is worse than no link, because it claims
+// a text exists and sends the reader to an error page.
+type LegalPages struct {
+	ImprintURL string
+	PrivacyURL string
+}
+
+// DepuisEnvironnement reads the two legal-page URLs from the environment.
+//
+// WHY A URL IS CHECKED AND NOT JUST COPIED: Nextcloud writes the value into an
+// href without touching it. A value like "ceffio.org/mentions" — no scheme —
+// becomes a RELATIVE link resolved against the login page, so the visitor
+// lands on https://cloud.<domain>/ceffio.org/mentions and gets a 404 that
+// looks like a broken installation. Requiring http:// or https:// turns a
+// silent dead link into an error at the moment the setting is read, which is
+// the same trade-off the ACME package makes for the challenge name.
+func DepuisEnvironnement() (LegalPages, error) {
+	var p LegalPages
+	for _, c := range []struct {
+		variable string
+		cible    *string
+	}{
+		{VariableImprintURL, &p.ImprintURL},
+		{VariablePrivacyURL, &p.PrivacyURL},
+	} {
+		brut := strings.TrimSpace(os.Getenv(c.variable))
+		if brut == "" {
+			continue
+		}
+		if !strings.HasPrefix(brut, "https://") && !strings.HasPrefix(brut, "http://") {
+			return LegalPages{}, fmt.Errorf(
+				"%s=%q: a legal page link must be an absolute URL (https://…) — "+
+					"without a scheme, Nextcloud resolves it against the login page "+
+					"and the visitor gets a 404", c.variable, brut)
+		}
+		*c.cible = brut
+	}
+	return p, nil
+}
+
+// clesLegales turns the pages into the `occ theming:config` pairs, skipping
+// the empty ones.
+//
+// SKIPPING IS THE POINT: `occ theming:config imprintUrl ""` would CLEAR a value
+// set by a previous run. An operator who once configured the links and then
+// removed the variables from the environment must not lose them silently — an
+// absent setting means "do not touch", not "erase".
+func (p LegalPages) clesLegales() [][2]string {
+	var cles [][2]string
+	if p.ImprintURL != "" {
+		cles = append(cles, [2]string{"imprintUrl", p.ImprintURL})
+	}
+	if p.PrivacyURL != "" {
+		cles = append(cles, [2]string{"privacyUrl", p.PrivacyURL})
+	}
+	return cles
+}
+
 // repertoireTemporaire : where the images are written inside the container
 // before occ reads them.
 //
@@ -108,6 +185,21 @@ var textesEtCouleurs = [][2]string{
 	{"background_color", CouleurFond},
 }
 
+// Les pages légales par défaut d'une installation Ceffio.
+//
+// WHY THERE IS A DEFAULT AT ALL, GIVEN THAT THE PAGES DO NOT EXIST YET: the
+// links are posed now so that they are already in place the day the pages are
+// published — an operator who installs the suite should not have to reconfigure
+// it to obtain a footer link that the product ships with. The paths follow the
+// French convention, which is what the rest of the product speaks.
+//
+// The variables override them for an installation publishing its own pages:
+// see DepuisEnvironnement.
+const (
+	ImprintURLDefaut = "https://ceffio.org/mentions-legales"
+	PrivacyURLDefaut = "https://ceffio.org/confidentialite"
+)
+
 // Deploy applies the Ceffio theme to the Nextcloud of a running installation,
 // idempotently.
 //
@@ -131,6 +223,29 @@ func Deploy(ctx context.Context) error {
 	// breaks the day it is removed — and the warning is buried in a long
 	// installation output.
 	for _, kv := range textesEtCouleurs {
+		if err := occ(ctx, "theming:config", kv[0], kv[1]); err != nil {
+			return fmt.Errorf("theming: setting %s: %w", kv[0], err)
+		}
+	}
+
+	// 2b. The legal pages: the defaults, unless the operator published their
+	//     own (an installation belonging to someone else must not link to
+	//     Ceffio's texts as if they were its own).
+	//
+	// A malformed value does not abort: it is caught here, named, and the rest
+	// of the theme is still applied — the links are a footer detail, and the
+	// identity must land regardless.
+	pages, err := DepuisEnvironnement()
+	if err != nil {
+		fmt.Printf("  ! legal pages ignored (%v)\n", err)
+	}
+	if pages.ImprintURL == "" {
+		pages.ImprintURL = ImprintURLDefaut
+	}
+	if pages.PrivacyURL == "" {
+		pages.PrivacyURL = PrivacyURLDefaut
+	}
+	for _, kv := range pages.clesLegales() {
 		if err := occ(ctx, "theming:config", kv[0], kv[1]); err != nil {
 			return fmt.Errorf("theming: setting %s: %w", kv[0], err)
 		}
