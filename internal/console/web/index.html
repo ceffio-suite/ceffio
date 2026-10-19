@@ -1097,6 +1097,21 @@
   // page; moduleAction/moduleConfirmYes/moduleConfirmNo are assigned to
   // window where they are defined above.
 
+  // versionLibelle rend la version du binaire qui sert cette page.
+  //
+  // WHY IT READS THE API RATHER THAN A CONSTANT: the static files are embedded
+  // in the same binary, so a hard-coded string would have to be edited at every
+  // release and would eventually lie. The value comes from /api/status, which
+  // builds it from the compile-time variables — one source, two frontends.
+  //
+  // The commit is shown only when it exists: an empty parenthesis on a local
+  // build reads like a defect rather than like "not applicable".
+  function versionLibelle(st) {
+    const v = st.version || '';
+    if (!v) return '';
+    return st.commit ? v + ' (' + String(st.commit).slice(0, 7) + ')' : v;
+  }
+
   window.refresh = async () => {
     if (!key) { openKeyModal(); return; }
     try {
@@ -1105,7 +1120,8 @@
       await renderUsers();
       await renderAdmin();
       await chargerSmtp();
-      $('sideFoot').innerHTML = esc(st.domain || '') + '<br>UPD ' + new Date().toLocaleTimeString('en-GB');
+      $('sideFoot').innerHTML = esc(st.domain || '') + ' · ' + esc(versionLibelle(st)) +
+        '<br>UPD ' + new Date().toLocaleTimeString('en-GB');
     } catch (e) { if (e.message !== 'auth') toast('Error: ' + e.message, 'ko'); }
   };
 
