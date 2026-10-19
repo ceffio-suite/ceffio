@@ -92,6 +92,12 @@ Kubernetes Secret. No secret value is ever typed as an option.`,
 		},
 	}
 
+	// The sign-in check, on its own subcommand: it VERIFIES an effect rather
+	// than deploying anything, and an operator looking for it will type
+	// `ceffio mail sso` — see mail_sso.go for why the check reads the server's
+	// answer instead of its configuration.
+	cmd.AddCommand(newMailSSOCmd())
+
 	cmd.Flags().StringVar(&domain, "domain", "ceffio.example.com", "Base domain")
 	cmd.Flags().StringVar(&hote, "relais", relaisParDefaut, "Outbound relay host")
 	cmd.Flags().IntVar(&port, "relais-port", portRelaisParDefaut, "Outbound relay port")
