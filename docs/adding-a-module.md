@@ -448,20 +448,145 @@ without evaluating build tags and would demand an untagged import of a
 tagged-only package. A normal module has no such problem — call
 `module.Register` directly and add your line to `all.go`.
 
+## 9. Settings
+
+Installing, observing and removing a feature needed only its package. **Settings
+did not** — they were written by hand in the console (the TLS page, the SMTP
+page), so the next feature with settings would have forced a console change. A
+module now **declares** its settings, and the console, the CLI and the installer
+serve them without knowing what they mean.
+
+The contract lives in `internal/module/reglages.go`: `Group`, `Field`,
+`Values`, `Validate`, and two **optional** interfaces.
+
+### Declaring a group
+
+```go
+func (m *yourModule) Settings() []module.Group {
+    return []module.Group{{
+        ID:          "relay",           // stable, snake_case: routes and storage
+        Title:       "Relay",
+        Description: "One sentence shown above the form.",
+        Fields: []module.Field{
+            {Key: "hote", Label: "Host", Type: module.Text, Required: true},
+            {Key: "port", Label: "Port", Type: module.Number, Default: "587"},
+            {Key: "mode", Label: "Mode", Type: module.Choice, Options: []module.Option{
+                {Value: "simple", Label: "Simple"},
+                {Value: "fancy", Label: "Fancy"},
+            }},
+            {Key: "token", Label: "Token", Type: module.Secret},
+            {Key: "colour", Label: "Colour", Type: module.Text, Pattern: `^#[0-9A-Fa-f]{6}$`,
+                ShowWhen: &module.Condition{Key: "mode", Equals: "fancy"}},
+        },
+    }}
+}
+```
+
+**Five field types, and no more**: `text`, `number`, `bool`, `choice`, `secret`.
+A sixth is a CONTRACT change — declared in `internal/module`, drawn once in the
+console's `settingsField` — never a section written for one module. If a setting
+does not fit, say so rather than inventing a type.
+
+`ShowWhen` may only point at a `Choice` or a `Bool` **of the same group, not
+itself conditional**: a field depending on a conditional field can never be
+reached. `verifierGroupes` refuses that shape at registration, which is where you
+find out — at startup, not on the operator's page.
+
+### The three methods
+
+```go
+func (m *yourModule) Current(ctx context.Context, env module.Env, group string) (module.Values, error)
+func (m *yourModule) Apply(ctx context.Context, env module.Env, group string, v module.Values) error
+func (m *yourModule) Test(ctx context.Context, env module.Env, group string, v module.Values) module.TestResult
+```
+
+`Test` is on a **separate interface** (`module.Testable`): verification is not
+possible for every setting — a colour has nothing to test — and a button that
+always answers OK teaches the operator to ignore it. Implement it only when the
+group can genuinely be checked.
+
+### The rules that carry the design
+
+**A secret never travels back.** `Current` answers `module.SecretSet` (`••••`)
+for a stored secret and `""` for an unset one, and `internal/settings` enforces
+it in the one place that reads on behalf of a frontend. A module returning the
+value leaks it to the console, the CLI and any proxy log at once.
+
+**An empty secret KEEPS the stored one.** A form is re-saved to change a port and
+the password field comes back empty because the value never reached the browser.
+`module.SecretSet` means the same thing: storing the placeholder would replace a
+working credential with `••••`.
+
+**An unknown key is refused**, not stored: a typo would be written, never read,
+and the setting would look like it had no effect.
+
+**A hidden field is not validated**: the console submits what it drew, and
+refusing a value the operator cannot see is not actionable.
+
+### Where the values are stored
+
+By default, `internal/settings`: ordinary values in the `ceffio-settings`
+ConfigMap (`ceffio-system`), one key per `<module>.<group>`; secrets in OpenBao
+under `kv/ceffio/settings/<module>/<group>`, with a Kubernetes Secret per module
+when no vault is configured. Both are picked up by `ceffio backup`.
+
+**A module MAY store elsewhere**, and must say why. Two cases exist today:
+
+- `ingress` writes its DNS credential to `kv/data/ceffio/tls/dns-provider`,
+  because the solver and the ClusterIssuer read it THERE — moving it would need a
+  migration and two copies to keep in step;
+- `files` writes the relay password to `smtp/relais`, for the same reason.
+
+A module that stores elsewhere still goes through `module.Validate`, so both
+frontends accept exactly the same values.
+
+### What it gives you for free
+
+- the console's **Settings** tab, one card per configurable module, forms drawn
+  from `Field`, `ShowWhen` applied live, Test and Save buttons;
+- `ceffio module config <id> [<group> [key=value …]]`, with `--test` and secrets
+  read from standard input (`token=-`) so they never appear in `ps`;
+- `ceffio backup` / `restore` carry the settings without anyone thinking about it.
+
+### The guardrail
+
+Two tests keep the promise from decaying, and neither searches for module IDs by
+name — `files`, `data`, `mail` and `console` are ordinary words, and a search
+would flag prose:
+
+- `TestRoutesConsoleAppartiennentALAListeFermee`: every route on the console's
+  mux belongs to a closed list. A route outside it is a console change made for
+  one feature;
+- `TestLaPageNAppelleAucunModuleEnDur`: `index.html` calls no `/api/modules/<id>`
+  literally and holds no module ID as a quoted string.
+
+**If you need an interface element the contract does not cover, EXTEND THE
+CONTRACT** — declared in `internal/module`, drawn once by the console — never a
+section written for your module. That is the rule these tests enforce, and the
+reason the seventh feature costs as little as the first.
+
 ## Checklist
 
 1. New package under `internal/modules/<name>/`, SPDX header, comments in
-   English explaining WHY (CONTRIBUTING.md rule 7).
-2. Implement the four methods; honour the two contracts (idempotent
-   `Install`, complete and re-runnable `Uninstall`).
+   English explaining WHY.
+2. `Info`, `State`, `Uninstall`, `Install` (idempotent, with a complete and
+   re-runnable `Uninstall`).
 3. Fill `Info` honestly: `Kind: module.Optional`, a deliberate `Default`,
    `Requires` for every dependency, real `Namespaces`, `Resources` and
    `Warning` when they inform a decision, `Permissions` limited to what the
    console must do.
-4. `func init() { module.Register(&yourModule{}) }`.
-5. One blank-import line in `internal/modules/all.go`.
-6. Tests: `Info` validity + (if the module installs resources itself) the
-   fake-clientset contract tests.
-7. `gofmt -l .`, `go build ./...`, `go vet ./...`, `make test`,
+4. **If the feature has settings**: implement `Configurable` (`Settings`,
+   `Current`, `Apply`), and `Testable` when the group can genuinely be checked.
+   Declare the groups and their fields; do NOT add a console route, a console
+   section or a CLI subcommand — they are served by the contract.
+5. `func init() { module.Register(&yourModule{}) }`.
+6. One blank-import line in `internal/modules/all.go`.
+7. Tests: `Info` validity, (if the module installs resources itself) the
+   fake-clientset contract tests, and the settings round trip
+   (`Current` → `Apply` → `Current`) when it has settings.
+8. `gofmt -l .`, `go build ./...`, `go vet ./...`, `make test`,
    `go test -tags demo ./...` — all green.
-8. Nothing else. If anything else changed, you changed too much.
+9. **Nothing else.** If anything else changed, you changed too much — and the
+   test of the demo module's settings checks exactly that for its own package.
+   A console route, a page in `web/index.html` or a CLI subcommand named after
+   your feature means the contract was not extended where it should have been.
