@@ -131,6 +131,23 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/favicon.svg", s.handleIcone)
 	mux.HandleFunc("/favicon-32.png", s.handleIcone)
 	mux.HandleFunc("/apple-touch-icon.png", s.handleIcone)
+
+	// UNKNOWN /api/ PATHS ANSWER 404. Without this, the catch-all below serves
+	// the HTML page with a 200 for anything, including a route that was removed:
+	// measured, GET /api/nexistepas returned 200 text/html. A script calling a
+	// deleted endpoint would receive a page instead of a refusal, and would try
+	// to parse HTML as JSON — the failure surfaces far from its cause.
+	//
+	// It is also what made the deprecated aliases unnecessary: what removed the
+	// need for them was the page being served by the same binary as the API, so
+	// a stale page cannot exist. A stale SCRIPT now gets a clear 404.
+	//
+	// Registered before "/" because Go 1.22's mux gives the more specific
+	// pattern priority, not the first registered one.
+	mux.HandleFunc("/api/", s.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		apiErr(w, http.StatusNotFound, "no such endpoint: "+r.URL.Path)
+	}))
+
 	mux.HandleFunc("/", s.handleIndex) // public page (the JS asks for the key for /api/*)
 	mux.HandleFunc("/api/status", s.requireAuth(s.handleStatus))
 	mux.HandleFunc("/api/users", s.requireAuth(s.handleUsers))
@@ -145,12 +162,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/modules", s.requireAuth(s.handleModulesList))
 	mux.HandleFunc("GET /api/modules/{id}", s.requireAuth(s.handleModuleDetail))
 	mux.HandleFunc("POST /api/modules/{id}", s.requireAuth(s.handleModuleAction))
-	// Deprecated aliases kept for cached pages and pre-existing scripts:
-	// they delegate to the registry modules (live-transcription,
-	// exapps-daemon) instead of carrying their own logic.
-	// Deprecated: remove after v0.7.
-	mux.HandleFunc("/api/transcription", s.requireAuth(s.handleTranscriptionAlias))
-	mux.HandleFunc("/api/exapps", s.requireAuth(s.handleExappsAlias))
 	mux.HandleFunc("/api/admin", s.requireAuth(s.handleAdmin))
 	mux.HandleFunc("/api/admin/rotate", s.requireAuth(s.handleAdminRotate))
 	// NO /api/apps routes: application management happens in the INTERFACE OF
