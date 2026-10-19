@@ -203,16 +203,32 @@ func AnnotationsAgentNamed(indent int, role, nomSecret, chemin, gabarit string) 
 // GabaritSecret rend un gabarit qui écrit des paires "clé: valeur" pour un
 // Secret Kubernetes, à partir d'une entrée du coffre.
 //
-// CHAQUE CLÉ DE L'ENTRÉE DEVIENT UNE CLÉ DU SECRET, sans renommage : c'est ce
-// que le consommateur attend, puisqu'il marshale le Secret entier vers sa
-// bibliothèque. La liste des clés est donc celle de l'entrée du coffre, et
-// c'est l'opérateur qui la compose en déposant son identifiant.
-func GabaritSecret(chemin string, cles []string) string {
+// LA CLÉ DU SECRET ET LE CHAMP DU COFFRE SONT DEUX NOMS DIFFÉRENTS, et c'est
+// tout l'intérêt de cette variante : cert-manager impose ses propres noms de
+// clés (`api-token`, avec un tiret), tandis que le champ stocké dans le coffre
+// est celui que l'opérateur a écrit (`api_token`, avec un souligné, le nom que
+// libdns utilise). Écrire le même nom des deux côtés ferait demander au coffre
+// un champ que personne n'a déposé — le rendu échouerait en nommant un champ
+// que l'opérateur n'a jamais saisi, après une sauvegarde qui semblait réussie.
+//
+// paires est une liste de {clé du Secret, champ du coffre}.
+func GabaritSecretPaires(chemin string, paires [][2]string) string {
 	var b strings.Builder
 	b.WriteString("{{ with secret \"" + chemin + "\" }}\n")
-	for _, c := range cles {
-		b.WriteString(c + ": '" + ChampCoffre(c) + "'\n")
+	for _, p := range paires {
+		b.WriteString(p[0] + ": '" + ChampCoffre(p[1]) + "'\n")
 	}
 	b.WriteString("{{ end }}\n")
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// GabaritSecret écrit un Secret dont les clés portent le MÊME nom que les champs
+// du coffre — le cas du solver webhook, qui marshale le Secret entier vers
+// libdns sans renommer quoi que ce soit.
+func GabaritSecret(chemin string, cles []string) string {
+	paires := make([][2]string, 0, len(cles))
+	for _, c := range cles {
+		paires = append(paires, [2]string{c, c})
+	}
+	return GabaritSecretPaires(chemin, paires)
 }

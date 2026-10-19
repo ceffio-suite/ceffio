@@ -6,8 +6,11 @@ package ingress
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/ceffio-suite/ceffio/internal/acme"
+	"github.com/ceffio-suite/ceffio/internal/k8sapi"
+	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"github.com/ceffio-suite/ceffio/internal/vault"
 )
 
@@ -70,11 +73,13 @@ const (
 	//
 	// THE `kv/data/` PREFIX IS PART OF THE PATH: every other component of the
 	// suite uses the full mount+path form (kv/data/ceffio/nextcloud/db), and
-	// the injector template addresses the KV v2 engine directly. Writing
-	// "ceffio/tls/dns-provider" would resolve against whatever mount the agent
-	// defaults to, and the file would come out empty with no error naming the
-	// path.
+	// the injector template addresses the KV v2 engine directly.
 	cheminBaoIdentifiantsDNS = "kv/data/ceffio/tls/dns-provider"
+	// cheminCoffreMount / cheminCoffreSousChemin: the same path, split the way
+	// secrets.LireEntreeCoffre expects it (mount, sub-path). Written once here
+	// so the two forms cannot drift.
+	cheminCoffreMount      = "ceffio"
+	cheminCoffreSousChemin = "tls/dns-provider"
 )
 
 // deployerWebhookDNS installs the solver and wires its credentials from OpenBao.
@@ -105,7 +110,15 @@ func deployerWebhookDNS(ctx context.Context, reglages acme.Reglages) error {
 	// THE CREDENTIAL SECRET IS ALWAYS NEEDED, in-tree or not: cert-manager's
 	// own solvers name it too. Applied first, so the issuer below never
 	// references a Secret that does not exist yet.
+	//
+	// THE OBJECT AND ITS CONTENT ARE TWO STEPS, and that separation is not
+	// cosmetic: the manifest declares the Secret and the keys it must carry,
+	// while ecrireSecretDNS reads the vault and fills them. Merging the two
+	// would mean putting a credential in a manifest.
 	if err := apply(ctx, secretDNSManifests(reglages)); err != nil {
+		return err
+	}
+	if err := ecrireSecretDNS(ctx, reglages); err != nil {
 		return err
 	}
 
@@ -147,23 +160,24 @@ func deployerWebhookDNS(ctx context.Context, reglages acme.Reglages) error {
 	return nil
 }
 
-// secretDNSManifests crée le Secret des identifiants DNS, alimenté par OpenBao.
+// secretDNSManifests crée l'objet Secret des identifiants DNS.
 //
-// WHY IT IS NEEDED FOR THE IN-TREE PROVIDERS TOO, and not only for the webhook:
-// cert-manager's own solvers reference a Secret by name (`apiTokenSecretRef`,
-// `tsigSecretSecretRef`…). Cloudflare in-tree still needs `ceffio-acme-dns` to
-// exist with an `api-token` key — nothing is deployed, but the Secret is
-// mandatory. Forgetting it produces an issuer that resolves to no credential
-// and a challenge that never completes, with the reason buried in the
-// CertificateRequest events.
+// WHY THE SECRET IS WRITTEN BY CEFFIO AND NOT BY THE INJECTOR, for the in-tree
+// providers: OpenBao's injector is a MUTATING WEBHOOK ON PODS — verified on the
+// cluster, its admission rule is `CREATE, UPDATE` on `pods` and nothing else. A
+// Secret carrying the injection annotations is therefore left EMPTY: no pod
+// exists to be mutated, since cert-manager's own solvers need no component.
 //
-// THE SECRET IS THE INJECTOR'S OUTPUT, never a hand-written object: the vault
-// is the single source, and a copy pasted into the cluster would diverge at the
-// first rotation.
+// The file mode used by every other component cannot apply here either: there
+// is no container to read /secrets/env. So the value is read from the vault by
+// Ceffio itself and written as a Kubernetes Secret — which is the only shape
+// cert-manager's solvers accept (`apiTokenSecretRef`, `tsigSecretSecretRef`…).
+//
+// THE VAULT REMAINS THE SINGLE SOURCE: nothing is typed in by hand, a rotation
+// happens in the vault, and this function is called on every install so the
+// Secret follows.
 func secretDNSManifests(reglages acme.Reglages) string {
-	// The field names cert-manager's solvers expect, per provider. They are
-	// FIXED by cert-manager, not chosen here — hence the mapping.
-	cles := clesSecretCertManager(reglages.Provider)
+	paires := pairesSecret(reglages.Provider)
 
 	return fmt.Sprintf(`apiVersion: v1
 kind: ServiceAccount
@@ -176,38 +190,131 @@ kind: Secret
 metadata:
   name: %[2]s
   namespace: %[1]s
-  annotations:
-%[3]s
   labels:
     app.kubernetes.io/part-of: ceffio
+    app.kubernetes.io/managed-by: ceffio
 type: Opaque
-`, nsCertManager, secretACME,
-		vault.AnnotationsAgentNamed(4, roleOpenBaoDNS, secretACME, cheminBaoIdentifiantsDNS,
-			vault.GabaritSecret(cheminBaoIdentifiantsDNS, cles)))
+stringData:
+%[3]s
+`, nsCertManager, secretACME, lignesStringData(paires))
 }
 
-// clesSecretCertManager returns the key names the IN-TREE solvers of
-// cert-manager read from the Secret.
+// lignesStringData renders the `champ: ”` lines of the Secret body.
 //
-// DIFFERENT FROM clesProvider, and the difference is the trap: the webhook
-// marshals the whole Secret to a libdns library, which wants `api_token`; the
-// in-tree solvers want their own fixed key names (`api-token` for Cloudflare,
-// `tsig-secret` for RFC 2136…). Writing the libdns names here would produce an
-// issuer that references a key the Secret does not have.
-func clesSecretCertManager(p acme.Provider) []string {
+// THE VALUES ARE EMPTY HERE, ON PURPOSE: the real content is written by
+// ecrireSecretDNS below, which reads the vault. Declaring the keys in the
+// manifest keeps the object readable — an operator sees which fields the
+// provider needs — while leaving no credential in a manifest that could be
+// committed.
+func lignesStringData(paires [][2]string) string {
+	var b strings.Builder
+	for _, p := range paires {
+		fmt.Fprintf(&b, "  %s: \"\"\n", p[0])
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// ecrireSecretDNS lit le coffre et pose le Secret que le solver lira.
+//
+// THE TRANSLATION BETWEEN THE TWO NAMES HAPPENS HERE, and it is the trap of
+// this whole path: the KEY IN THE SECRET is fixed by cert-manager (`api-token`,
+// with a hyphen), while the FIELD IN THE VAULT is the one the operator stored
+// (`api_token`, with an underscore — the libdns name the console's TLS page
+// writes). Filling one from the other is this function's only job.
+func ecrireSecretDNS(ctx context.Context, reglages acme.Reglages) error {
+	paires := pairesSecret(reglages.Provider)
+	if len(paires) == 0 {
+		return nil
+	}
+
+	entree, err := secrets.LireEntreeCoffre(ctx, secrets.DepuisEnvironnement(),
+		cheminCoffreMount, cheminCoffreSousChemin)
+	if err != nil {
+		return fmt.Errorf("reading the DNS credential from the vault (%s/%s): %w — "+
+			"store it from the console's TLS page before enabling dns01",
+			cheminCoffreMount, cheminCoffreSousChemin, err)
+	}
+
+	donnees := map[string][]byte{}
+	var manquants []string
+	for _, p := range paires {
+		v := strings.TrimSpace(entree[p[1]])
+		if v == "" {
+			manquants = append(manquants, p[1])
+			continue
+		}
+		donnees[p[0]] = []byte(v)
+	}
+	if len(manquants) > 0 {
+		// SAY WHICH FIELD IS MISSING rather than writing a Secret with holes:
+		// the solver would then fail every challenge with a provider-side
+		// authentication error, and nothing would name the absent field.
+		return fmt.Errorf("the vault entry %s/%s lacks %v — the %s solver needs "+
+			"them and cannot authenticate without (store them from the console's TLS page)",
+			cheminCoffreMount, cheminCoffreSousChemin, manquants, reglages.Provider)
+	}
+
+	cli, err := k8sapi.Nouveau()
+	if err != nil {
+		return fmt.Errorf("Kubernetes client: %w", err)
+	}
+	if err := cli.PoserSecret(ctx, nsCertManager, secretACME, donnees); err != nil {
+		return err
+	}
+	fmt.Printf("∙ DNS-01 credential written to secret %s/%s for %s\n",
+		nsCertManager, secretACME, reglages.Provider)
+	return nil
+}
+
+// pairesSecret associe, pour chaque provider, la clé attendue DANS LE SECRET par
+// cert-manager et le champ correspondant DANS LE COFFRE.
+//
+// WHY TWO NAMES AND NOT ONE: they belong to two different worlds and neither can
+// be renamed.
+//
+//	cert-manager fixes the Secret key: `api-token` for Cloudflare (a hyphen),
+//	because its own solver reads exactly that. The ClusterIssuer references it,
+//	and a mismatch means the issuer resolves to no credential.
+//
+//	the vault field is the one the operator STORED. For Cloudflare that is
+//	`api_token`, because libdns — the interface the webhook solver marshals to —
+//	names its fields with underscores, and the console's TLS page writes what
+//	the operator typed.
+//
+// Writing one name for both produces a render that asks the vault for a field
+// nobody stored: it fails with a message naming a field the operator never
+// wrote, on a screen that showed a successful save. This table is the only
+// place the translation happens.
+func pairesSecret(p acme.Provider) [][2]string {
 	switch p {
 	case acme.ProviderCloudflare:
-		return []string{"api-token"}
+		return [][2]string{{"api-token", "api_token"}}
 	case acme.ProviderRoute53:
-		return []string{"access-key-id", "secret-access-key", "region"}
+		return [][2]string{
+			{"access-key-id", "access_key_id"},
+			{"secret-access-key", "secret_access_key"},
+			{"region", "region"},
+		}
 	case acme.ProviderRFC2136:
-		return []string{"tsig-secret", "tsig-key-name", "tsig-algorithm", "nameserver"}
+		return [][2]string{
+			{"tsig-secret", "tsig_secret"},
+			{"tsig-key-name", "tsig_key"},
+			{"tsig-algorithm", "tsig_algorithm"},
+			{"nameserver", "nameserver"},
+		}
 	case acme.ProviderACMEDNS:
-		return []string{"acmedns-account", "acmedns-host"}
+		return [][2]string{
+			{"acmedns-account", "username"},
+			{"acmedns-host", "api_url"},
+		}
 	default:
-		// Out-of-tree: the webhook's own field names, which are the vault
-		// entry's.
-		return clesProvider(p)
+		// Out-of-tree: the webhook marshals the Secret straight to libdns, so
+		// the key in the Secret must BE the vault field name, unchanged.
+		var out [][2]string
+		for _, c := range clesProvider(p) {
+			out = append(out, [2]string{c, c})
+		}
+		return out
 	}
 }
 
