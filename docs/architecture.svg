@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1000" width="1200" height="1000" role="img" aria-label="The browser reaches Traefik over HTTPS, which routes by host name to Keycloak, Nextcloud, ONLYOFFICE, the console, OpenBao, Stalwart and the Talk signaling server. Keycloak provides SSO OIDC to Nextcloud, the console, OpenBao and Stalwart. Nextcloud calls ONLYOFFICE with a JWT token, and drives its External Apps through HaRP, which deploys them in the ceffio-exapps namespace and reaches them over an FRP tunnel. The Talk recording server joins calls through the signaling server. WebRTC media goes directly from the browser to Janus and coturn, in hostNetwork, without passing through Traefik. The CLI drives the K3s Kubernetes API.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1100" width="1200" height="1100" role="img" aria-label="The browser reaches Traefik over HTTPS, which routes by host name to Keycloak, Nextcloud, ONLYOFFICE, the console, OpenBao, Stalwart and the Talk signaling server. Keycloak provides SSO OIDC to Nextcloud, the console, OpenBao and Stalwart. Nextcloud calls ONLYOFFICE with a JWT token, and drives its External Apps through HaRP, an optional module that lives with them in ceffio-exapps. The Talk recording server joins calls through the signaling server. WebRTC media goes directly from the browser to Janus and coturn, in hostNetwork, without passing through Traefik. cert-manager issues the certificates, CloudNativePG runs PostgreSQL, and Longhorn provides every persistent volume. The CLI and the admin console are the same binary and drive the K3s Kubernetes API.">
 <style>
 .t-ns,.t-lbl,.t-host{font-family:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px}
 .t-ns{letter-spacing:.04em}
@@ -32,7 +32,7 @@
 .pill{fill:#11141A;stroke:#2C313B}
 .ah{fill:#ECEAE4}.ah-sso{fill:#A98BF0}.ah-media{fill:#F5A55A}}
 </style>
-<rect class="paper" x="0" y="0" width="1200" height="1000"/>
+<rect class="paper" x="0" y="0" width="1200" height="1100"/>
 <defs>
   <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0 0 L10 5 L0 10 z"/></marker>
   <marker id="ahs" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-sso" d="M0 0 L10 5 L0 10 z"/></marker>
@@ -40,7 +40,7 @@
 </defs>
 
 <!-- Cluster -->
-<rect class="frame" x="180" y="20" width="1010" height="925" rx="12"/>
+<rect class="frame" x="180" y="20" width="1010" height="1010" rx="12"/>
 <text class="t-ns" x="196" y="42">K3S CLUSTER · ONE LINUX HOST</text>
 
 <!-- Outside the cluster -->
@@ -115,17 +115,16 @@
 <line class="edge sso" x1="520" y1="250" x2="520" y2="278" marker-end="url(#ahs)"/>
 <line class="edge sso" x1="790" y1="250" x2="790" y2="278" marker-end="url(#ahs)"/>
 <line class="edge sso" x1="1060" y1="250" x2="1060" y2="278" marker-end="url(#ahs)"/>
-<text class="t-lbl sso" x="925" y="243" text-anchor="middle">SSO · OIDC</text>
+<text class="t-lbl sso" x="655" y="243" text-anchor="middle">SSO · OIDC</text>
 
 <!-- Row 2 -->
 <rect class="grp" x="400" y="280" width="240" height="200" rx="10"/>
 <text class="t-ns" x="414" y="300">ceffio-system</text>
-<rect class="node" x="416" y="310" width="208" height="56" rx="7"/>
-<text class="t-name" x="430" y="333">Admin console</text>
-<text class="t-sub" x="430" y="352">services · certificates · accounts</text>
-<rect class="node" x="416" y="378" width="208" height="56" rx="7"/>
-<text class="t-name" x="430" y="401">HaRP</text>
-<text class="t-sub" x="430" y="420">ExApp daemon · :8780 / :8782</text>
+<rect class="node" x="416" y="312" width="208" height="64" rx="7"/>
+<text class="t-name" x="430" y="338">Admin console</text>
+<text class="t-sub" x="430" y="357">status · accounts · modules</text>
+<text class="t-sub" x="416" y="398">same binary as the CLI; installs</text>
+<text class="t-sub" x="416" y="413">and removes optional modules</text>
 <rect class="pill" x="416" y="444" width="90" height="24" rx="12"/>
 <text class="t-host" x="461" y="460" text-anchor="middle">admin.</text>
 
@@ -167,7 +166,7 @@
 
 <rect class="node" x="416" y="644" width="150" height="56" rx="7"/>
 <text class="t-name" x="430" y="667">talk-recording</text>
-<text class="t-sub" x="430" y="686">optional</text>
+<text class="t-sub" x="430" y="686">optional · on by default</text>
 <line class="edge" x1="491" y1="644" x2="491" y2="618" marker-end="url(#ah)"/>
 <text class="t-sub" x="582" y="664">joins the call as a hidden</text>
 <text class="t-sub" x="582" y="679">participant, then uploads</text>
@@ -177,33 +176,49 @@
 
 <rect class="grp" x="940" y="520" width="240" height="220" rx="10"/>
 <text class="t-ns" x="954" y="540">ceffio-exapps</text>
-<rect class="node" x="956" y="546" width="208" height="64" rx="7"/>
-<text class="t-name" x="970" y="572">live-transcription</text>
-<text class="t-sub" x="970" y="591">ExApp · Vosk · optional</text>
-<text class="t-sub" x="956" y="634">joins live calls through the</text>
-<text class="t-sub" x="956" y="649">signaling server (spreed.)</text>
-<text class="t-sub" x="956" y="679">created by HaRP; Nextcloud</text>
-<text class="t-sub" x="956" y="694">reaches it over the FRP tunnel</text>
+<rect class="node" x="956" y="550" width="208" height="54" rx="7"/>
+<text class="t-name" x="970" y="573">HaRP</text>
+<text class="t-sub" x="970" y="592">ExApp daemon · optional</text>
+<line class="edge" x1="1060" y1="604" x2="1060" y2="618" marker-end="url(#ah)"/>
+<rect class="node" x="956" y="620" width="208" height="54" rx="7"/>
+<text class="t-name" x="970" y="643">live-transcription</text>
+<text class="t-sub" x="970" y="662">ExApp · Vosk · optional</text>
+<text class="t-sub" x="956" y="696">joins live calls through the</text>
+<text class="t-sub" x="956" y="711">signaling server (spreed.)</text>
 
-<!-- Row 4 -->
-<rect class="grp" x="940" y="770" width="240" height="160" rx="10"/>
-<text class="t-ns" x="954" y="790">ceffio-data</text>
-<rect class="node" x="956" y="800" width="208" height="54" rx="7"/>
-<text class="t-name" x="970" y="823">PostgreSQL</text>
-<text class="t-sub" x="970" y="842">CNPG · Keycloak, Nextcloud</text>
-<rect class="node" x="956" y="864" width="208" height="54" rx="7"/>
-<text class="t-name" x="970" y="887">Valkey</text>
-<text class="t-sub" x="970" y="906">Nextcloud cache and locks</text>
+<!-- Row 4: what every other layer stands on -->
+<rect class="grp" x="400" y="850" width="240" height="160" rx="10"/>
+<text class="t-ns" x="414" y="870">cert-manager · cnpg-system</text>
+<rect class="node" x="416" y="880" width="208" height="54" rx="7"/>
+<text class="t-name" x="430" y="903">cert-manager</text>
+<text class="t-sub" x="430" y="922">certificates · HTTP-01 or DNS-01</text>
+<rect class="node" x="416" y="944" width="208" height="54" rx="7"/>
+<text class="t-name" x="430" y="967">CloudNativePG</text>
+<text class="t-sub" x="430" y="986">PostgreSQL operator</text>
 
-<!-- Nextcloud drives its External Apps through HaRP (AppAPI, port 8780).
-     Runs down the gutter between the first two columns. -->
-<polyline class="edge" points="686,124 655,124 655,406 628,406" marker-end="url(#ah)"/>
-<text class="t-lbl" x="649" y="270" text-anchor="end">AppAPI</text>
+<rect class="grp" x="670" y="850" width="240" height="160" rx="10"/>
+<text class="t-ns" x="684" y="870">longhorn-system</text>
+<rect class="node" x="686" y="880" width="208" height="54" rx="7"/>
+<text class="t-name" x="700" y="903">Longhorn</text>
+<text class="t-sub" x="700" y="922">replicated volumes</text>
+<text class="t-sub" x="686" y="958">every PVC: databases, files,</text>
+<text class="t-sub" x="686" y="973">mail, Keycloak · needs iSCSI</text>
+<text class="t-sub" x="686" y="988">on the host</text>
 
-<!-- HaRP deploys the ExApps through the Kubernetes API and reaches them
-     over its FRP tunnel. Runs in the gutter between rows 2 and 3. -->
-<polyline class="edge" points="560,434 560,500 1120,500 1120,544" marker-end="url(#ah)"/>
-<text class="t-lbl" x="810" y="494" text-anchor="middle">deploys ExApps · FRP tunnel</text>
+<rect class="grp" x="940" y="850" width="240" height="160" rx="10"/>
+<text class="t-ns" x="954" y="870">ceffio-data</text>
+<rect class="node" x="956" y="880" width="208" height="54" rx="7"/>
+<text class="t-name" x="970" y="903">PostgreSQL</text>
+<text class="t-sub" x="970" y="922">CNPG · Keycloak, Nextcloud</text>
+<rect class="node" x="956" y="944" width="208" height="54" rx="7"/>
+<text class="t-name" x="970" y="967">Valkey</text>
+<text class="t-sub" x="970" y="986">Nextcloud cache and locks</text>
+
+<!-- Nextcloud drives its External Apps through HaRP (AppAPI, FRP tunnel).
+     Runs down the gutter between the last two columns, then along the gap
+     between rows 2 and 3. Drawn after the groups so they do not cover it. -->
+<polyline class="edge" points="894,124 925,124 925,500 1060,500 1060,548" marker-end="url(#ah)"/>
+<text class="t-lbl" x="935" y="494">AppAPI · FRP</text>
 
 <!-- Media: straight to the host ports, never through Traefik -->
 <polyline class="edge media" points="75,410 75,760 852,760"/>
@@ -214,7 +229,7 @@
 <text class="t-lbl media" x="196" y="822">UDP 49152–49200 → coturn relay, the range relayed media uses</text>
 
 <!-- Legend -->
-<g transform="translate(20,975)">
+<g transform="translate(20,1070)">
 <line class="edge" x1="0" y1="0" x2="28" y2="0"/><text class="t-sub" x="36" y="4">request or call</text>
 <line class="edge sso" x1="170" y1="0" x2="198" y2="0"/><text class="t-sub" x="206" y="4">authentication delegated to Keycloak</text>
 <line class="edge media" x1="440" y1="0" x2="468" y2="0"/><text class="t-sub" x="476" y="4">audio and video stream</text>

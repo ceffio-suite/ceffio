@@ -86,19 +86,30 @@ building block in its own namespace, directly through the Kubernetes API
 every deployment is idempotent.
 
 <p align="center">
-  <img src="docs/architecture.svg" alt="Ceffio architecture: Traefik serves the web applications by subdomain, Keycloak provides SSO, WebRTC media goes straight to Janus and coturn." width="100%">
+  <img src="docs/architecture.svg" alt="Ceffio architecture: Traefik serves the web applications by subdomain, Keycloak provides SSO, WebRTC media goes straight to Janus and coturn, and the whole stack stands on cert-manager, CloudNativePG and Longhorn." width="100%">
 </p>
 
 Three things to read on this diagram:
 
 - **All web traffic enters through Traefik**, which serves each application
   under its own subdomain (`cloud.`, `office.`, `keycloak.`, `talk.`,
-  `admin.`, `bao.`, `mail.`) with certificates managed by cert-manager.
+  `admin.`, `bao.`, `mail.`) with certificates managed by cert-manager —
+  issued over HTTP-01 or DNS-01, as the installation chooses.
 - **Keycloak is the only source of identity.** Nextcloud, the console,
   OpenBao and Stalwart delegate authentication to it (OIDC).
 - **Media bypasses Traefik.** Janus and coturn run in `hostNetwork` and
   receive audio and video directly on the host ports (see
   "Media and firewall").
+
+The diagram also shows what every other layer stands on: **cert-manager** for
+the certificates, the **CloudNativePG** operator for PostgreSQL, and
+**Longhorn**, which carries every persistent volume — the databases, the files,
+the mail and Keycloak's data.
+
+**The last two rows are optional modules.** `talk-recording` (on by default)
+and the ExApps — HaRP, which deploys them, and the live transcription — are
+installed and removed from the console, not by the installer. The console is the
+same binary as the CLI, and that is where it manages them.
 
 Each application's secrets (database passwords, the ONLYOFFICE JWT token,
 the signaling secrets) are stored in OpenBao and written into the pods by
@@ -115,6 +126,9 @@ its agent-injector: nothing is in clear text in Git.
 | `ceffio-mail` | Stalwart |
 | `ceffio-data` | PostgreSQL (CloudNativePG), Valkey |
 | `ceffio-system` | Administration console (deployment `ceffio-admin`) |
+| `cert-manager` | cert-manager: TLS certificates (HTTP-01 or DNS-01) |
+| `cnpg-system` | CloudNativePG operator |
+| `longhorn-system` | Longhorn: replicated volumes for every PVC |
 
 ## The layers
 
@@ -125,6 +139,7 @@ runs, so before and after can be compared.
 | Layer | Package | Contents |
 |---|---|---|
 | Platform | `internal/platform` | K3s, Ingress, cert-manager |
+| Storage | `internal/storage` | Longhorn: every persistent volume |
 | Data | `internal/data` | CloudNativePG, PostgreSQL, Valkey |
 | Identity | `internal/identity` | Keycloak, realm, OIDC clients |
 | Files | `internal/files` | Nextcloud |
