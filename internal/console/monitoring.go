@@ -1,0 +1,441 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
+package console
+
+// MONITORING: what the platform's machine is actually doing.
+//
+// WHY THIS PAGE EXISTS, and what it answers that the others do not: every tab
+// so far reports what SHOULD be running — the modules, the certificates, the
+// pods. None says whether the machine underneath can still carry it. An operator
+// whose Nextcloud is slow has no way of telling "the node is out of memory" from
+// "Nextcloud is misconfigured", and those call for opposite reactions.
+//
+// TWO SOURCES, AND THE DISTINCTION MATTERS:
+//
+//   - the NODE's CPU and memory come from the metrics API
+//     (metrics.k8s.io/v1beta1), which the metrics-server serves. That is the
+//     live figure, and it is the same number `kubectl top node` prints.
+//   - the volumes come from the PVCs (what was REQUESTED, which is all the
+//     Kubernetes API knows) and, when Longhorn provisions them, from its own
+//     CRDs (what is actually WRITTEN).
+//
+// THE REQUESTED CAPACITY IS NOT THE USED ONE, and showing only the first is how
+// an operator ends up surprised: a 20Gi volume holding 5 GiB of files looks
+// identical to one that is full. Both are reported, and the used figure is only
+// shown when a source provides it — never estimated.
+//
+// EVERY READ IS BEST-EFFORT AND NAMED: a missing metrics-server, an absent
+// Longhorn, a denied permission each leave one section without values and say
+// so. The page must never fail as a whole because one source is unavailable,
+// nor pretend a zero it could not read.
+
+import (
+	"context"
+	"encoding/json"
+	"sort"
+	"strings"
+
+	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/client-go/kubernetes"
+)
+
+// --- Types -----------------------------------------------------------------
+
+// MetriqueNoeud is the node's live consumption, as the metrics server reports it.
+type MetriqueNoeud struct {
+	Nom        string
+	CPUUtilise float64 // cores
+	CPUTotal   float64 // cores, from the node's capacity
+	MemUtilise int64   // bytes
+	MemTotal   int64   // bytes
+}
+
+// PctCPU and PctMem are computed once, so the page and any future export agree
+// on the same rounding.
+func (m MetriqueNoeud) PctCPU() float64 { return pourcent(m.CPUUtilise, m.CPUTotal) }
+func (m MetriqueNoeud) PctMem() float64 { return pourcent(float64(m.MemUtilise), float64(m.MemTotal)) }
+
+// Volume is one persistent volume claim, with what was requested and — when a
+// source provides it — what it holds.
+type Volume struct {
+	Namespace string
+	Nom       string
+	Classe    string
+	Etat      string // Bound, Pending…
+	Demande   int64  // bytes requested
+	Utilise   int64  // bytes written; 0 and UtiliseConnu=false when unknown
+	// UtiliseConnu distinguishes "0 bytes written" from "no source told us".
+	//
+	// A page that treated both as zero would show a full disk as empty, which is
+	// the one reading that leads to an outage.
+	UtiliseConnu bool
+	// Noeud is where the volume's data lives, when the provisioner says.
+	Noeud string
+}
+
+// PctUtilise returns the fill ratio, or -1 when the used figure is unknown: a
+// caller can then print "—" rather than a percentage of nothing.
+func (v Volume) PctUtilise() float64 {
+	if !v.UtiliseConnu || v.Demande == 0 {
+		return -1
+	}
+	return pourcent(float64(v.Utilise), float64(v.Demande))
+}
+
+// DisqueStockage is the physical filesystem backing the volumes.
+type DisqueStockage struct {
+	Chemin      string
+	Maximum     int64
+	Disponible  int64
+	Programme   int64 // what the provisioner has committed to the volumes
+	Provisioner string
+}
+
+// PctUtilise is the fill ratio of the filesystem itself, which is the figure
+// that says whether the machine is about to stop accepting writes.
+func (d DisqueStockage) PctUtilise() float64 {
+	if d.Maximum == 0 {
+		return -1
+	}
+	return pourcent(float64(d.Maximum-d.Disponible), float64(d.Maximum))
+}
+
+// Replique is one copy of a volume's data.
+type Replique struct {
+	Volume string
+	Noeud  string
+	Etat   string
+}
+
+// Monitoring is everything the page shows.
+type Monitoring struct {
+	Noeuds    []MetriqueNoeud
+	Volumes   []Volume
+	Disques   []DisqueStockage
+	Repliques []Replique
+
+	// Conditions are the node's pressure signals. They answer "is this about to
+	// go wrong" rather than "how much is left", and they are what an operator
+	// checks before blaming an application.
+	Conditions []ConditionNoeud
+
+	// Avertissements names every source that did not answer. The page shows
+	// them; a silently empty section would read as "nothing to report".
+	Avertissements []string
+}
+
+// ConditionNoeud is one condition of the node, kept only when it is worth
+// showing.
+type ConditionNoeud struct {
+	Type   string
+	Statut string
+	Raison string
+}
+
+// SouciSante reports whether the platform is under pressure: any node condition
+// that is not False, or a disk above 90%.
+//
+// It is deliberately a method rather than a value stored at collection time, so
+// the threshold lives in one place and the page cannot disagree with the badge.
+func (m Monitoring) SouciSante() bool {
+	for _, c := range m.Conditions {
+		if c.Type == "Ready" {
+			if c.Statut != "True" {
+				return true
+			}
+			continue
+		}
+		// MemoryPressure, DiskPressure, PIDPressure: True means the condition is
+		// PRESENT, which is the bad case — the opposite of Ready.
+		if c.Statut == "True" {
+			return true
+		}
+	}
+	for _, d := range m.Disques {
+		if p := d.PctUtilise(); p >= 90 {
+			return true
+		}
+	}
+	return false
+}
+
+// --- Collection ------------------------------------------------------------
+
+// CollecterMonitoring gathers everything, reporting what it could not read
+// rather than failing.
+//
+// NO ERROR IS RETURNED, and that is a decision: a console whose monitoring page
+// refuses to load because the metrics server is missing would be least useful
+// exactly when something is wrong. Each source is attempted, its failure is
+// recorded by name, and the page renders what it has.
+func (s *Server) CollecterMonitoring(ctx context.Context) Monitoring {
+	out := Monitoring{}
+
+	out.Noeuds, out.Conditions = s.metriquesNoeuds(ctx, &out.Avertissements)
+
+	var err error
+	out.Volumes, err = s.volumes(ctx)
+	if err != nil {
+		out.Avertissements = append(out.Avertissements,
+			"volumes: "+err.Error()+" — the requested capacities appear without the used ones")
+	}
+
+	// The used sizes complete the claims just listed. A failure here leaves the
+	// list intact and only leaves the "used" column empty: an operator keeps the
+	// capacities they came for.
+	if utilises, err := s.volumesUtilises(ctx); err != nil {
+		out.Avertissements = append(out.Avertissements, err.Error())
+	} else {
+		for i := range out.Volumes {
+			if taille, ok := utilises[out.Volumes[i].Nom]; ok {
+				out.Volumes[i].Utilise = taille
+				out.Volumes[i].UtiliseConnu = true
+			}
+		}
+	}
+
+	out.Disques, out.Repliques, err = s.stockageLonghorn(ctx)
+	if err != nil {
+		// NOT A FAILURE ON A CLUSTER THAT DOES NOT USE LONGHORN: the page then
+		// shows the PVCs without the disk fill, and says why.
+		out.Avertissements = append(out.Avertissements, err.Error())
+	}
+
+	return out
+}
+
+// --- The node --------------------------------------------------------------
+
+// metriquesNoeuds reads the nodes' live consumption and their conditions.
+//
+// TWO APIS: the metrics server for consumption, the core API for capacity and
+// conditions. Reading both is what lets the page say "7,4 GiB of 62 GiB" rather
+// than "7,4 GiB", which is the number an operator can act on.
+func (s *Server) metriquesNoeuds(ctx context.Context, avert *[]string) ([]MetriqueNoeud, []ConditionNoeud) {
+	// Capacity and conditions first: they come from the core API, which is
+	// always present. If THIS read fails there is nothing to show, and the page
+	// must say so rather than display nothing.
+	brut, err := s.kube.Discovery().RESTClient().Get().AbsPath("/api/v1/nodes").DoRaw(ctx)
+	if err != nil {
+		*avert = append(*avert, "nodes: "+err.Error()+" — the machine's capacity and conditions are unavailable")
+		return nil, nil
+	}
+	var listeNodes struct {
+		Items []struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+			Status struct {
+				Capacity struct {
+					CPU    string `json:"cpu"`
+					Memory string `json:"memory"`
+				} `json:"capacity"`
+				Conditions []struct {
+					Type    string `json:"type"`
+					Status  string `json:"status"`
+					Reason  string `json:"reason"`
+					Message string `json:"message"`
+				} `json:"conditions"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(brut, &listeNodes); err != nil {
+		*avert = append(*avert, "nodes: unreadable answer ("+err.Error()+")")
+		return nil, nil
+	}
+
+	parNom := map[string]*MetriqueNoeud{}
+	var ordre []string
+	var conditions []ConditionNoeud
+	for _, n := range listeNodes.Items {
+		m := &MetriqueNoeud{Nom: n.Metadata.Name}
+		m.CPUTotal = enCoeurs(n.Status.Capacity.CPU)
+		m.MemTotal = enOctets(n.Status.Capacity.Memory)
+		parNom[n.Metadata.Name] = m
+		ordre = append(ordre, n.Metadata.Name)
+
+		// ONLY THE CONDITIONS THAT SAY SOMETHING. The API returns a fixed set;
+		// listing all of them would bury the one that matters among four
+		// "False" lines.
+		for _, c := range n.Status.Conditions {
+			switch c.Type {
+			case "Ready", "MemoryPressure", "DiskPressure", "PIDPressure":
+				conditions = append(conditions, ConditionNoeud{
+					Type: c.Type, Statut: c.Status, Raison: c.Reason,
+				})
+			}
+		}
+	}
+
+	// The consumption, from the metrics API.
+	conso, err := s.kube.Discovery().RESTClient().Get().
+		AbsPath("/apis/metrics.k8s.io/v1beta1/nodes").DoRaw(ctx)
+	if err != nil {
+		// THE PAGE STILL SHOWS CAPACITY. "62 GiB total, consumption unknown" is
+		// useful; a blank page is not.
+		*avert = append(*avert,
+			"metrics: the metrics API did not answer ("+raisonCourte(err)+"): live CPU and memory are unavailable")
+	} else {
+		var listeConso struct {
+			Items []struct {
+				Metadata struct {
+					Name string `json:"name"`
+				} `json:"metadata"`
+				Usage struct {
+					CPU    string `json:"cpu"`
+					Memory string `json:"memory"`
+				} `json:"usage"`
+			} `json:"items"`
+		}
+		if err := json.Unmarshal(conso, &listeConso); err != nil {
+			*avert = append(*avert, "metrics: unreadable answer ("+err.Error()+")")
+		} else {
+			for _, c := range listeConso.Items {
+				if m, ok := parNom[c.Metadata.Name]; ok {
+					m.CPUUtilise = enCoeurs(c.Usage.CPU)
+					m.MemUtilise = enOctets(c.Usage.Memory)
+				}
+			}
+		}
+	}
+
+	out := make([]MetriqueNoeud, 0, len(ordre))
+	for _, nom := range ordre {
+		out = append(out, *parNom[nom])
+	}
+	return out, conditions
+}
+
+// --- Volumes ---------------------------------------------------------------
+
+// volumes lists every PVC of the platform's namespaces.
+//
+// THE NAMESPACES COME FROM THE NAMESPACES THAT EXIST, not from a list in this
+// file: a list would go stale the day a module adds one, and the page would
+// silently stop showing a volume — the worst kind of monitoring defect, since
+// it looks like there is nothing to see.
+func (s *Server) volumes(ctx context.Context) ([]Volume, error) {
+	brut, err := s.kube.Discovery().RESTClient().Get().AbsPath("/api/v1/persistentvolumeclaims").DoRaw(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var liste struct {
+		Items []struct {
+			Metadata struct {
+				Name      string `json:"name"`
+				Namespace string `json:"namespace"`
+			} `json:"metadata"`
+			Spec struct {
+				StorageClassName string `json:"storageClassName"`
+				Resources        struct {
+					Requests struct {
+						Storage string `json:"storage"`
+					} `json:"requests"`
+				} `json:"resources"`
+			} `json:"spec"`
+			Status struct {
+				Phase    string `json:"phase"`
+				Capacity struct {
+					Storage string `json:"storage"`
+				} `json:"capacity"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(brut, &liste); err != nil {
+		return nil, err
+	}
+
+	out := []Volume{}
+	for _, p := range liste.Items {
+		if !strings.HasPrefix(p.Metadata.Namespace, "ceffio-") {
+			continue
+		}
+		// The REQUESTED size is what the operator planned for; the status
+		// capacity is what the provisioner granted. They agree on every healthy
+		// claim, and when they disagree the granted one is the truth — a claim
+		// cannot hold more than it was given.
+		taille := enOctets(p.Spec.Resources.Requests.Storage)
+		if acquise := enOctets(p.Status.Capacity.Storage); acquise > 0 {
+			taille = acquise
+		}
+		out = append(out, Volume{
+			Namespace: p.Metadata.Namespace,
+			Nom:       p.Metadata.Name,
+			Classe:    p.Spec.StorageClassName,
+			Etat:      p.Status.Phase,
+			Demande:   taille,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Namespace != out[j].Namespace {
+			return out[i].Namespace < out[j].Namespace
+		}
+		return out[i].Nom < out[j].Nom
+	})
+	return out, nil
+}
+
+// --- Helpers ---------------------------------------------------------------
+
+// enCoeurs converts a Kubernetes CPU quantity ("542m", "12", "1500m") to cores.
+//
+// HANDLED BY resource.ParseQuantity rather than by trimming a suffix: the
+// formats include "m", plain integers and decimal exponents, and a hand-written
+// parser would get one of them wrong on the day it matters.
+func enCoeurs(s string) float64 {
+	if s == "" {
+		return 0
+	}
+	q, err := resource.ParseQuantity(s)
+	if err != nil {
+		return 0
+	}
+	return float64(q.MilliValue()) / 1000
+}
+
+// enOctets converts a Kubernetes quantity ("10Gi", "512Mi", "1945672Ki") to
+// bytes.
+//
+// BINARY SUFFIXES ARE ASSUMED BY ParseQuantity for Gi/Mi/Ki, which is what every
+// Kubernetes capacity field uses. Decimal suffixes stay decimal, so a value
+// written "1G" is not silently inflated.
+func enOctets(s string) int64 {
+	if s == "" {
+		return 0
+	}
+	q, err := resource.ParseQuantity(s)
+	if err != nil {
+		return 0
+	}
+	return q.Value()
+}
+
+// pourcent returns a percentage, capped at 100: a container that reports usage
+// above its limit is a real case, and printing 143% would read as a bug.
+func pourcent(partie, total float64) float64 {
+	if total <= 0 {
+		return -1
+	}
+	p := partie / total * 100
+	if p > 100 {
+		return 100
+	}
+	return p
+}
+
+// raisonCourte trims an error to a phrase that fits in a banner.
+func raisonCourte(err error) string {
+	return tronquer(strings.TrimSpace(err.Error()), 60)
+}
+
+// NouveauPourTest builds a console around a given client, for a test outside
+// this package.
+//
+// WHY IT EXISTS: the monitoring page reads four API paths that only a real
+// cluster can confirm. A test in another package cannot reach the unexported
+// Server, so without this it would have to duplicate the collection — and the
+// paths it verifies would then be its own, not the ones the console uses.
+func NouveauPourTest(cli kubernetes.Interface) *Server {
+	return &Server{kube: cli, ops: newOpsManager()}
+}
