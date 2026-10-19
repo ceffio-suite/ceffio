@@ -65,6 +65,20 @@ jobs:
       - name: Tests (with race detection)
         run: go test -race ./...
 
+      - name: Module proof (demo build tag)
+        # WHY THIS STEP EXISTS: internal/modules/demo carries the proof of the
+        # module system's promise — that a feature is added by writing only its
+        # own package, touching neither the console nor the CLI. That proof is
+        # guarded by a build tag, so the run above never compiles it: the test
+        # was written, reviewed, and never executed. A regression that rewired
+        # the demo feature by hand into the console would therefore pass CI in
+        # silence, which is exactly the defect the proof exists to catch.
+        #
+        # It runs as its own step rather than through `./...` because the tag
+        # would then apply to every package, linking the demo module into the
+        # CLI and console tests that have no use for it.
+        run: go test -race -tags demo ./internal/modules/... ./internal/console/... ./cmd/...
+
       - name: Version registry coherence
         # The test carries the promise written in internal/version: no image
         # on `latest`, all versions pinned, and the vault properly declared.
