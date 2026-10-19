@@ -124,6 +124,7 @@ sequence, and removed with the cluster by "ceffio uninstall".`,
 		newModuleInstallCmd(&domain),
 		newModuleRemoveCmd(&domain),
 		newModuleStatusCmd(&domain),
+		newModuleConfigCmd(&domain),
 	)
 	return c
 }
