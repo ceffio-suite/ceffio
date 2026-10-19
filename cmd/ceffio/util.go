@@ -6,20 +6,71 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/ceffio-suite/ceffio/internal/module"
 )
 
 func notImplemented(command string) error {
 	return fmt.Errorf("command %q: not implemented yet (roadmap Phase 0+)", command)
 }
 
-func yesNo(b bool) string {
-	if b {
-		return "Yes"
+// joinOuNone renders a list for the install summary, or "none" when empty.
+//
+// It replaces yesNo, whose only three callers printed "Mail: no" from flags
+// that had no effect on the sequence — the summary now lists the modules the
+// registry will actually deploy.
+func joinOuNone(ids []string) string {
+	if len(ids) == 0 {
+		return "none"
 	}
-	return "No"
+	return strings.Join(ids, ", ")
+}
+
+// ecrireResumeModules prints what the installation will actually deploy.
+//
+// WHY THE SUMMARY READS THE REGISTRY AND NOT FLAGS: three lines used to print
+// "Mail: no" / "Office: yes" / "Monitoring: yes" from options that never
+// reached the sequence — mail and office are Core modules, always laid down,
+// and no supervision exists. An operator reading "Mail: no" while Stalwart is
+// being installed was misled by the very output meant to inform them.
+//
+// Reading the registry means a module added tomorrow appears here without
+// touching this file, the same reason the optional flags' help is generated
+// from module.All(). Kept as its own function so the summary can be asserted
+// without running a deployment.
+func ecrireResumeModules(out io.Writer, core, optionnels []string) {
+	fmt.Fprintf(out, "Core:       %s\n", joinOuNone(core))
+	if len(optionnels) == 0 {
+		fmt.Fprintln(out, "Optional:   none")
+		return
+	}
+	fmt.Fprintf(out, "Optional:   %s\n", strings.Join(optionnels, ", "))
+}
+
+// coresDuRegistre returns the IDs of the always-installed modules, in registry
+// order.
+func coresDuRegistre() []string {
+	var cores []string
+	for _, m := range module.All() {
+		if m.Info().Kind == module.Core {
+			cores = append(cores, m.Info().ID)
+		}
+	}
+	return cores
+}
+
+// idsDesModules extracts the IDs of a module list, keeping its order.
+func idsDesModules(ms []module.Module) []string {
+	ids := make([]string, 0, len(ms))
+	for _, m := range ms {
+		ids = append(ids, m.Info().ID)
+	}
+	return ids
 }
 
 // namedTask is a named deployment step (for error logs).
