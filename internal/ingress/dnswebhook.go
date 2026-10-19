@@ -34,8 +34,12 @@ const (
 	// webhookImage: the libdns solver, published under a name this project
 	// owns (see internal/version).
 	webhookImage = "ghcr.io/ceffio-suite/acme-dns-webhook"
-	// webhookVersion: pinned, never `latest`.
-	webhookVersion = "v0.5.0"
+	// webhookVersion: pinned, never `latest`, and the SAME value in
+	// internal/version (the coherence test would catch a drift).
+	//
+	// v1.1.0 is the upstream version this build was made from — checked with
+	// `webhook --version` rather than assumed from the repository's README.
+	webhookVersion = "v1.1.0"
 	// webhookName: the Deployment / Service / APIService base name.
 	webhookName = "ceffio-acme-dns-webhook"
 	// webhookPort: the solver's own port. cert-manager reaches it on 443
@@ -84,7 +88,31 @@ const (
 // Skipped when the challenge is HTTP-01: it would be a pod on a port nothing
 // calls.
 func deployerWebhookDNS(ctx context.Context, reglages acme.Reglages) error {
+	// NOTHING TO DEPLOY WHEN cert-manager ALREADY KNOWS THE PROVIDER.
+	//
+	// Cloudflare, Route 53, RFC 2136 and acme-dns have in-tree solvers: the
+	// ClusterIssuer references them directly and a Secret with the credential
+	// is the only prerequisite. Installing a component there would add an
+	// image, a pod and a failure mode for a capability already present in the
+	// cert-manager binary — and it is what forces a project to publish an
+	// image per release.
+	//
+	// Skipped under HTTP-01 too: there is nothing for a solver to answer.
 	if !reglages.DNS01() {
+		return nil
+	}
+
+	// THE CREDENTIAL SECRET IS ALWAYS NEEDED, in-tree or not: cert-manager's
+	// own solvers name it too. Applied first, so the issuer below never
+	// references a Secret that does not exist yet.
+	if err := apply(ctx, secretDNSManifests(reglages)); err != nil {
+		return err
+	}
+
+	// THE COMPONENT, ONLY FOR A PROVIDER cert-manager DOES NOT KNOW.
+	if !reglages.EmpreinteWebhook() {
+		fmt.Printf("∙ DNS-01 via the cert-manager solver %q — no component to deploy\n",
+			reglages.Provider)
 		return nil
 	}
 
@@ -119,6 +147,70 @@ func deployerWebhookDNS(ctx context.Context, reglages acme.Reglages) error {
 	return nil
 }
 
+// secretDNSManifests crée le Secret des identifiants DNS, alimenté par OpenBao.
+//
+// WHY IT IS NEEDED FOR THE IN-TREE PROVIDERS TOO, and not only for the webhook:
+// cert-manager's own solvers reference a Secret by name (`apiTokenSecretRef`,
+// `tsigSecretSecretRef`…). Cloudflare in-tree still needs `ceffio-acme-dns` to
+// exist with an `api-token` key — nothing is deployed, but the Secret is
+// mandatory. Forgetting it produces an issuer that resolves to no credential
+// and a challenge that never completes, with the reason buried in the
+// CertificateRequest events.
+//
+// THE SECRET IS THE INJECTOR'S OUTPUT, never a hand-written object: the vault
+// is the single source, and a copy pasted into the cluster would diverge at the
+// first rotation.
+func secretDNSManifests(reglages acme.Reglages) string {
+	// The field names cert-manager's solvers expect, per provider. They are
+	// FIXED by cert-manager, not chosen here — hence the mapping.
+	cles := clesSecretCertManager(reglages.Provider)
+
+	return fmt.Sprintf(`apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ceffio-acme-dns
+  namespace: %[1]s
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: %[2]s
+  namespace: %[1]s
+  annotations:
+%[3]s
+  labels:
+    app.kubernetes.io/part-of: ceffio
+type: Opaque
+`, nsCertManager, secretACME,
+		vault.AnnotationsAgentNamed(4, roleOpenBaoDNS, secretACME, cheminBaoIdentifiantsDNS,
+			vault.GabaritSecret(cheminBaoIdentifiantsDNS, cles)))
+}
+
+// clesSecretCertManager returns the key names the IN-TREE solvers of
+// cert-manager read from the Secret.
+//
+// DIFFERENT FROM clesProvider, and the difference is the trap: the webhook
+// marshals the whole Secret to a libdns library, which wants `api_token`; the
+// in-tree solvers want their own fixed key names (`api-token` for Cloudflare,
+// `tsig-secret` for RFC 2136…). Writing the libdns names here would produce an
+// issuer that references a key the Secret does not have.
+func clesSecretCertManager(p acme.Provider) []string {
+	switch p {
+	case acme.ProviderCloudflare:
+		return []string{"api-token"}
+	case acme.ProviderRoute53:
+		return []string{"access-key-id", "secret-access-key", "region"}
+	case acme.ProviderRFC2136:
+		return []string{"tsig-secret", "tsig-key-name", "tsig-algorithm", "nameserver"}
+	case acme.ProviderACMEDNS:
+		return []string{"acmedns-account", "acmedns-host"}
+	default:
+		// Out-of-tree: the webhook's own field names, which are the vault
+		// entry's.
+		return clesProvider(p)
+	}
+}
+
 // webhookCertificatManifest: the TLS certificate the APIService and the solver
 // share, signed by the internal authority.
 func webhookCertificatManifest() string {
@@ -142,106 +234,98 @@ spec:
 `, webhookName, nsCertManager, issuerCA)
 }
 
-// champsDuProvider returns the vault fields and the shell variable each one
-// feeds, FOR THE PROVIDER ACTUALLY CONFIGURED.
+// clesProvider returns the CREDENTIAL FIELD NAMES the configured provider's
+// libdns implementation reads, taken from the vault entry.
 //
-// WHY PER PROVIDER AND NOT ONE UNION OF EVERY FIELD: vault.AnnotationsAgent
-// sets `error-on-missing-key-env: true`, which is the right default — a render
+// WHY FIELD NAMES AND NOT ENVIRONMENT VARIABLES — this correction matters, and
+// getting it wrong produces a failure that names nothing: the solver loads
+// EVERY key of the referenced Secret into a map and marshals that map to its
+// provider library. The library then looks for ITS OWN JSON field names
+// (`api_token`, `endpoint`, `application_key`…). Rendering `CF_API_TOKEN`
+// would therefore hand the provider a map it cannot read, and every challenge
+// would fail on an empty credential — with no message mentioning the field.
+//
+// WHY PER PROVIDER AND NOT ONE UNION OF EVERY FIELD: the injection template
+// sets `error-on-missing-key-<name>`, which is the right default — a render
 // that silently produces an empty value is worse than a pod that refuses to
-// start. But that flag applies to the WHOLE template: rendering the eleven
-// fields of every supported host would make a Cloudflare entry fail, because
-// the OVH fields it legitimately does not have would be reported missing. The
-// pod would then never start, and the message would name a field for a provider
-// the operator never chose.
-//
-// The variable names are those the libdns provider libraries read from the
-// environment (CF_API_TOKEN, OVH_*, AWS_*). They are written here once, next to
-// the provider they belong to, so a new host is one entry in this function and
-// nothing else.
-func champsDuProvider(p acme.Provider) [][2]string {
-	// The provider name travels with the credential, always first: it is what
-	// lets the solver check that the token it holds was stored for the host it
-	// is about to write to. A Cloudflare token used against a Scaleway zone
-	// would fail with an authorization error that never mentions the mismatch.
-	commun := [][2]string{{"CEFFIO_DNS_PROVIDER_NAME", "{{ .Data.data.provider }}"}}
+// start. But that flag applies to the WHOLE template, so rendering OVH's four
+// fields for a Cloudflare entry would fail the render on keys that provider
+// legitimately does not have. The pod would never start, and the message would
+// name a provider the operator never chose.
+func clesProvider(p acme.Provider) []string {
+	// `provider` travels WITH the credential, always: it is what lets Ceffio
+	// and the operator tell which host an entry was stored for. A Cloudflare
+	// token used against a Scaleway zone fails with an authorization error
+	// that never mentions the mismatch.
+	commun := []string{"provider"}
 
 	switch p {
 	case acme.ProviderCloudflare:
-		return append(commun, [2]string{"CF_API_TOKEN", vault.ChampCoffre("api_token")})
+		return append(commun, "api_token")
 	case acme.ProviderRoute53:
-		return append(commun,
-			[2]string{"AWS_ACCESS_KEY_ID", vault.ChampCoffre("access_key_id")},
-			[2]string{"AWS_SECRET_ACCESS_KEY", vault.ChampCoffre("secret_access_key")},
-			[2]string{"AWS_REGION", vault.ChampCoffre("region")})
+		return append(commun, "access_key_id", "secret_access_key", "region")
 	case acme.ProviderRFC2136:
-		// RFC 2136 is the in-tree solver that speaks dynamic DNS updates: no
-		// API token at all, a TSIG key and a target server. It is the path for
-		// an operator running BIND, Knot, PowerDNS or Technitium.
-		return append(commun,
-			[2]string{"RFC2136_NAMESERVER", vault.ChampCoffre("nameserver")},
-			[2]string{"RFC2136_TSIG_KEY", vault.ChampCoffre("tsig_key")},
-			[2]string{"RFC2136_TSIG_SECRET", vault.ChampCoffre("tsig_secret")},
-			[2]string{"RFC2136_TSIG_ALGORITHM", vault.ChampCoffre("tsig_algorithm")})
+		// The dynamic-update path: no token at all, a TSIG key and a server.
+		// In-tree in cert-manager, and the reason an operator running BIND,
+		// Knot, PowerDNS or Technitium is not left out. Present in the built
+		// image (`--list-providers` lists rfc2136).
+		return append(commun, "nameserver", "tsig_key", "tsig_secret", "tsig_algorithm")
 	case acme.ProviderACMEDNS:
-		// acme-dns: a dedicated server answering only for _acme-challenge,
-		// delegated by CNAME. The credential can write ONE record name.
-		return append(commun,
-			[2]string{"ACMEDNS_API_URL", vault.ChampCoffre("api_url")},
-			[2]string{"ACMEDNS_USERNAME", vault.ChampCoffre("username")},
-			[2]string{"ACMEDNS_PASSWORD", vault.ChampCoffre("password")},
-			[2]string{"ACMEDNS_SUBDOMAIN", vault.ChampCoffre("subdomain")})
+		// acme-dns answers only for _acme-challenge, delegated by CNAME. The
+		// credential can write ONE record name — the path for someone with no
+		// rights on the main zone.
+		return append(commun, "api_url", "username", "password", "subdomain")
 	case "ovh":
-		return append(commun,
-			[2]string{"OVH_ENDPOINT", vault.ChampCoffre("endpoint")},
-			[2]string{"OVH_APPLICATION_KEY", vault.ChampCoffre("application_key")},
-			[2]string{"OVH_APPLICATION_SECRET", vault.ChampCoffre("application_secret")},
-			[2]string{"OVH_CONSUMER_KEY", vault.ChampCoffre("consumer_key")})
+		return append(commun, "endpoint", "application_key", "application_secret", "consumer_key")
 	case "scaleway":
-		return append(commun,
-			[2]string{"SCALEWAY_API_TOKEN", vault.ChampCoffre("api_token")},
-			[2]string{"SCALEWAY_PROJECT_ID", vault.ChampCoffre("project_id")})
+		return append(commun, "api_token", "project_id")
 	case "hetzner":
-		return append(commun, [2]string{"HETZNER_API_TOKEN", vault.ChampCoffre("api_token")})
+		return append(commun, "api_token")
 	case "gandi":
-		return append(commun, [2]string{"GANDI_API_TOKEN", vault.ChampCoffre("api_token")})
+		return append(commun, "api_token")
 	case "linode":
-		return append(commun, [2]string{"LINODE_API_TOKEN", vault.ChampCoffre("api_token")})
+		return append(commun, "api_token")
 	case "desec":
-		return append(commun, [2]string{"DESEC_API_TOKEN", vault.ChampCoffre("api_token")})
+		return append(commun, "api_token")
+	case "bunny":
+		return append(commun, "api_key")
+	case "ionos":
+		return append(commun, "api_key")
 	default:
-		// An unknown-but-valid provider: the libdns implementation exists, and
-		// what it expects is its own business. The generic `api_token` field is
-		// rendered, plus the provider name — enough for the majority, and the
-		// operator can always add the specific variables to the vault entry and
-		// read them here. Refusing outright would mean a Ceffio release per DNS
-		// host, which is the coupling this design exists to avoid.
-		return append(commun,
-			[2]string{"API_TOKEN", vault.ChampCoffre("api_token")},
-			[2]string{"LIBDNS_API_TOKEN", vault.ChampCoffre("api_token")})
+		// An unknown-but-valid provider: its libdns implementation exists, and
+		// what it expects is its own business. `api_token` covers the majority
+		// of them. Refusing outright would mean one Ceffio release per DNS
+		// host — the coupling this whole design exists to avoid — and an
+		// operator whose provider wants another field name can store that name
+		// in the vault entry and add it here in one line.
+		return append(commun, "api_token")
 	}
 }
 
-// webhookManifests: ServiceAccount, Role, RoleBinding, Deployment, Service.
+// webhookManifests: ServiceAccount, Role, RoleBinding, Secret, Deployment, Service.
 //
-// THE POD CARRIES THE VAULT ANNOTATIONS, NOT THE SECRET OBJECT. OpenBao's
-// injector works per POD: it adds an in-memory volume and a pre-populating
-// agent. A Secret annotated without a pod to inject into stays empty, and the
-// whole chain then looks configured while the solver reads nothing. That is why
-// vault.AnnotationsAgent is used here — the same helper the mail and console
-// deployments already use, so there is one place that knows the annotation
-// syntax.
+// THE SOLVER READS A KUBERNETES SECRET, NOT A SHELL FILE — and that detail cost
+// a rewrite to discover. Its `config.secretRef` names a Secret, and it loads
+// EVERY key of that Secret into a map that it marshals to the provider library.
+// A `/secrets/env` full of shell exports would give it nothing usable: the keys
+// would be `CF_API_TOKEN` with quotes around a value, and the provider would
+// receive no credential at all.
+//
+// SO THE SECRET IS THE INJECTOR'S OUTPUT, not a hand-written object: the
+// annotations below make OpenBao render the Secret, and the solver reads it
+// through the Kubernetes API. One source, one rotation, no copy in a file.
+//
+// THE ROLE THEREFORE NEEDS `secrets`: the earlier draft granted only
+// services/endpoints and was wrong — the solver genuinely reads this Secret.
+// The right is scoped to ONE namespace (cert-manager) and, in the role defined
+// by the vault, to ONE path. That is a narrowing, not a widening.
 func webhookManifests(reglages acme.Reglages) string {
-	// The rendered file holds the provider credentials as shell assignments,
-	// because the libdns webhook reads its provider configuration from the
-	// environment. Only the fields of the CONFIGURED provider are rendered:
-	// see champsDuProvider for why a union of every host's fields would make
-	// the pod refuse to start.
-	gabarit := vault.GabaritMulti([]vault.Source{{
-		Chemin: cheminBaoIdentifiantsDNS,
-		Paires: champsDuProvider(reglages.Provider),
-	}})
+	// The solver reads the Secret's keys directly, so the template writes
+	// `key: value` pairs — NOT `export key='value'`. See champsDuProvider for
+	// why only the configured provider's fields are rendered.
+	gabarit := vault.GabaritSecret(cheminBaoIdentifiantsDNS, clesProvider(reglages.Provider))
 
-	annotations := vault.AnnotationsAgent(8, roleOpenBaoDNS, cheminBaoIdentifiantsDNS, gabarit)
+	annotations := vault.AnnotationsAgentNamed(8, roleOpenBaoDNS, secretACME, cheminBaoIdentifiantsDNS, gabarit)
 
 	return fmt.Sprintf(`apiVersion: v1
 kind: ServiceAccount
@@ -255,12 +339,12 @@ metadata:
   name: %[1]s
   namespace: %[2]s
 rules:
-  # The solver needs NOTHING from the Kubernetes API. It receives challenge
-  # requests over HTTP and answers them; the credentials arrive as a file
-  # written by the injector. The Role therefore grants only what the aggregated
-  # API machinery requires to route APIService calls to this pod — NOT a
-  # right on secrets, which an earlier draft asked for and which the solver
-  # never reads: the injector does.
+  # The solver reads its provider credential from the Secret the injector
+  # rendered, and reports events. Scoped to this namespace only.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+  # What the aggregated API machinery needs to route APIService calls here.
   - apiGroups: [""]
     resources: ["services", "endpoints"]
     verbs: ["get", "list", "watch"]
@@ -307,17 +391,29 @@ spec:
       containers:
         - name: webhook
           image: %[3]s:%[4]s
-          # The injector pre-populates its file BEFORE the container starts, so
-          # the process only has to source it. Without this line the solver
-          # runs with no credentials at all, and every challenge fails with an
-          # authentication error that never names the missing variable.
-          command: ["/bin/sh", "-c"]
+          # GROUP_NAME IS MANDATORY, and getting it wrong is not a soft
+          # failure: measured on the built image,
+          #
+          #   F1018 23:04:10 main.go:44] GROUP_NAME environment variable must be
+          #   specified
+          #
+          # The process exits immediately, so a Deployment without it would sit
+          # in CrashLoopBackOff and the certificates would simply never be
+          # issued. It must equal the groupName the ClusterIssuer declares and
+          # the metadata.name of the APIService below — the three are one
+          # identity written in three places, which is why the constant is
+          # shared rather than repeated.
+          env:
+            - name: GROUP_NAME
+              value: %[7]s
+            - name: LOG_LEVEL
+              value: "2"
+          # The binary is at /usr/local/bin/webhook, NOT the path a from-source
+          # build would suggest.
           args:
-            - |
-              set -a
-              . /secrets/env
-              set +a
-              exec /app/webhook --tls-cert-file=/tls/tls.crt --tls-private-key-file=/tls/tls.key --secure-port=%[5]d
+            - --tls-cert-file=/tls/tls.crt
+            - --tls-private-key-file=/tls/tls.key
+            - --secure-port=%[5]d
           ports:
             - name: https
               containerPort: %[5]d
@@ -352,7 +448,7 @@ spec:
     - name: https
       port: 443
       targetPort: %[5]d
-`, webhookName, nsCertManager, webhookImage, webhookVersion, webhookPort, annotations)
+`, webhookName, nsCertManager, webhookImage, webhookVersion, webhookPort, annotations, webhookGroup)
 }
 
 // webhookAPIServiceManifest registers the solver with the aggregator, so

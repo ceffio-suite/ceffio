@@ -91,32 +91,97 @@ func TestDNS01Manifest(t *testing.T) {
 	}
 }
 
-// TestInTreeProvidersUseTheSameShape pins the decision that a provider is
-// DATA, not a branch: Cloudflare — an in-tree solver — must go through the
-// same webhook manifest as any other host. Writing a `cloudflare:` key instead
-// would mean one code path per DNS host.
-func TestInTreeProvidersUseTheSameShape(t *testing.T) {
-	for _, p := range []acme.Provider{
-		acme.ProviderCloudflare,
-		acme.ProviderRoute53,
-		acme.ProviderRFC2136,
-		acme.ProviderACMEDNS,
+// TestInTreeProvidersUseTheNativeSolver is the assertion that replaced its
+// opposite, and it is worth stating why it flipped.
+//
+// The first version of this code routed EVERY provider through the webhook
+// solver, arguing that a provider would then be a value rather than a branch.
+// That reasoning cost an image to build, publish and maintain, plus a component
+// to deploy — for a capability cert-manager already has in its own binary. The
+// in-tree solvers are: cloudflare, route53, azuredns, clouddns, digitalocean,
+// akamai, acmedns, rfc2136. For those, the ClusterIssuer references them
+// directly and a Secret is the only prerequisite.
+//
+// The webhook remains the FALLBACK, for the hosts cert-manager does not know
+// (Scaleway, OVH, Gandi, Hetzner…). That is what keeps the provider list open
+// without pretending every provider needs a component.
+func TestInTreeProvidersUseTheNativeSolver(t *testing.T) {
+	for _, cas := range []struct {
+		provider string
+		cle      string // the key cert-manager expects in the solver block
+	}{
+		{"cloudflare", "cloudflare:"},
+		{"route53", "route53:"},
+		{"rfc2136", "rfc2136:"},
+		{"acmedns", "acmedns:"},
 	} {
+		t.Run(cas.provider, func(t *testing.T) {
+			m := acmeManifest("admin@exemple.fr", acme.Reglages{
+				Challenge:    acme.ChallengeDNS,
+				Provider:     acme.Provider(cas.provider),
+				Zone:         "exemple.fr",
+				WebhookGroup: "acme.exemple.fr",
+			})
+			if !strings.Contains(m, cas.cle) {
+				t.Errorf("provider %q does not use the solver cert-manager ships:\n%s", cas.provider, m)
+			}
+			// NO WEBHOOK for an in-tree host: it would mean deploying a
+			// component, and publishing an image, for nothing.
+			if strings.Contains(m, "webhook:") {
+				t.Errorf("provider %q is routed through the webhook while cert-manager knows it natively:\n%s",
+					cas.provider, m)
+			}
+			// The credential is always referenced by name: an issuer that
+			// resolves to no Secret leaves the challenge pending with the
+			// reason buried in the CertificateRequest events.
+			if !strings.Contains(m, "ceffio-acme-dns") {
+				t.Errorf("provider %q does not reference the credential Secret:\n%s", cas.provider, m)
+			}
+		})
+	}
+}
+
+// TestProvidersHorsArbreUtilisentLeWebhook: the fallback must still exist, or
+// "compatible everywhere" would mean "compatible with the eight hosts
+// cert-manager chose".
+func TestProvidersHorsArbreUtilisentLeWebhook(t *testing.T) {
+	for _, p := range []acme.Provider{"scaleway", "ovh", "gandi", "hetzner", "un-provider-inconnu"} {
 		t.Run(string(p), func(t *testing.T) {
 			m := acmeManifest("admin@exemple.fr", acme.Reglages{
 				Challenge:    acme.ChallengeDNS,
 				Provider:     p,
 				WebhookGroup: "acme.exemple.fr",
 			})
+			if !strings.Contains(m, "webhook:") {
+				t.Errorf("provider %q has no native solver and no webhook either — it cannot work:\n%s", p, m)
+			}
 			if !strings.Contains(m, "provider: "+string(p)) {
 				t.Errorf("provider %q is not carried as a value:\n%s", p, m)
 			}
-			// The provider's own in-tree key must never be written: cert-manager
-			// would then take a different solver than the one documented here.
-			if strings.Contains(m, "cloudflare:") || strings.Contains(m, "route53:") {
-				t.Errorf("an in-tree solver key was written for %q:\n%s", p, m)
-			}
 		})
+	}
+}
+
+// TestEmpreinteWebhookSepareLesDeuxChemins pins the single decision that routes
+// between them: it must say "no webhook" for the four in-tree solvers and "yes"
+// for everything else.
+func TestEmpreinteWebhookSepareLesDeuxChemins(t *testing.T) {
+	for _, p := range []struct {
+		provider string
+		webhook  bool
+	}{
+		{"cloudflare", false},
+		{"route53", false},
+		{"rfc2136", false},
+		{"acmedns", false},
+		{"scaleway", true},
+		{"ovh", true},
+		{"inconnu", true},
+	} {
+		r := acme.Reglages{Challenge: acme.ChallengeDNS, Provider: acme.Provider(p.provider)}
+		if got := r.EmpreinteWebhook(); got != p.webhook {
+			t.Errorf("EmpreinteWebhook(%q) = %v, want %v", p.provider, got, p.webhook)
+		}
 	}
 }
 

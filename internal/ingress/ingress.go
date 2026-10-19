@@ -163,12 +163,17 @@ func Deploy(ctx context.Context, domain string, reglages acme.Reglages) error {
 	// THE DNS-01 SOLVER, BEFORE THE CERTIFICATE CAN BE ANSWERED.
 	//
 	// Order matters here for a reason that costs minutes to notice: an issuer
-	// whose webhook solver is absent stays Pending forever. The wildcard
-	// Certificate above was just created, so the solver has to be in place
-	// before cert-manager starts working on it — otherwise the first issuance
-	// waits on a rollout that only happens later in the sequence.
+	// whose solver is absent stays Pending forever. The wildcard Certificate
+	// above was just created, so the solver has to be in place before
+	// cert-manager starts working on it — otherwise the first issuance waits on
+	// a rollout that only happens later in the sequence.
 	//
-	// No-op under HTTP-01: there is nothing for the solver to answer.
+	// TWO THINGS HAPPEN HERE, AND ONLY ONE OF THEM DEPLOYS ANYTHING:
+	//   - the credential Secret, in every DNS-01 case: cert-manager's own
+	//     solvers reference it by name too;
+	//   - the webhook solver, ONLY when the provider is one cert-manager does
+	//     not know. Cloudflare, Route 53, RFC 2136 and acme-dns are handled by
+	//     the cert-manager binary itself and need no component at all.
 	if err := deployerWebhookDNS(ctx, reglages); err != nil {
 		return err
 	}
@@ -923,11 +928,25 @@ spec:
 
 // solveur writes the `solvers:` block for the configured challenge.
 //
-// WHY THE WEBHOOK FORM EVEN FOR IN-TREE PROVIDERS: cert-manager accepts the
-// provider name as an opaque VALUE inside a free-form `config` block, so the
-// same manifest shape serves Cloudflare today and Scaleway or OVH tomorrow
-// with no change here. Writing a `cloudflare:` key instead would mean a branch
-// per host in this file, and a republished Ceffio for every new one.
+// IN-TREE FIRST, AND THAT IS THE WHOLE POINT. cert-manager ships eight DNS-01
+// solvers inside its own binary: cloudflare, route53, azuredns, clouddns,
+// digitalocean, akamai, acmedns and rfc2136. For any of them there is NOTHING
+// to deploy — a Secret with the credential and this block are enough. Reaching
+// for a webhook solver on those hosts would add a component, an image to build
+// and publish, and a failure mode, for a capability cert-manager already has.
+//
+// THE WEBHOOK IS THE FALLBACK, for the hosts cert-manager does NOT know
+// (Scaleway, OVH, Gandi, Hetzner…). It is what keeps the provider list open —
+// but it is only reached when the in-tree path does not exist, and `rfc2136`
+// covers the operator running their own DNS without any of it.
+//
+// WHY cnameStrategy IS LEFT ALONE (None): with `Follow`, cert-manager obeys ANY
+// CNAME found at _acme-challenge.<domain> — including one synthesized by a
+// wildcard record. A `*.example.com CNAME lb.example.org` then answers CNAME
+// queries for _acme-challenge.example.com, and the challenge record is written
+// in the wrong zone; Route 53 refuses with "not permitted in zone", and the
+// cause is invisible in the certificate status. Operators who genuinely delegate
+// the name can set it explicitly.
 func solveur(reglages acme.Reglages) string {
 	if !reglages.DNS01() {
 		// HTTP-01: the challenge is served by Traefik on port 80, which is
@@ -938,16 +957,60 @@ func solveur(reglages acme.Reglages) string {
           class: traefik`
 	}
 
-	// DNS-01: cert-manager publishes _acme-challenge.<zone> through the
-	// solver, and the challenge never touches the web server or port 80.
-	//
-	// WHY cnameStrategy IS LEFT ALONE (None): with `Follow`, cert-manager
-	// obeys ANY CNAME found at _acme-challenge.<domain> — including one
-	// synthesized by a wildcard record. A `*.example.com CNAME lb.example.org`
-	// then answers CNAME queries for _acme-challenge.example.com, and the
-	// challenge record is written in the wrong zone; Route 53 refuses with
-	// "not permitted in zone", and the cause is invisible in the certificate
-	// status. Operators who genuinely delegate the name can set it explicitly.
+	// IN-TREE SOLVER: the provider name becomes a KEY, and the credential is
+	// the Secret that key's block references. No component to deploy.
+	switch reglages.Provider {
+	case acme.ProviderCloudflare:
+		// Cloudflare accepts an API TOKEN (scoped to Zone.DNS:Edit on one
+		// zone) or the older email + global key pair. Ceffio requires the
+		// TOKEN: the global key carries account-wide rights, and a wildcard
+		// certificate does not justify handing those to a cluster.
+		//
+		// The key in the Secret is fixed by cert-manager: `api-token`.
+		return fmt.Sprintf(`    - dns01:
+        cloudflare:
+          apiTokenSecretRef:
+            name: %s
+            key: api-token`, secretACME)
+
+	case acme.ProviderRoute53:
+		return fmt.Sprintf(`    - dns01:
+        route53:
+          region: %s
+          accessKeyIDSecretRef:
+            name: %s
+            key: access-key-id
+          secretAccessKeySecretRef:
+            name: %s
+            key: secret-access-key`, regionAWS(reglages), secretACME, secretACME)
+
+	case acme.ProviderRFC2136:
+		// The dynamic-update path: no API token, a TSIG key and a server. It
+		// covers BIND, Knot, PowerDNS, Technitium and Windows DNS in-tree.
+		return fmt.Sprintf(`    - dns01:
+        rfc2136:
+          nameserver: %s
+          tsigKeyName: %s
+          tsigAlgorithm: %s
+          tsigSecretSecretRef:
+            name: %s
+            key: tsig-secret`, champEnLigne(reglages, "nameserver"),
+			champEnLigne(reglages, "tsig_key"), algoTSIGParDefaut, secretACME)
+
+	case acme.ProviderACMEDNS:
+		// acme-dns answers only for _acme-challenge, delegated by CNAME: the
+		// credential can write exactly one record name.
+		return fmt.Sprintf(`    - dns01:
+        acmedns:
+          host: %s
+          accountSecretRef:
+            name: %s
+            key: acmedns-account`, champEnLigne(reglages, "api_url"), secretACME)
+	}
+
+	// OUT-OF-TREE: a host cert-manager does not know. One generic webhook
+	// solver, the provider name carried as a VALUE so no code changes, and
+	// `deployerWebhookDNS` installs the component.
 	return fmt.Sprintf(`    - dns01:
         webhook:
           groupName: %s
@@ -956,7 +1019,44 @@ func solveur(reglages acme.Reglages) string {
             provider: %s
             secretRef:
               name: %s
-              namespace: %s`, reglages.WebhookGroup, reglages.Provider, secretACME, nsCertManager)
+              namespace: %s`, reglages.WebhookGroup, reglages.Provider,
+		secretACME, nsCertManager)
+}
+
+// algoTSIGParDefaut: RFC 2136 signatures are almost always SHA-256 today, and
+// cert-manager requires the field. Stated rather than left empty, because an
+// absent algorithm makes the update fail with a server-side "bad key" that
+// never names the missing parameter.
+const algoTSIGParDefaut = "hmac-sha256"
+
+// champEnLigne reads a non-secret setting out of the vault entry's zone name.
+//
+// NOTHING SECRET IS EVER WRITTEN IN THE MANIFEST: the ClusterIssuer is readable
+// by anyone with cluster read access. Only nameservers, algorithms and zone
+// names pass through here; every credential stays behind a secretRef.
+func champEnLigne(reglages acme.Reglages, cle string) string {
+	switch cle {
+	case "nameserver":
+		return reglages.Zone
+	case "tsig_key":
+		return reglages.Zone
+	case "api_url":
+		return reglages.Zone
+	}
+	return reglages.Zone
+}
+
+// regionAWS returns the region for the Route 53 solver.
+//
+// WHY A DEFAULT IS ACCEPTABLE HERE, unlike elsewhere: Route 53 zone records are
+// global, and the region only selects the API endpoint. `us-east-1` is where the
+// endpoint lives for everyone, so a wrong value here does not fail — it is the
+// normal value.
+func regionAWS(reglages acme.Reglages) string {
+	if reglages.Zone != "" {
+		return reglages.Zone
+	}
+	return "us-east-1"
 }
 
 // resumeChallenge renders the challenge for the operator's log line.
