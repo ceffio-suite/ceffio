@@ -27,6 +27,8 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/ceffio-suite/ceffio/internal/acme"
+	"github.com/ceffio-suite/ceffio/internal/module"
+	"github.com/ceffio-suite/ceffio/internal/settings"
 )
 
 const (
@@ -63,13 +65,30 @@ type Server struct {
 	// failure mode. Resolving it here also means an invalid value is
 	// reported ONCE, at startup, in the console's own logs — instead of
 	// silently degrading a certificate issuance weeks later.
+	// ModuleID is deliberately NOT set here: it belongs to the module being
+	// called, and moduleEnvReadOnly (or the install path) sets it. Two modules
+	// sharing one Env without an ID would write their settings to the same
+	// entry, and internal/settings refuses an empty ID for exactly that reason.
 	acme acme.Reglages
+
+	// settingsCM and settingsSec give modules access to the stores.
+	//
+	// They are interfaces declared in internal/module, held here as fields so a
+	// test can substitute maps for both — the console tests then exercise the
+	// settings routes without a cluster.
+	settingsCM  module.ConfigMapStore
+	settingsSec module.SecretStore
 }
 
 // New creates the console server: in-cluster K8s client (or out-of-cluster
 // kubeconfig), and Keycloak admin access read from the keycloak-admin secret.
 func New(domain, apiKey string) (*Server, error) {
-	s := &Server{Domain: domain, APIKey: apiKey, ops: newOpsManager(), acme: acme.HTTP01()}
+	s := &Server{Domain: domain, APIKey: apiKey, ops: newOpsManager(), acme: acme.HTTP01(),
+		// The stores are wired HERE, once, so every module reaches the same
+		// ConfigMap and the same Secrets through module.Env. Leaving them nil
+		// would make a module's settings save fail at runtime, on an
+		// installation where everything else works.
+		settingsCM: settings.ConfigMaps{}, settingsSec: settings.Secrets{}}
 
 	// The ACME configuration is resolved ONCE, and an invalid value is
 	// reported without preventing startup: the console is the only way an
@@ -162,6 +181,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/modules", s.requireAuth(s.handleModulesList))
 	mux.HandleFunc("GET /api/modules/{id}", s.requireAuth(s.handleModuleDetail))
 	mux.HandleFunc("POST /api/modules/{id}", s.requireAuth(s.handleModuleAction))
+	// GENERIC settings routes: they know no module by name. A feature added
+	// tomorrow is served here without touching this file — which is the whole
+	// point of the settings contract, and what a test enforces.
+	mux.HandleFunc("GET /api/modules/{id}/settings", s.requireAuth(s.handleModuleSettings))
+	mux.HandleFunc("POST /api/modules/{id}/settings/{group}", s.requireAuth(s.handleModuleSettingsSave))
+	mux.HandleFunc("POST /api/modules/{id}/settings/{group}/test", s.requireAuth(s.handleModuleSettingsTest))
 	mux.HandleFunc("/api/admin", s.requireAuth(s.handleAdmin))
 	mux.HandleFunc("/api/admin/rotate", s.requireAuth(s.handleAdminRotate))
 	// NO /api/apps routes: application management happens in the INTERFACE OF

@@ -64,6 +64,11 @@ type moduleView struct {
 	Warning     string           `json:"warning,omitempty"`
 	State       module.State     `json:"state"`
 	Blocked     string           `json:"blocked,omitempty"`
+	// Configurable tells the page whether to show a Settings form for this
+	// module. It is on every module, Core included — a Core module can have
+	// settings, and it is the difference with the Modules section, where only
+	// Optional ones carry an Install button.
+	Configurable bool `json:"configurable"`
 }
 
 // kindName serializes the Kind: the browser filters the module cards on
@@ -87,7 +92,20 @@ func kindName(k module.Kind) string {
 // and resolving it once means the settings page can later update the value in
 // place without any module reading os.Getenv.
 func (s *Server) moduleEnv(out io.Writer) module.Env {
-	return module.Env{Domain: s.Domain, Kube: s.kube, Out: out, Acme: s.acme}
+	return module.Env{Domain: s.Domain, Kube: s.kube, Out: out, Acme: s.acme,
+		Settings: s.settingsCM, Secrets: s.settingsSec}
+}
+
+// moduleEnvReadOnly builds the Env for a call that only READS.
+//
+// Out is io.Discard: a state or settings read must not append to the operation
+// journal, which exists for install/uninstall and is what the page shows as
+// "what happened". A read that wrote there would fill the journal with noise and
+// make the operations it exists for impossible to find.
+func (s *Server) moduleEnvReadOnly(m module.Module) module.Env {
+	env := s.moduleEnv(io.Discard)
+	env.ModuleID = m.Info().ID
+	return env
 }
 
 // viewFor builds the browser view of one module.
@@ -111,6 +129,10 @@ func (s *Server) viewFor(ctx context.Context, m module.Module) moduleView {
 		Resources:   info.Resources,
 		Warning:     info.Warning,
 	}
+	// The page cannot ask "does this module implement an interface?" — it reads
+	// a flag. Resolved here, so the answer comes from the same registry the
+	// settings routes use.
+	_, v.Configurable = m.(module.Configurable)
 	if op, ok := s.ops.current(info.ID); ok && op.running {
 		status := module.Installing
 		if op.action == actionUninstall {
