@@ -168,6 +168,27 @@ type Env struct {
 	Kube   kubernetes.Interface // k8s.io/client-go/kubernetes
 	Out    io.Writer            // CLI: stdout; console: the operation log
 
+	// ModuleID is the ID of the module this Env was built for.
+	//
+	// WHY IT IS HERE: settings are stored under the module's ID, and a module
+	// calling the settings package knows its own ID — but threading it through
+	// every call would carry a value the caller can get wrong. One answer to
+	// "which module is this?" is what keeps two modules from writing to the
+	// same place.
+	ModuleID string
+
+	// Settings and Secrets give access to the stores, as INTERFACES declared
+	// here.
+	//
+	// WHY INTERFACES AND NOT THE CONCRETE PACKAGES: this package imports no
+	// other internal package (a rule, verified by a test): every module imports
+	// internal/module, so anything imported here becomes a dependency of every
+	// module. Declaring the two methods a module needs — read and write one
+	// entry from a ConfigMap and a Secret — keeps internal/settings free to
+	// import whatever it wants, and lets a test substitute both with a map.
+	Settings ConfigMapStore
+	Secrets  SecretStore
+
 	// Acme is the resolved ACME configuration (challenge, DNS provider).
 	//
 	// It is the zero value's business, not the module's, to be correct: a
@@ -175,5 +196,32 @@ type Env struct {
 	// module reads as "http01" — the historical behaviour. A read-only caller
 	// (a status view) should use acme.HTTP01() explicitly rather than rely on
 	// that, so that its answer does not depend on how it was constructed.
+	//
+	// Deprecated: the ingress module reads its challenge and provider through
+	// its own settings, and this field goes with that change. It stays until
+	// then because the module still reads it.
 	Acme acme.Reglages
+}
+
+// ConfigMapStore reads and writes ordinary settings.
+//
+// It is the shape of a Kubernetes ConfigMap, reduced to what a module needs: one
+// key at a time. Lire answers "" when the key is absent — that is a normal
+// state before the first save, not an error.
+type ConfigMapStore interface {
+	Lire(ctx context.Context, ns, nom, cle string) (string, error)
+	// Ecrire merges the given keys into the object, creating it if needed.
+	Ecrire(ctx context.Context, ns, nom string, donnees map[string]string) error
+	Supprimer(ctx context.Context, ns, nom, cle string) error
+}
+
+// SecretStore reads and writes secret settings when no vault is configured.
+//
+// SAME SHAPE AS ConfigMapStore, and deliberately so: `secrets.DepuisEnvironnement`
+// already decides whether the vault is used, and the module should not have to
+// know which store answered. A module that must write to a specific path
+// overrides Apply and says why.
+type SecretStore interface {
+	Lire(ctx context.Context, ns, nom, cle string) (map[string]string, error)
+	Ecrire(ctx context.Context, ns, nom string, donnees map[string]string) error
 }
