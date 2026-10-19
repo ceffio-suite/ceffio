@@ -45,6 +45,18 @@ func Register(m Module) {
 		panic(fmt.Sprintf("module.Register: module ID %q is not valid kebab-case", id))
 	}
 
+	// A module that declares settings has them checked HERE, at registration,
+	// for the same reason its ID is: a malformed declaration is a programming
+	// error that must fail at startup. A Choice without options, a duplicate
+	// key or a ShowWhen pointing nowhere stays invisible until an operator opens
+	// the page — on their installation, hours later — and produces a form that
+	// cannot be drawn or a setting stored but never read.
+	if cfg, ok := m.(Configurable); ok {
+		if err := verifierGroupes(id, cfg.Settings()); err != nil {
+			panic(err.Error())
+		}
+	}
+
 	mu.Lock()
 	defer mu.Unlock()
 
