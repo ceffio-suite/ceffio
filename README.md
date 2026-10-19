@@ -219,6 +219,7 @@ Prerequisites:
 | `ceffio module install <id>` | install an optional module and its dependencies |
 | `ceffio module remove <id>` | remove an optional module (`--yes` to skip confirmation) |
 | `ceffio module status <id>` | detailed state of a module (status, detail, blocked) |
+| `ceffio module config <id>` | read or write a module's settings (`--test`, secrets from stdin) |
 | `ceffio backup` | backup (databases, secrets, volumes) |
 | `ceffio restore` | restore from a backup |
 | `ceffio upgrade --plan` | show what would change, before changing it |

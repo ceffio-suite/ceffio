@@ -21,8 +21,8 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
-	"github.com/ceffio-suite/ceffio/internal/acme"
 	"github.com/ceffio-suite/ceffio/internal/module"
+	"github.com/ceffio-suite/ceffio/internal/settings"
 	"github.com/ceffio-suite/ceffio/internal/stack"
 	// Blank import: each module registers itself from the init() of its own
 	// package, and Go only runs the init() of packages the binary actually
@@ -71,16 +71,12 @@ func kubeClient() (kubernetes.Interface, error) {
 // reported on stderr and the historical HTTP-01 is used, so that a read-only
 // command keeps answering.
 func moduleEnv(domain string) module.Env {
-	env := module.Env{Domain: domain, Out: os.Stdout, Acme: acme.HTTP01()}
+	env := module.Env{Domain: domain, Out: os.Stdout,
+		Settings: settings.ConfigMaps{}, Secrets: settings.Secrets{}}
 	if kube, err := kubeClient(); err == nil {
 		env.Kube = kube
 	} else {
 		fmt.Fprintf(os.Stderr, "⚠ no Kubernetes client (%v) — states will read \"unknown\"\n", err)
-	}
-	if reglages, err := acme.DepuisEnvironnement(); err == nil {
-		env.Acme = reglages
-	} else {
-		fmt.Fprintf(os.Stderr, "⚠ %v — assuming the %s challenge\n", err, acme.ChallengeHTTP)
 	}
 	return env
 }
@@ -124,6 +120,7 @@ sequence, and removed with the cluster by "ceffio uninstall".`,
 		newModuleInstallCmd(&domain),
 		newModuleRemoveCmd(&domain),
 		newModuleStatusCmd(&domain),
+		newModuleConfigCmd(&domain),
 	)
 	return c
 }

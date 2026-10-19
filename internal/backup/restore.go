@@ -106,7 +106,18 @@ func volumeByName(name string) (Volume, bool) {
 }
 
 // restoreSecrets re-applies the Secrets, creating the missing namespaces.
+//
+// It ALSO restores the settings ConfigMap, because it is the same kind of object
+// at the same level of importance — operator settings that nothing recreates.
+// A separate step would be a second place to call from the restore sequence, and
+// one of them would eventually be forgotten.
 func restoreSecrets(ctx context.Context, path string, errs *[]string) error {
+	// The archive keeps it one level up, under configmaps/.
+	cmPath := filepath.Join(filepath.Dir(filepath.Dir(path)), "configmaps", "ceffio-settings.json")
+	if err := restoreConfigMaps(ctx, cmPath, errs); err != nil {
+		*errs = append(*errs, err.Error())
+	}
+
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("secrets file missing from the archive")
@@ -157,6 +168,59 @@ func restoreSecrets(ctx context.Context, path string, errs *[]string) error {
 			// tolerate any partially successful message.
 			if !strings.Contains(msg, "AlreadyExists") {
 				*errs = append(*errs, fmt.Sprintf("secret %s/%s : %s", s.Namespace, s.Name, msg))
+			}
+		}
+	}
+	return nil
+}
+
+// restoreConfigMaps re-applies the settings ConfigMaps.
+//
+// A missing file is NOT an error: an installation where no module has saved a
+// setting yet has no such object, and a restore on a fresh machine must not fail
+// because of it. That is the difference with the Secrets file, whose absence
+// means the archive itself is incomplete.
+func restoreConfigMaps(ctx context.Context, path string, errs *[]string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("reading the settings configmap: %w", err)
+	}
+	var doc struct {
+		ConfigMaps []struct {
+			Name      string            `json:"name"`
+			Namespace string            `json:"namespace"`
+			Data      map[string]string `json:"data"`
+		} `json:"configmaps"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return fmt.Errorf("the settings configmap file is not valid: %w", err)
+	}
+
+	for _, c := range doc.ConfigMaps {
+		kubectlOut(ctx, "create", "namespace", c.Namespace)
+		// Replaced, not applied: the object was created imperatively and
+		// carries no last-applied-configuration for apply to compare against.
+		// Deleting first restores EXACTLY the saved state.
+		kubectlOut(ctx, "delete", "configmap", c.Name, "-n", c.Namespace, "--ignore-not-found")
+
+		obj := map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata":   map[string]any{"name": c.Name, "namespace": c.Namespace},
+			"data":       c.Data,
+		}
+		b, _ := json.Marshal(obj)
+		cmd := k8s.Command(ctx, "kubectl", "create", "-f", "-")
+		cmd.Stdin = strings.NewReader(string(b))
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			msg := oneLine(stderr.String())
+			if !strings.Contains(msg, "AlreadyExists") {
+				*errs = append(*errs, fmt.Sprintf("configmap %s/%s : %s", c.Namespace, c.Name, msg))
 			}
 		}
 	}
