@@ -147,10 +147,15 @@ func (s *Server) volumesUtilises(ctx context.Context) (map[string]int64, error) 
 			continue
 		}
 		nom := texte(meta["name"])
-		// THE VOLUME'S NAME IS THE PVC'S: Longhorn names its volume after the
-		// claim's UID ("pvc-0a1eaaaf-…"), which is exactly what the claim
-		// carries in its own name. That coincidence is the join key, and it is
-		// why no annotation or lookup is needed.
+		// THE NAME IS THE PROVISIONER'S, NOT THE CLAIM'S — established by running
+		// this against a real cluster after the first version assumed they agreed
+		// and joined on nothing. A Longhorn volume is named after the CLAIM'S UID
+		// (`pvc-0b25eaf7-…`), while the claim is called `nextcloud-data`; the only
+		// place the two meet is the claim's spec.volumeName, which is what the
+		// caller matches on.
+		//
+		// The initialSize is deliberately NOT used: it is the size at creation
+		// time, not the current one.
 		if nom == "" {
 			continue
 		}

@@ -70,8 +70,15 @@ type Volume struct {
 	// A page that treated both as zero would show a full disk as empty, which is
 	// the one reading that leads to an outage.
 	UtiliseConnu bool
-	// Noeud is where the volume's data lives, when the provisioner says.
-	Noeud string
+	// Lie is what the PROVISIONER calls this claim, which is nothing like the
+	// claim's own name.
+	//
+	// A Longhorn volume is named after the claim's UID — `pvc-0b25eaf7-…` for a
+	// claim called `nextcloud-data` — and that name exists nowhere else in the
+	// claim. spec.volumeName is what carries it, and it is the ONLY join key:
+	// matching on the claim's name finds nothing, which is what an earlier
+	// version of this code did, on the false premise that the two names agree.
+	Lie string
 }
 
 // PctUtilise returns the fill ratio, or -1 when the used figure is unknown: a
@@ -188,7 +195,7 @@ func (s *Server) CollecterMonitoring(ctx context.Context) Monitoring {
 		out.Avertissements = append(out.Avertissements, err.Error())
 	} else {
 		for i := range out.Volumes {
-			if taille, ok := utilises[out.Volumes[i].Nom]; ok {
+			if taille, ok := utilises[out.Volumes[i].Lie]; ok {
 				out.Volumes[i].Utilise = taille
 				out.Volumes[i].UtiliseConnu = true
 			}
@@ -328,7 +335,11 @@ func (s *Server) volumes(ctx context.Context) ([]Volume, error) {
 			} `json:"metadata"`
 			Spec struct {
 				StorageClassName string `json:"storageClassName"`
-				Resources        struct {
+				// VolumeName is the PROVISIONER's name for this claim, and it is
+				// the only key that joins a claim to what the provisioner says
+				// about it — see volumesUtilises.
+				VolumeName string `json:"volumeName"`
+				Resources  struct {
 					Requests struct {
 						Storage string `json:"storage"`
 					} `json:"requests"`
@@ -362,6 +373,7 @@ func (s *Server) volumes(ctx context.Context) ([]Volume, error) {
 		out = append(out, Volume{
 			Namespace: p.Metadata.Namespace,
 			Nom:       p.Metadata.Name,
+			Lie:       p.Spec.VolumeName,
 			Classe:    p.Spec.StorageClassName,
 			Etat:      p.Status.Phase,
 			Demande:   taille,
