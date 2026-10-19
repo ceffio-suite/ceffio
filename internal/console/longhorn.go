@@ -175,7 +175,11 @@ func (s *Server) volumesUtilises(ctx context.Context) (map[string]int64, error) 
 // messages send an operator to different places.
 func (s *Server) lireCRDLonghorn(ctx context.Context, ressource string) ([]map[string]interface{}, error) {
 	chemin := fmt.Sprintf("%s/%s", cheminCRDLonghorn, ressource)
-	brut, err := s.kube.Discovery().RESTClient().Get().AbsPath(chemin).DoRaw(ctx)
+	rc, err := s.restClient()
+	if err != nil {
+		return nil, err
+	}
+	brut, err := rc.Get().AbsPath(chemin).DoRaw(ctx)
 	if err != nil {
 		return nil, traduireErreurLonghorn(err, ressource)
 	}

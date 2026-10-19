@@ -33,11 +33,13 @@ package console
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 // --- Types -----------------------------------------------------------------
@@ -223,7 +225,12 @@ func (s *Server) metriquesNoeuds(ctx context.Context, avert *[]string) ([]Metriq
 	// Capacity and conditions first: they come from the core API, which is
 	// always present. If THIS read fails there is nothing to show, and the page
 	// must say so rather than display nothing.
-	brut, err := s.kube.Discovery().RESTClient().Get().AbsPath("/api/v1/nodes").DoRaw(ctx)
+	rc, err := s.restClient()
+	if err != nil {
+		*avert = append(*avert, "nodes: "+err.Error())
+		return nil, nil
+	}
+	brut, err := rc.Get().AbsPath("/api/v1/nodes").DoRaw(ctx)
 	if err != nil {
 		*avert = append(*avert, "nodes: "+err.Error()+" — the machine's capacity and conditions are unavailable")
 		return nil, nil
@@ -323,7 +330,11 @@ func (s *Server) metriquesNoeuds(ctx context.Context, avert *[]string) ([]Metriq
 // silently stop showing a volume — the worst kind of monitoring defect, since
 // it looks like there is nothing to see.
 func (s *Server) volumes(ctx context.Context) ([]Volume, error) {
-	brut, err := s.kube.Discovery().RESTClient().Get().AbsPath("/api/v1/persistentvolumeclaims").DoRaw(ctx)
+	rc, err := s.restClient()
+	if err != nil {
+		return nil, err
+	}
+	brut, err := rc.Get().AbsPath("/api/v1/persistentvolumeclaims").DoRaw(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -389,6 +400,32 @@ func (s *Server) volumes(ctx context.Context) ([]Volume, error) {
 }
 
 // --- Helpers ---------------------------------------------------------------
+
+// restClient returns the client used for the raw API reads.
+//
+// WHY IT IS CHECKED RATHER THAN USED DIRECTLY: Discovery().RESTClient() answers
+// nil when no REST layer is attached — which is what a test client does, and
+// what an odd deployment could do. Calling a method on that nil pointer PANICS,
+// and a panicking handler takes down the whole console process: a monitoring
+// page would become a way to crash the administration console, which is the
+// opposite of its purpose.
+//
+// A MISSING CLIENT IS A REPORTABLE CONDITION, not a crash: the caller records it
+// in the warnings and the page renders the sections that do not need it.
+func (s *Server) restClient() (rest.Interface, error) {
+	if s == nil || s.kube == nil {
+		return nil, fmt.Errorf("no Kubernetes client is attached to the console")
+	}
+	d := s.kube.Discovery()
+	if d == nil {
+		return nil, fmt.Errorf("the cluster's discovery is unavailable")
+	}
+	rc := d.RESTClient()
+	if rc == nil {
+		return nil, fmt.Errorf("the REST layer is unavailable: the raw API cannot be read")
+	}
+	return rc, nil
+}
 
 // enCoeurs converts a Kubernetes CPU quantity ("542m", "12", "1500m") to cores.
 //
