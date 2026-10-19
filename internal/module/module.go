@@ -18,8 +18,6 @@ import (
 
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/client-go/kubernetes"
-
-	"github.com/ceffio-suite/ceffio/internal/acme"
 )
 
 // Module is a feature of the suite: something that can be installed,
@@ -189,18 +187,8 @@ type Env struct {
 	Settings ConfigMapStore
 	Secrets  SecretStore
 
-	// Acme is the resolved ACME configuration (challenge, DNS provider).
-	//
-	// It is the zero value's business, not the module's, to be correct: a
-	// caller that does not fill it leaves Challenge empty, which the ingress
-	// module reads as "http01" — the historical behaviour. A read-only caller
-	// (a status view) should use acme.HTTP01() explicitly rather than rely on
-	// that, so that its answer does not depend on how it was constructed.
-	//
-	// Deprecated: the ingress module reads its challenge and provider through
-	// its own settings, and this field goes with that change. It stays until
-	// then because the module still reads it.
-	Acme acme.Reglages
+	// Settings and Secrets above are how a module reads and writes its own
+	// configuration: see internal/settings for the default store.
 }
 
 // ConfigMapStore reads and writes ordinary settings.

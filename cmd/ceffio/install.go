@@ -851,17 +851,15 @@ func installerModulesOptionnels(ctx context.Context, o *installOptions, modules 
 		return fmt.Errorf("optional modules need a Kubernetes client: %w", err)
 	}
 
-	// The ACME settings are resolved HERE and handed to the modules: a module
-	// never reads the environment itself. An invalid configuration stops the
-	// phase instead of installing modules that would act on settings nobody
-	// validated — the ingress module is precisely the one that writes a
-	// ClusterIssuer from them.
-	reglages, err := acme.DepuisEnvironnement()
-	if err != nil {
-		return err
-	}
+	// THE ACME SETTINGS ARE NO LONGER RESOLVED HERE. A module reads its own
+	// settings through the contract (internal/settings), and the ingress module
+	// resolves the challenge, the provider and the zone itself — from the store,
+	// primed from CEFFIO_ACME_* on the installation's first pass. Passing them
+	// through Env was what made internal/module depend on internal/acme; that
+	// dependency is gone, and with it the second place where a value could be
+	// resolved differently.
 
-	env := module.Env{Domain: o.domain, Kube: kube, Out: os.Stdout, Acme: reglages}
+	env := module.Env{Domain: o.domain, Kube: kube, Out: os.Stdout}
 
 	fmt.Printf("\n∙ optional modules from the registry (%d)\n", len(modules))
 	for _, m := range modules {

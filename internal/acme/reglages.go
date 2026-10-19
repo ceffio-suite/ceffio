@@ -151,16 +151,18 @@ func HTTP01() Reglages {
 	return Reglages{Challenge: ChallengeHTTP, WebhookGroup: WebhookGroupParDefaut}
 }
 
-// DepuisEnvironnement reads and VALIDATES the settings.
+// DepuisValeurs builds the resolved settings from three values, VALIDATING them.
 //
-// It returns an error rather than falling back to a default when a value is
-// wrong: a fallback would install a working HTTPS setup that is not the one the
-// operator asked for, and the difference only shows up at the next renewal.
-// An installation that cannot honour its own configuration must say so.
-func DepuisEnvironnement() (Reglages, error) {
+// WHY A SEPARATE ENTRY POINT FROM DepuisEnvironnement: the settings can now come
+// from the store — what the operator chose in the console or on the command line
+// — and not only from the environment. Both paths must produce the SAME
+// validated result, so the checks live here and DepuisEnvironnement simply calls
+// this one. Two implementations would let a setting be accepted from the console
+// and refused by the installer, or the other way round.
+func DepuisValeurs(challenge, provider, zone string) (Reglages, error) {
 	r := HTTP01()
 
-	brut := strings.ToLower(strings.TrimSpace(os.Getenv(VariableChallenge)))
+	brut := strings.ToLower(strings.TrimSpace(challenge))
 	switch Challenge(brut) {
 	case "":
 		// nothing configured: keep the historical HTTP-01
@@ -168,27 +170,21 @@ func DepuisEnvironnement() (Reglages, error) {
 		r.Challenge = Challenge(brut)
 	default:
 		return Reglages{}, fmt.Errorf(
-			"%s=%q is not a supported ACME challenge: use %q or %q",
-			VariableChallenge, brut, ChallengeHTTP, ChallengeDNS)
+			"challenge %q is not supported: use %q or %q", brut, ChallengeHTTP, ChallengeDNS)
 	}
 
-	r.Provider = Provider(strings.ToLower(strings.TrimSpace(os.Getenv(VariableDNSProvider))))
-	r.Zone = strings.TrimSpace(os.Getenv(VariableDNSZone))
-
-	if g := strings.TrimSpace(os.Getenv(VariableWebhookGroup)); g != "" {
-		r.WebhookGroup = g
-	}
+	r.Provider = Provider(strings.ToLower(strings.TrimSpace(provider)))
+	r.Zone = strings.TrimSpace(zone)
 
 	// A provider only means something for DNS-01. Saying so is better than
-	// ignoring the name in silence: an operator who set CEFFIO_DNS_PROVIDER
-	// while the challenge is still http01 has a configuration that does not do
-	// what it says, and would discover it much later.
+	// ignoring the name in silence: an operator who set a provider while the
+	// challenge is still http01 has a configuration that does not do what it
+	// says, and would discover it much later.
 	if r.Challenge == ChallengeHTTP && r.Provider != "" {
 		return Reglages{}, fmt.Errorf(
-			"%s=%q is set while %s=%q: a DNS provider is only used by the %q challenge. "+
-				"Set %s=%q, or remove %s",
-			VariableDNSProvider, r.Provider, VariableChallenge, ChallengeHTTP, ChallengeDNS,
-			VariableChallenge, ChallengeDNS, VariableDNSProvider)
+			"a DNS provider (%q) is set while the challenge is %q: a provider is only used "+
+				"by the %q challenge. Use %q, or clear the provider.",
+			r.Provider, ChallengeHTTP, ChallengeDNS, ChallengeDNS)
 	}
 
 	// DNS-01 without a provider has nothing to publish the record with. This is
@@ -196,13 +192,37 @@ func DepuisEnvironnement() (Reglages, error) {
 	// on the operator's behalf would write a credential they never created.
 	if r.Challenge == ChallengeDNS && r.Provider == "" {
 		return Reglages{}, fmt.Errorf(
-			"%s=%q requires %s (one of the in-tree solvers: %s, %s, %s, %s — "+
-				"or the provider name of the DNS webhook). Without it no challenge "+
+			"the %q challenge requires a DNS provider (one of the in-tree solvers: %s, %s, "+
+				"%s, %s — or the provider name of the DNS webhook). Without it no challenge "+
 				"record can be published and no certificate will be issued",
-			VariableChallenge, ChallengeDNS, VariableDNSProvider,
-			ProviderCloudflare, ProviderRoute53, ProviderRFC2136, ProviderACMEDNS)
+			ChallengeDNS, ProviderCloudflare, ProviderRoute53, ProviderRFC2136, ProviderACMEDNS)
 	}
+	return r, nil
+}
 
+// DepuisEnvironnement reads and VALIDATES the settings.
+//
+// It returns an error rather than falling back to a default when a value is
+// wrong: a fallback would install a working HTTPS setup that is not the one the
+// operator asked for, and the difference only shows up at the next renewal.
+// An installation that cannot honour its own configuration must say so.
+//
+// Deprecated: the values now come from the module's stored settings, primed from
+// these variables on the installation's first pass. This function stays for that
+// amorçage and for the install path, and delegates to DepuisValeurs so both
+// accept exactly the same configurations.
+func DepuisEnvironnement() (Reglages, error) {
+	r, err := DepuisValeurs(
+		os.Getenv(VariableChallenge),
+		os.Getenv(VariableDNSProvider),
+		os.Getenv(VariableDNSZone),
+	)
+	if err != nil {
+		return Reglages{}, err
+	}
+	if g := strings.TrimSpace(os.Getenv(VariableWebhookGroup)); g != "" {
+		r.WebhookGroup = g
+	}
 	return r, nil
 }
 

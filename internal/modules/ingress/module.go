@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/ceffio-suite/ceffio/internal/acme"
 	coucheIngress "github.com/ceffio-suite/ceffio/internal/ingress"
 	"github.com/ceffio-suite/ceffio/internal/module"
 	"github.com/ceffio-suite/ceffio/internal/modules/socle"
@@ -71,11 +72,44 @@ func (m *ingressModule) Info() module.Info {
 // Install delegates to ingress.Deploy — the registry describes, the sequence
 // of cmd/ceffio/install.go remains master of the core order.
 //
-// The ACME settings come from Env, never from os.Getenv here: that is the
-// whole point of carrying them, and it is what makes a `module install ingress`
-// from the console act on the same challenge the installer used.
+// THE SETTINGS COME FROM THE STORE, not from Env: the challenge, the provider
+// and the zone are what the operator configured — through the console, the
+// command line, or the variables the installation primed on its first pass. The
+// module resolves them and hands them to Deploy, so a `module install ingress`
+// acts on the same configuration the rest of the installation uses.
+//
+// Env.Acme is no longer read: that field was a dependency of internal/module on
+// internal/acme, and the settings contract replaced it. The resolution lives
+// here, where the value is consumed.
 func (m *ingressModule) Install(ctx context.Context, env module.Env) error {
-	return coucheIngress.Deploy(ctx, env.Domain, env.Acme)
+	reglages, err := m.reglagesEffectifs(ctx, env)
+	if err != nil {
+		return err
+	}
+	return coucheIngress.Deploy(ctx, env.Domain, reglages)
+}
+
+// reglagesEffectifs resolves the ACME settings for THIS installation.
+//
+// THE ORDER OF PRECEDENCE, and why: the STORED value wins over the environment.
+// An installation configured through CEFFIO_ACME_* primes the store on its first
+// pass; afterwards the store is the truth, so an operator who changes the
+// challenge from the console is not overridden by a variable left in a script.
+// When nothing is stored, the environment answers — which is what keeps an
+// installation that was never reconfigured working exactly as before.
+func (m *ingressModule) reglagesEffectifs(ctx context.Context, env module.Env) (acme.Reglages, error) {
+	brut, err := m.Current(ctx, env, groupeTLS)
+	if err != nil {
+		// A store that cannot be read falls back to the environment rather
+		// than failing: Deploy would otherwise refuse to run on an
+		// installation whose vault is temporarily unreachable, which is the
+		// moment an operator is least able to fix it.
+		brut, _ = DepuisEnvironnementAmorce()
+	}
+	if brut == nil {
+		return acme.HTTP01(), nil
+	}
+	return acme.DepuisValeurs(brut["challenge"], brut["dns_provider"], brut["dns_zone"])
 }
 
 // nsIngresses lists the namespaces where ingress.Deploy lays down an

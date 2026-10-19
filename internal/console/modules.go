@@ -92,7 +92,7 @@ func kindName(k module.Kind) string {
 // and resolving it once means the settings page can later update the value in
 // place without any module reading os.Getenv.
 func (s *Server) moduleEnv(out io.Writer) module.Env {
-	return module.Env{Domain: s.Domain, Kube: s.kube, Out: out, Acme: s.acme,
+	return module.Env{Domain: s.Domain, Kube: s.kube, Out: out,
 		Settings: s.settingsCM, Secrets: s.settingsSec}
 }
 
