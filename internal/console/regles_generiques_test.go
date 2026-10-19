@@ -55,8 +55,6 @@ var routesAutorisees = map[string]string{
 	"/api/modules/{id}/settings/{group}/test": "GENERIC settings check",
 	"/api/admin":        "administration account",
 	"/api/admin/rotate": "password rotation",
-	"/api/smtp":         "mails of Nextcloud itself",
-	"/api/smtp/tester":  "SMTP check",
 	"/api/tls":          "certificates",
 }
 

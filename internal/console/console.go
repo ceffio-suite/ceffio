@@ -196,8 +196,6 @@ func (s *Server) Handler() http.Handler {
 	// The link to this UI is provided by /api/admin.
 	// Platform SMTP: configuration, test and save. The test-before-save is the
 	// key point — an untested config is worthless.
-	mux.HandleFunc("/api/smtp", s.requireAuth(s.handleSmtp))
-	mux.HandleFunc("/api/smtp/tester", s.requireAuth(s.handleSmtpTester))
 	// The TLS page: which ACME challenge is active, through which DNS provider,
 	// and where the certificates stand. The credential it writes goes to
 	// OpenBao — the console holds no right in cert-manager, by design, and the
