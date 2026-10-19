@@ -75,11 +75,17 @@ const (
 	// suite uses the full mount+path form (kv/data/ceffio/nextcloud/db), and
 	// the injector template addresses the KV v2 engine directly.
 	cheminBaoIdentifiantsDNS = "kv/data/ceffio/tls/dns-provider"
-	// cheminCoffreMount / cheminCoffreSousChemin: the same path, split the way
-	// secrets.LireEntreeCoffre expects it (mount, sub-path). Written once here
-	// so the two forms cannot drift.
-	cheminCoffreMount      = "ceffio"
-	cheminCoffreSousChemin = "tls/dns-provider"
+	// cheminCoffreComposant / cheminCoffreSousChemin: the same path, split the way
+	// secrets.LireEntreeCoffre expects it.
+	//
+	// THE PREFIX IS ADDED BY cfg.Chemin, NOT BY US: the helper composes
+	// "<prefix>/<composant>/<nom>", where the prefix comes from the vault
+	// configuration ("ceffio" by default — the same one the SMTP page passes as
+	// ("smtp", "relais")). Passing "ceffio" here would produce
+	// "ceffio/ceffio/tls/dns-provider" and report the entry as absent, while it
+	// sits under the correct path — measured on the cluster.
+	cheminCoffreComposant  = "tls"
+	cheminCoffreSousChemin = "dns-provider"
 )
 
 // deployerWebhookDNS installs the solver and wires its credentials from OpenBao.
@@ -228,11 +234,11 @@ func ecrireSecretDNS(ctx context.Context, reglages acme.Reglages) error {
 	}
 
 	entree, err := secrets.LireEntreeCoffre(ctx, secrets.DepuisEnvironnement(),
-		cheminCoffreMount, cheminCoffreSousChemin)
+		cheminCoffreComposant, cheminCoffreSousChemin)
 	if err != nil {
 		return fmt.Errorf("reading the DNS credential from the vault (%s/%s): %w — "+
 			"store it from the console's TLS page before enabling dns01",
-			cheminCoffreMount, cheminCoffreSousChemin, err)
+			cheminCoffreComposant, cheminCoffreSousChemin, err)
 	}
 
 	donnees := map[string][]byte{}
@@ -251,7 +257,7 @@ func ecrireSecretDNS(ctx context.Context, reglages acme.Reglages) error {
 		// authentication error, and nothing would name the absent field.
 		return fmt.Errorf("the vault entry %s/%s lacks %v — the %s solver needs "+
 			"them and cannot authenticate without (store them from the console's TLS page)",
-			cheminCoffreMount, cheminCoffreSousChemin, manquants, reglages.Provider)
+			cheminCoffreComposant, cheminCoffreSousChemin, manquants, reglages.Provider)
 	}
 
 	cli, err := k8sapi.Nouveau()
