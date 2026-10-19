@@ -224,6 +224,7 @@ Prerequisites:
 | `ceffio upgrade --plan` | show what would change, before changing it |
 | `ceffio users` | provision accounts (Keycloak + applications) |
 | `ceffio console` | administration console |
+| `ceffio theme` | reapply the Ceffio theme to Nextcloud |
 | `ceffio vault` | the secrets vault (OpenBao) |
 | `ceffio dns` | check DNS configuration (A, AAAA, MX, SPF, DKIM, DMARC, PTR) |
 | `ceffio expose` | publish the suite behind the firewall |

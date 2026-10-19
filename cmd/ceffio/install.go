@@ -29,6 +29,7 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/stacks"
 	"github.com/ceffio-suite/ceffio/internal/storage"
 	"github.com/ceffio-suite/ceffio/internal/talk"
+	"github.com/ceffio-suite/ceffio/internal/theming"
 	"github.com/ceffio-suite/ceffio/internal/vault"
 	"github.com/spf13/cobra"
 )
@@ -378,6 +379,19 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	// where they were installed by hand.
 	if err := apps.Deploy(ctx); err != nil {
 		return err
+	}
+
+	// Ceffio theme (Phase 13): name, slogan, colours, logo, favicon and
+	// background, applied through Nextcloud's own Theming app.
+	//
+	// A FAILURE HERE DOES NOT STOP THE INSTALLATION, and that is deliberate:
+	// the theme is presentation, while the mail, the identity provider and the
+	// certificates deployed before it are function. Aborting an installation
+	// because a logo could not be posed would trade a cosmetic gap for an
+	// unusable platform — and `ceffio theme` replays this step alone.
+	if err := theming.Deploy(ctx); err != nil {
+		fmt.Printf("  ! theme not applied (%v)\n", err)
+		fmt.Println("    ↳ replay it later with: ceffio theme")
 	}
 
 	// --- Ingress / real TLS (Phase 9) — MOVED HERE, BEFORE THE OIDC BLOCKS ---
