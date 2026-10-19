@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/ceffio-suite/ceffio/internal/acme"
 	"github.com/ceffio-suite/ceffio/internal/k8sapi"
 )
 
@@ -179,4 +180,46 @@ func poserAuCoffre(ctx context.Context, cli *k8sapi.Client, jeton, chemin string
 	// whatever the outcome.
 	retirerPayloadCoffre(ctx, cli, "/tmp/semence.json")
 	return err
+}
+
+// PoserReglagesACME publishes the ACME settings of this installation in the
+// vault, where the console reads them back.
+//
+// WHY THE VAULT AND NOT THE POD MANIFEST: the console container declares no
+// environment variable at all — everything it reads comes from the file the
+// injector renders. Writing the challenge into its Deployment would work for a
+// fresh install and break every existing one, and worse, the console would then
+// report the DEFAULT while the ingress layer used another value. That is
+// precisely the divergence the TLS page exists to prevent, and the page would
+// become the thing that lies.
+//
+// ONE FUNCTION, CALLED ONCE BY THE INSTALLATION: the value is written by the
+// same process that resolved it (cmd/ceffio/install.go), so what the vault
+// holds and what the ingress layer applied cannot differ.
+//
+// THE ENTRY IS REWRITTEN, NOT SKIPPED WHEN PRESENT — unlike the seeding of
+// other components. A challenge is a SETTING the operator changes; leaving the
+// old value behind would make the next install report a configuration that no
+// longer runs.
+func PoserReglagesACME(ctx context.Context, reglages acme.Reglages) error {
+	cli, err := k8sapi.Nouveau()
+	if err != nil {
+		return fmt.Errorf("Kubernetes client: %w", err)
+	}
+	jeton, err := jetonAdministration(ctx, cli)
+	if err != nil {
+		return fmt.Errorf("reading the administration token: %w", err)
+	}
+
+	donnees := map[string]string{
+		"challenge": string(reglages.Challenge),
+		// The provider is written EMPTY under HTTP-01 rather than omitted: the
+		// injector template reads the field by name, and a missing key would
+		// fail the render (error-on-missing-key-env) on the path where it is
+		// legitimately unused.
+		"provider":      string(reglages.Provider),
+		"zone":          reglages.Zone,
+		"webhook_group": reglages.WebhookGroup,
+	}
+	return poserAuCoffre(ctx, cli, jeton, "kv/ceffio/tls/acme", donnees)
 }

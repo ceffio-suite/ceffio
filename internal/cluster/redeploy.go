@@ -7,6 +7,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/ceffio-suite/ceffio/internal/acme"
 	"github.com/ceffio-suite/ceffio/internal/console"
 	"github.com/ceffio-suite/ceffio/internal/data"
 	"github.com/ceffio-suite/ceffio/internal/files"
@@ -66,7 +67,16 @@ func Redeployer(ctx context.Context, domain string) error {
 		return err
 	}
 	if domain != "" {
-		if err := ingress.Deploy(ctx, domain); err != nil {
+		// The ACME settings are resolved HERE, at the single point that
+		// re-deploys the ingress layer: an upgrade must re-apply the same
+		// challenge the installation chose, or it would silently rewrite the
+		// ClusterIssuers back to HTTP-01 and lose DNS-01 (and with it the
+		// wildcard) on the first `ceffio upgrade`.
+		reglages, err := acme.DepuisEnvironnement()
+		if err != nil {
+			return err
+		}
+		if err := ingress.Deploy(ctx, domain, reglages); err != nil {
 			return err
 		}
 		if err := ingress.AdoptURLs(ctx, domain); err != nil {

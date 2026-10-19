@@ -154,12 +154,33 @@ func installCertManager(ctx context.Context) error {
 	if err := ensureRepo(ctx, "jetstack", "https://charts.jetstack.io"); err != nil {
 		return err
 	}
-	cmd := k8s.Command(ctx, "helm", "upgrade", "--install", "cert-manager",
+	args := []string{"upgrade", "--install", "cert-manager",
 		"jetstack/cert-manager",
 		"--namespace", "cert-manager", "--create-namespace",
 		"--set", "crds.enabled=true",
+		// DNS-01 SELF-CHECK AGAINST PUBLIC RESOLVERS, ALWAYS.
+		//
+		// WHY IT IS SET EVEN THOUGH THE DEFAULT CHALLENGE IS HTTP-01: the
+		// setting is harmless when unused, and switching to dns01 later is
+		// exactly when it becomes necessary — a `helm upgrade` nobody would
+		// remember to run. Installing it here means the flag is already in
+		// place the day the challenge changes.
+		//
+		// WHAT IT PREVENTS: before attempting a DNS-01 challenge, cert-manager
+		// verifies the TXT record exists, by resolving the authoritative
+		// nameservers THROUGH /etc/resolv.conf. In a cluster whose resolver
+		// answers the public zone internally (split-horizon), it reads a stale
+		// or empty answer, waits for a propagation that will never be visible
+		// to it, and the certificate simply never arrives — with nothing in the
+		// status pointing at DNS.
+		//
+		// 8.8.8.8 and 1.1.1.1 and NOT the cluster's resolvers: the point is to
+		// see what the INTERNET sees, which is what Let's Encrypt's own
+		// validation will see.
+		"--set", "extraArgs={--dns01-recursive-nameservers-only,--dns01-recursive-nameservers=8.8.8.8:53\\,1.1.1.1:53}",
 		"--timeout", "15m",
-		"--version", certManagerChartVersion)
+		"--version", certManagerChartVersion}
+	cmd := k8s.Command(ctx, "helm", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

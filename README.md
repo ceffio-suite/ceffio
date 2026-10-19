@@ -376,6 +376,90 @@ A **private** relay address means `--external-ip` did not take effect: the
 browser then receives a candidate it cannot reach, which is the same failure
 by another route.
 
+## TLS certificates: HTTP-01 or DNS-01
+
+Ceffio obtains its certificates from Let's Encrypt through cert-manager, with
+**two** ways of proving the domain is yours. The challenge is a setting, not a
+build-time choice.
+
+| | HTTP-01 (default) | DNS-01 |
+|---|---|---|
+| Proof | a token served on port 80 of each hostname | a TXT record in your DNS zone |
+| Credential | none | a DNS provider API token, held in OpenBao |
+| Port 80 required | yes, for `.well-known/acme-challenge` | no |
+| **Wildcard `*.domain`** | **impossible** | yes |
+| Certificates needed | one per hostname | **one for the whole domain** |
+
+### Why the default is HTTP-01
+
+Nothing to configure, no credential to store or rotate. An installation that
+sets nothing behaves exactly as before this setting existed.
+
+Its limit is structural, not a matter of tuning: **the ACME protocol gives the
+authority no way of validating a wildcard over HTTP**, because a wildcard names
+hosts that do not exist yet. Nine hostnames therefore mean nine certificates,
+each renewed every sixty days against Let's Encrypt's weekly quota — and a
+hostname with no service listening on port 80 (a name served only over a
+wildcard, for example) can never be validated at all.
+
+### Why you would switch to DNS-01
+
+**One issuance instead of nine.** `ceffio.org` and `*.ceffio.org` arrive in a
+single certificate. A hostname added later is served immediately, with no new
+issuance and no quota consumed. The port 80 exemption disappears from the
+Traefik middlewares, since nothing is fetched there anymore.
+
+### How to enable it
+
+```bash
+export CEFFIO_ACME_CHALLENGE=dns01
+export CEFFIO_DNS_PROVIDER=cloudflare   # or scaleway, ovh, gandi, hetzner, rfc2136…
+export CEFFIO_DNS_ZONE=example.com      # defaults to the installation domain
+ceffio install --domain example.com
+```
+
+The provider credential is then entered **in the admin console, TLS page** — it
+goes to OpenBao, and the DNS solver reads it through the injector. Nothing has
+to be copied into the cluster by hand, and the console never reads the value
+back.
+
+A missing or contradictory setting stops the installation with its own name in
+the message. A provider set while the challenge is still `http01` is refused
+rather than ignored: a configuration that does not do what it says is worse
+than one that fails.
+
+### The providers, and why the list is open
+
+cert-manager ships eight in-tree solvers. Everything else goes through a webhook
+solver that Ceffio deploys — built on [libdns](https://github.com/libdns/libdns),
+the interface extracted from Caddy, whose compatibility check last reported 68
+supported providers. **The provider name travels as a value in the
+ClusterIssuer**, so adding a host is a configuration change, never a code
+change and never a new release.
+
+Three paths cover every situation, including "no DNS provider account":
+
+| Your situation | Solver | Notes |
+|---|---|---|
+| Cloudflare, Route 53, Azure, Google… | in-tree | nothing extra deployed |
+| Scaleway, OVH, Gandi, Hetzner, … | libdns webhook | one component, provider by name |
+| Your own DNS (BIND, Knot, PowerDNS, Technitium) | `rfc2136` | standard dynamic updates, TSIG key |
+| No rights on the main zone | `acmedns` | answers only for `_acme-challenge`, delegated by CNAME |
+
+### Two pitfalls worth knowing before you debug
+
+- **The self-check must see the Internet.** cert-manager verifies the challenge
+  record by resolving through `/etc/resolv.conf`. On a resolver that answers the
+  public zone internally, it waits for a propagation it can never observe and
+  the certificate simply never arrives — with nothing in its status pointing at
+  DNS. Ceffio installs cert-manager with
+  `--dns01-recursive-nameservers-only --dns01-recursive-nameservers=8.8.8.8:53,1.1.1.1:53`
+  so the check sees what Let's Encrypt sees.
+- **Never `cnameStrategy: Follow` by accident.** It makes cert-manager obey any
+  CNAME found at `_acme-challenge.<domain>` — including one synthesized by a
+  wildcard record. The challenge record is then written in the wrong zone, and
+  the refusal ("not permitted in zone") never explains why.
+
 ## Releases
 
 Every release is a Git tag plus a GitHub Release carrying the linux/amd64 and

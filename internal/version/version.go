@@ -153,6 +153,17 @@ var Registry = []Composant{
 		Nom: "stalwart", Image: "docker.io/stalwartlabs/stalwart:v0.16.26",
 		Module: "internal/mail", Role: "mail: inbound SMTP, IMAP, filters",
 	},
+	{
+		// The DNS-01 webhook solver, deployed ONLY for providers cert-manager
+		// does not know natively. Cloudflare, Route 53, RFC 2136 and acme-dns
+		// are handled by the cert-manager binary itself and deploy NOTHING —
+		// see EmpreinteWebhook in internal/ingress.
+		//
+		// THE VERSION IS THE UPSTREAM ONE, verified with `webhook --version`
+		// rather than read from a README.
+		Nom: "acme-dns-webhook", Image: "ghcr.io/ceffio-suite/acme-dns-webhook:v1.1.0",
+		Module: "internal/ingress", Role: "TLS: DNS-01 solver for out-of-tree DNS hosts (libdns)",
+	},
 }
 
 // Helm charts used by the platform (operators).

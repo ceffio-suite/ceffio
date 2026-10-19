@@ -14,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/ceffio-suite/ceffio/internal/module"
+	"github.com/ceffio-suite/ceffio/internal/version"
 )
 
 // Representation of the stack for the console.
@@ -247,7 +248,35 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"certsOK":   certsOK,
 		"certsN":    len(certs),
 		"serveur":   time.Now().Format(time.RFC3339),
+
+		// THE VERSION OF THE RUNNING BINARY, and the reason it belongs here:
+		// an operator updating a console has no other way to know WHICH build
+		// answered. The version is injected at compile time by the release
+		// workflow (`-X internal/version.Binary`), so it is empty on a local
+		// build — hence the fallback below rather than a bare value.
+		"version": versionCourante(),
+		"commit":  version.Commit,
+		"built":   version.Date,
 	})
+}
+
+// versionCourante renvoie la version à afficher pour le binaire en cours.
+//
+// WHY NOT version.Binary DIRECTLY: on a local build the variable keeps its
+// default "0.0.0-dev", which tells an operator nothing about WHAT is running.
+// ImageTag() already solves that problem for the container image — it identifies
+// a development build by the hash of its own content. Reusing it here means the
+// console shows the SAME identifier the deployed image carries, so the two
+// answers cannot disagree when someone cross-checks them from the cluster.
+func versionCourante() string {
+	if version.Binary != "" && version.Binary != "0.0.0-dev" {
+		return version.Binary
+	}
+	// ImageTag() already prefixes a development build with "dev-" (the first
+	// characters of the binary's hash). Repeating the word here would print
+	// "dev (dev-05d49fa4)" — a duplication that reads like two different
+	// identifiers rather than one.
+	return version.ImageTag()
 }
 
 // porteService says whether a pod (by its name) carries one of the given prefixes.
