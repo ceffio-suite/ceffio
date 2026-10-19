@@ -32,6 +32,10 @@ import (
 	coucheIngress "github.com/ceffio-suite/ceffio/internal/ingress"
 	"github.com/ceffio-suite/ceffio/internal/module"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/ceffio-suite/ceffio/internal/k8sapi"
 )
 
 const (
@@ -398,7 +402,117 @@ func lireReglagesStockes(ctx context.Context, env module.Env) (map[string]string
 	if v, ok := DepuisEnvironnementAmorce(); ok {
 		return v, nil
 	}
+
+	// NOTHING STORED AND NO VARIABLE EITHER — which is the normal case on an
+	// installation that manages TLS through cert-manager and never passed
+	// CEFFIO_DNS_PROVIDER to the console pod (the console's environment carries
+	// no TLS variable at all; its secrets come from the vault agent).
+	//
+	// THE CLUSTERISSUSER IS THEN THE ONLY HONEST SOURCE, and reading it matters
+	// for a reason beyond display: the field would otherwise come back EMPTY
+	// while the cluster serves a working Cloudflare solver. An operator opening
+	// the page would see the challenge unset and, saving to change something
+	// else, would REPLACE a working issuer with one that has no solver — and
+	// every certificate would stop renewing.
+	//
+	// Reading it cannot break an installation: it only reports what is already
+	// in place.
+	if v, ok := depuisClusterIssuer(ctx, env); ok {
+		return v, nil
+	}
+
 	return map[string]string{"challenge": "http01", "dns_provider": "", "dns_zone": ""}, nil
+}
+
+// clientK8s is the Kubernetes client the module uses. A variable, so a test can
+// substitute one backed by a fake: the ClusterIssuer fallback is the behaviour
+// that protects an installation from having its issuer rebuilt without a solver,
+// and a behaviour that cannot be exercised is a behaviour nobody has checked.
+var clientK8s = k8sapi.Nouveau
+
+// depuisClusterIssuer derives the settings from the ClusterIssuer in place.
+//
+// It reads WHAT IS THERE rather than a copy: the issuer is what cert-manager
+// actually uses, so a setting derived from it cannot disagree with the cluster.
+// A missing issuer, or one whose solver does not identify a provider, answers
+// false — the caller then falls back to the declared defaults rather than
+// inventing a provider.
+//
+// WHY THE DNS01 PROVIDER IS IDENTIFIED FROM THE SOLVER'S SHAPE and not from a
+// label: cert-manager's API nests the provider under its own key (cloudflare,
+// route53, rfc2136, webhook…), so the key that is neither the challenge
+// configuration nor a shared field IS the provider's name. That is what makes
+// this work for a provider nobody has written yet.
+func depuisClusterIssuer(ctx context.Context, env module.Env) (map[string]string, bool) {
+	cli, err := clientK8s()
+	if err != nil {
+		// No cluster reachable: the caller falls back to the declared defaults.
+		// NOT an error — `ceffio module config ingress` must work from a laptop.
+		return nil, false
+	}
+	// THE RESOURCE IS NAMED EXPLICITLY rather than resolved from the Kind.
+	//
+	// `k8sapi.LireObjet` translates a Kind into a resource through the cluster's
+	// discovery, which is the right default for arbitrary types. Here the type
+	// is known and the plural is not in doubt, and naming it avoids a
+	// dependency on discovery being available — the case of a cluster where the
+	// cert-manager API group is advertised late, which would make this fallback
+	// silently answer nothing exactly when it is needed.
+	obj, ok, err := cli.LireObjetDirect(ctx,
+		schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "clusterissuers"},
+		"ceffio-letsencrypt")
+	if err != nil || !ok {
+		return nil, false
+	}
+
+	solvers, _, _ := unstructured.NestedSlice(obj.Object, "spec", "acme", "solvers")
+	for _, s := range solvers {
+		sm, ok := s.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if _, http01 := sm["http01"]; http01 {
+			return map[string]string{"challenge": "http01", "dns_provider": "", "dns_zone": ""}, true
+		}
+		dns01, ok := sm["dns01"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		// THE PROVIDER IS IDENTIFIED FROM THE SOLVER'S SHAPE, not from a table
+		// in this file: cert-manager nests each provider under its own key
+		// (cloudflare, route53, rfc2136, webhook…), so every key that is not a
+		// shared field NAMES a provider. That is what makes this hold for a
+		// provider nobody has written yet — and for the 72 libdns webhooks.
+		cles := make([]string, 0, len(dns01))
+		for cle := range dns01 {
+			switch cle {
+			case "selector", "cnameStrategy", "ttl":
+				// These accompany the provider and are not one. Treating
+				// `selector` as a provider name would report one that does not
+				// exist, and the form would offer it.
+				continue
+			}
+			cles = append(cles, cle)
+		}
+		if len(cles) == 0 {
+			continue
+		}
+		sort.Strings(cles)
+		cle := cles[0]
+		out := map[string]string{"challenge": "dns01", "dns_provider": cle, "dns_zone": ""}
+		// A webhook solver carries its provider in a nested object: the group
+		// name is what the webhook is registered under, and the zone field
+		// carries it so the form shows which one is in place.
+		if cle == "webhook" {
+			if w, ok := dns01["webhook"].(map[string]interface{}); ok {
+				if g, ok := w["groupName"].(string); ok && g != "" {
+					out["dns_zone"] = g
+				}
+			}
+		}
+		return out, true
+	}
+	return nil, false
 }
 
 // groupeDe returns the declared group with that ID.

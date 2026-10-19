@@ -84,6 +84,18 @@ func Nouveau() (*Client, error) {
 	return &Client{cfg: cfg, cs: cs, dyn: dyn}, nil
 }
 
+// PourTest builds a client around given clients, for a test that must run
+// without a cluster.
+//
+// WHY IT EXISTS: a test that needs a ClusterIssuer cannot reach a cluster, and
+// a module whose only path to the API goes through Nouveau() is untestable —
+// which is how a fallback like "read the issuer in place" ends up unverified.
+// The function is deliberately narrow (two interfaces) rather than a general
+// injection point: it is the smallest surface that makes the behaviour provable.
+func PourTest(cs kubernetes.Interface, dyn dynamic.Interface) *Client {
+	return &Client{cs: cs, dyn: dyn}
+}
+
 // chargerConfig resolves the configuration, in the order of the conventions:
 // KUBECONFIG if set, otherwise ~/.kube/config.
 //
@@ -114,6 +126,50 @@ func chargerConfig() (*rest.Config, error) {
 // ---------------------------------------------------------------------------
 // Secrets
 // ---------------------------------------------------------------------------
+
+// LireObjet returns an arbitrary resource as it is in the cluster, or false when
+// it does not exist.
+//
+// WHY IT IS NEEDED AND WHY IT IS GENERIC: a module sometimes has to read a
+// resource it does not own — here, a ClusterIssuer written by another component —
+// to know what is ACTUALLY in place rather than what a variable claims. Typed
+// clients would force every caller to depend on that resource's API version;
+// this one takes a kind and a name and returns what the cluster holds.
+//
+// A MISSING RESOURCE IS NOT AN ERROR: false, and the caller decides. Reading a
+// CRD an installation does not have must not look like a failure.
+func (c *Client) LireObjet(ctx context.Context, gvk schema.GroupVersionKind, nom string) (*unstructured.Unstructured, bool, error) {
+	gvr, err := c.ressourceDe(gvk)
+	if err != nil {
+		return nil, false, err
+	}
+	obj, err := c.dyn.Resource(gvr).Get(ctx, nom, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return obj, true, nil
+}
+
+// LireObjetDirect is LireObjet with the resource named outright.
+//
+// WHY BOTH EXIST: LireObjet resolves a Kind through the cluster's discovery,
+// which is what an arbitrary type needs. LireObjetDirect takes the resource, for
+// a caller that knows it — and it is not a convenience: discovery can be
+// unavailable or late for a CRD group, and a caller that depends on it would
+// then read nothing at the very moment the read matters.
+func (c *Client) LireObjetDirect(ctx context.Context, gvr schema.GroupVersionResource, nom string) (*unstructured.Unstructured, bool, error) {
+	obj, err := c.dyn.Resource(gvr).Get(ctx, nom, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return obj, true, nil
+}
 
 // LireSecret returns the value of a key, or "" if the Secret or the key does
 // not exist.
