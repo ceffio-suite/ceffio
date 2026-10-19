@@ -66,9 +66,16 @@ func TestDNS01SansProviderEstRefuse(t *testing.T) {
 	if err == nil {
 		t.Fatal("dns01 without a provider accepted, want a refusal")
 	}
-	for _, attendu := range []string{VariableDNSProvider, string(ProviderCloudflare), string(ProviderRFC2136)} {
+	// The message names the SETTING and the VALUE to give it. It no longer
+	// names the environment variable: the settings can come from the store now
+	// — what the operator chose in the console or on the command line — and
+	// naming a variable would point them at one of several ways to set it.
+	if !strings.Contains(err.Error(), "requires a DNS provider") {
+		t.Errorf("the error must say a provider is required, got: %v", err)
+	}
+	for _, attendu := range []string{string(ProviderCloudflare), string(ProviderRFC2136)} {
 		if !strings.Contains(err.Error(), attendu) {
-			t.Errorf("the error must mention %q so the operator knows what to set, got: %v", attendu, err)
+			t.Errorf("the error must mention %q so the operator has an example, got: %v", attendu, err)
 		}
 	}
 }
@@ -83,8 +90,11 @@ func TestProviderAvecHTTP01EstRefuse(t *testing.T) {
 	if err == nil {
 		t.Fatal("http01 with a DNS provider accepted, want a refusal naming the contradiction")
 	}
-	if !strings.Contains(err.Error(), VariableDNSProvider) || !strings.Contains(err.Error(), VariableChallenge) {
-		t.Errorf("the error must name both settings, got: %v", err)
+	// The two VALUES are named, so the operator sees which of their two
+	// settings is the one to change.
+	if !strings.Contains(err.Error(), string(ChallengeHTTP)) ||
+		!strings.Contains(err.Error(), string(ProviderCloudflare)) {
+		t.Errorf("the error must name both values, got: %v", err)
 	}
 }
 

@@ -169,7 +169,14 @@ real failure. New code that breaks one must justify it in the PR.
    registry and must not change. No feature-specific route, no
    feature-specific console section, no hardcoded feature list: the
    hand-written HaRP and transcription endpoints were folded into the generic
-   module API precisely because each new feature duplicated them. See
+   module API precisely because each new feature duplicated them.
+   **Settings included**: a feature that has settings DECLARES them
+   (`module.Configurable`) and the console, the CLI and the installer serve them
+   — a settings page written by hand in the console is the same defect as a
+   route written by hand. If a feature needs an interface element the settings
+   contract does not cover, EXTEND THE CONTRACT — declared in `internal/module`,
+   drawn once by the console — never a section written for that feature. Two
+   tests enforce the shape (`internal/console/regles_generiques_test.go`). See
    [`docs/adding-a-module.md`](docs/adding-a-module.md).
 
 ## Reporting an issue

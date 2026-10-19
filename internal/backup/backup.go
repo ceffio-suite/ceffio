@@ -65,6 +65,12 @@ var Volumes = []Volume{
 // Certificates, which are themselves recreated by the deployment. Operator
 // secrets (CNPG, webhooks, service tokens) are recreated by their respective
 // operators.
+//
+// MODULE SETTINGS ARE INCLUDED, because nothing recreates them: they are what
+// an OPERATOR typed — a relay host, a DNS credential, a challenge choice. A
+// restore that brings back the workloads without them leaves an installation
+// that looks whole and behaves differently, and the operator has no way of
+// knowing which values are missing. See internal/settings for where they live.
 var Secrets = []struct{ Name, Namespace string }{
 	// database
 	{"ceffio-pg-app", "ceffio-data"},
@@ -78,6 +84,19 @@ var Secrets = []struct{ Name, Namespace string }{
 	{"onlyoffice-secret", "ceffio-office"},
 	// admin console
 	{"ceffio-console-key", "ceffio-system"},
+	// module settings, when no vault is configured: one Secret per module
+	// (`ceffio-settings-<module>`), holding the groups with secret fields.
+	// Enumerated at backup time rather than listed here — the modules are a
+	// registry, and a list written by hand would go stale the day one is added.
+}
+
+// configMapsCeffio lists the ConfigMaps carrying operator settings.
+//
+// WHY THEY ARE NOT IN Secrets: they hold no credential, but they hold choices —
+// and a restore that loses them silently changes the behaviour of a module that
+// is otherwise installed correctly.
+var ConfigMapsCeffio = []struct{ Name, Namespace string }{
+	{"ceffio-settings", "ceffio-system"},
 }
 
 type Volume struct {
@@ -200,6 +219,26 @@ func Sauvegarder(ctx context.Context, dir string, progress func(string)) (string
 	} else {
 		e := Entry{Kind: "secret", Name: "applicatifs", File: secRel}
 		e.Bytes, e.SHA256, _ = empreinte(filepath.Join(work, secRel))
+		man.Entries = append(man.Entries, e)
+	}
+
+	// 4. Operator settings ConfigMaps.
+	//
+	// They hold no credential but they hold CHOICES: a challenge type, a DNS
+	// zone, a feature's mode. A restore that brings back the workloads without
+	// them leaves an installation that looks whole and behaves differently —
+	// and nothing tells the operator which values are missing.
+	progress("module settings")
+	settingsRel := filepath.Join("configmaps", "ceffio-settings.json")
+	if err := dumpConfigMaps(ctx, filepath.Join(work, settingsRel)); err != nil {
+		// An installation with no settings has none of these objects, which is
+		// a normal state, not a failure: the file is simply absent.
+		if !strings.Contains(err.Error(), "no configmap") {
+			man.Errors = append(man.Errors, "configmaps : "+err.Error())
+		}
+	} else {
+		e := Entry{Kind: "configmap", Name: "ceffio-settings", File: settingsRel}
+		e.Bytes, e.SHA256, _ = empreinte(filepath.Join(work, settingsRel))
 		man.Entries = append(man.Entries, e)
 	}
 
@@ -343,7 +382,27 @@ func dumpSecrets(ctx context.Context, dst string) error {
 	}
 	var all []item
 	var manques []string
-	for _, s := range Secrets {
+
+	// The list, PLUS the module settings Secrets discovered on the cluster.
+	//
+	// WHY DYNAMICALLY: `ceffio-settings-<module>` exists once a module with
+	// settings has saved one, and the modules come from a registry. A list
+	// written by hand here would go stale the day one is added — and the
+	// failure is silent: the backup reports success and the operator discovers
+	// the loss only when a restore comes up with settings they never chose.
+	cibles := append([]struct{ Name, Namespace string }{}, Secrets...)
+	sortie, err := kubectlOut(ctx, "get", "secrets", "-n", "ceffio-system",
+		"-l", "app.kubernetes.io/part-of=ceffio", "-o", "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}")
+	if err == nil {
+		for _, nom := range strings.Split(strings.TrimSpace(sortie), "\n") {
+			nom = strings.TrimSpace(nom)
+			if strings.HasPrefix(nom, "ceffio-settings-") {
+				cibles = append(cibles, struct{ Name, Namespace string }{nom, "ceffio-system"})
+			}
+		}
+	}
+
+	for _, s := range cibles {
 		out, err := kubectlOut(ctx, "get", "secret", s.Name, "-n", s.Namespace, "-o", "json")
 		if err != nil {
 			manques = append(manques, s.Namespace+"/"+s.Name)
@@ -378,6 +437,46 @@ func dumpSecrets(ctx context.Context, dst string) error {
 		return err
 	}
 	os.Chmod(dst, 0o600)
+	return nil
+}
+
+// dumpConfigMaps backs up the ConfigMaps holding operator settings.
+//
+// They hold no credential, so the file is written 0644 rather than 0600 — but
+// they are backed up for the same reason as the secrets: nothing recreates them,
+// and losing them silently changes how an installation behaves.
+func dumpConfigMaps(ctx context.Context, dst string) error {
+	type item struct {
+		Name      string            `json:"name"`
+		Namespace string            `json:"namespace"`
+		Data      map[string]string `json:"data"`
+	}
+	var all []item
+	for _, c := range ConfigMapsCeffio {
+		out, err := kubectlOut(ctx, "get", "configmap", c.Name, "-n", c.Namespace, "-o", "json")
+		if err != nil {
+			continue
+		}
+		var doc struct {
+			Metadata struct {
+				Name      string `json:"name"`
+				Namespace string `json:"namespace"`
+			} `json:"metadata"`
+			Data map[string]string `json:"data"`
+		}
+		if json.Unmarshal([]byte(out), &doc) != nil {
+			continue
+		}
+		all = append(all, item{Name: doc.Metadata.Name, Namespace: doc.Metadata.Namespace, Data: doc.Data})
+	}
+	if len(all) == 0 {
+		return fmt.Errorf("no configmap backed up")
+	}
+	raw, _ := json.MarshalIndent(map[string]any{"configmaps": all}, "", "  ")
+	os.MkdirAll(filepath.Dir(dst), 0o700)
+	if err := os.WriteFile(dst, raw, 0o644); err != nil {
+		return err
+	}
 	return nil
 }
 

@@ -24,6 +24,25 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+	// NO CACHE, and this is what replaces the deprecation aliases.
+	//
+	// WHY IT MATTERS: the page and the API ship in the SAME BINARY, so a page
+	// from a previous version can call a route this one no longer serves — it
+	// calls /api/smtp or /api/tls, which were removed when those settings became
+	// the modules'. Without this header a browser keeps the old page from its
+	// cache and the operator sees a console that looks broken until they clear
+	// it by hand.
+	//
+	// The aliases existed for exactly this case; the header removes the cause
+	// instead of tolerating it, and the unknown-/api/ 404 answers a stale
+	// SCRIPT with a clear refusal rather than a page.
+	//
+	// The cost is one HTTP request per console open — the page is ~60 kB and
+	// served from the pod. Worth it: an administration console that lies about
+	// its own capabilities is worse than a console that reloads.
+	w.Header().Set("Cache-Control", "no-cache, must-revalidate")
+	w.Header().Set("Pragma", "no-cache") // HTTP/1.0 clients
 	_, _ = w.Write(b)
 }
 

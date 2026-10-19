@@ -275,47 +275,6 @@ func TestModuleActionInconnu(t *testing.T) {
 	}
 }
 
-// TestAliasesDeleguentAuRegistre pins the deprecated endpoints: they must
-// delegate to the registry modules (one truth), not carry their own logic.
-// A cached page still calls them, so they answer with the SAME payload as
-// /api/modules/{id} and go through the SAME acceptance rules (409/403).
-func TestAliasesDeleguentAuRegistre(t *testing.T) {
-	trans := &fakeModule{info: module.Info{ID: "live-transcription", Title: "Transcription", Kind: module.Optional},
-		state: module.State{Status: module.Installed, Detail: "from the fake state"}}
-	harp := &fakeModule{info: module.Info{ID: "exapps-daemon", Title: "HaRP", Kind: module.Optional}}
-	withFakeRegistry(t, trans, harp)
-	h := newTestServer(fake.NewSimpleClientset()).Handler()
-
-	rec := doReq(t, h, http.MethodGet, "/api/transcription", "")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /api/transcription -> %d, want 200", rec.Code)
-	}
-	var out struct {
-		Module map[string]any `json:"module"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
-		t.Fatalf("alias did not answer the generic shape: %v (%s)", err, rec.Body.String())
-	}
-	if out.Module["id"] != "live-transcription" {
-		t.Errorf("alias delegated to the wrong module: %v", out.Module["id"])
-	}
-	state, _ := out.Module["state"].(map[string]any)
-	if state == nil || state["detail"] != "from the fake state" {
-		t.Errorf("alias did not carry the registry state: %v", out.Module["state"])
-	}
-
-	rec = doReq(t, h, http.MethodGet, "/api/exapps", "")
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"exapps-daemon"`) {
-		t.Errorf("GET /api/exapps -> %d, want a delegation to exapps-daemon (%s)", rec.Code, rec.Body.String())
-	}
-
-	// POST through the alias is the generic action path: 202 first.
-	rec = doReq(t, h, http.MethodPost, "/api/exapps", `{"action":"install"}`)
-	if rec.Code != http.StatusAccepted {
-		t.Errorf("POST /api/exapps -> %d, want 202 (alias must go through the generic acceptance rules)", rec.Code)
-	}
-}
-
 // pod builds a ready pod in a namespace, as the status page counts them.
 func pod(ns, name string) *corev1.Pod {
 	return &corev1.Pod{

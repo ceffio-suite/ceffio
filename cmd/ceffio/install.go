@@ -39,9 +39,6 @@ type installOptions struct {
 	profile         string
 	runtime         string
 	existingCluster bool
-	mail            bool
-	office          bool
-	monitoring      bool
 	// Live transcription (Talk). DEPRECATED FLAG, kept as an alias of
 	// `--with live-transcription`: it maps onto the registry selection
 	// instead of driving a hardcoded install block. Off unless asked:
@@ -97,9 +94,23 @@ Examples:
 	f.StringVar(&o.profile, "profile", "small", "Deployment profile (small, business-50, business-100, enterprise-ha)")
 	f.StringVar(&o.runtime, "runtime", "k3s", "Kubernetes runtime (k3s, rke2)")
 	f.BoolVar(&o.existingCluster, "existing-cluster", false, "Use an existing Kubernetes cluster")
-	f.BoolVar(&o.mail, "mail", false, "Enable mail")
-	f.BoolVar(&o.office, "office", true, "Enable ONLYOFFICE")
-	f.BoolVar(&o.monitoring, "monitoring", true, "Enable observability")
+
+	// DEPRECATED, HIDDEN, AND WITHOUT EFFECT — the three flags below never did
+	// anything. `mail` and `office` are Core modules, deployed by the install
+	// sequence unconditionally; no supervision exists to enable. They only
+	// reached the summary, where "Mail: no" was printed by default while
+	// Stalwart was being installed, which is worse than saying nothing.
+	//
+	// They are KEPT for one minor release, hidden, because a deployment script
+	// written against the previous version would otherwise fail on an unknown
+	// flag. They accept the same values and do the same thing as before —
+	// nothing — and say so once.
+	f.Bool("mail", false, "")
+	f.Bool("office", true, "")
+	f.Bool("monitoring", true, "")
+	_ = f.MarkHidden("mail")
+	_ = f.MarkHidden("office")
+	_ = f.MarkHidden("monitoring")
 	// Live transcription in Talk. DEPRECATED: superseded by
 	// `--with live-transcription`, which goes through the module registry
 	// like every other optional feature. The flag still works (it feeds the
@@ -141,6 +152,17 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 			"use --with live-transcription instead; it will be removed in two minor versions")
 	}
 
+	// The three hidden flags say once that they do nothing. SILENT ACCEPTANCE
+	// would be the worse choice: an operator passing --mail=false believes they
+	// are turning the mail layer off, and it is deployed anyway. Naming the
+	// truth costs one line and prevents a false belief about what is running.
+	for _, f := range []string{"mail", "office", "monitoring"} {
+		if cmd.Flags().Changed(f) {
+			fmt.Fprintf(os.Stderr, "warning: --%s never had any effect and will be removed "+
+				"in v0.9; use --with/--without for optional modules\n", f)
+		}
+	}
+
 	// Resolve the optional modules EARLY. An invalid --with/--without ID
 	// must fail here, before a cluster is provisioned — not forty minutes
 	// into the deployment (the same lesson as the DNS check below).
@@ -154,18 +176,7 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	fmt.Printf("Domain:     %s\n", o.domain)
 	fmt.Printf("Profile:    %s\n", o.profile)
 	fmt.Printf("Runtime:    %s\n", o.runtime)
-	fmt.Printf("Mail:       %s\n", yesNo(o.mail))
-	fmt.Printf("Office:     %s\n", yesNo(o.office))
-	fmt.Printf("Monitoring: %s\n", yesNo(o.monitoring))
-	if len(modulesOptionnels) == 0 {
-		fmt.Println("Modules:    none")
-	} else {
-		ids := make([]string, 0, len(modulesOptionnels))
-		for _, m := range modulesOptionnels {
-			ids = append(ids, m.Info().ID)
-		}
-		fmt.Printf("Modules:    %s\n", strings.Join(ids, ", "))
-	}
+	ecrireResumeModules(os.Stdout, coresDuRegistre(), idsDesModules(modulesOptionnels))
 	fmt.Println()
 
 	ctx := cmd.Context()
@@ -840,17 +851,15 @@ func installerModulesOptionnels(ctx context.Context, o *installOptions, modules 
 		return fmt.Errorf("optional modules need a Kubernetes client: %w", err)
 	}
 
-	// The ACME settings are resolved HERE and handed to the modules: a module
-	// never reads the environment itself. An invalid configuration stops the
-	// phase instead of installing modules that would act on settings nobody
-	// validated — the ingress module is precisely the one that writes a
-	// ClusterIssuer from them.
-	reglages, err := acme.DepuisEnvironnement()
-	if err != nil {
-		return err
-	}
+	// THE ACME SETTINGS ARE NO LONGER RESOLVED HERE. A module reads its own
+	// settings through the contract (internal/settings), and the ingress module
+	// resolves the challenge, the provider and the zone itself — from the store,
+	// primed from CEFFIO_ACME_* on the installation's first pass. Passing them
+	// through Env was what made internal/module depend on internal/acme; that
+	// dependency is gone, and with it the second place where a value could be
+	// resolved differently.
 
-	env := module.Env{Domain: o.domain, Kube: kube, Out: os.Stdout, Acme: reglages}
+	env := module.Env{Domain: o.domain, Kube: kube, Out: os.Stdout}
 
 	fmt.Printf("\n∙ optional modules from the registry (%d)\n", len(modules))
 	for _, m := range modules {

@@ -27,6 +27,8 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/ceffio-suite/ceffio/internal/acme"
+	"github.com/ceffio-suite/ceffio/internal/module"
+	"github.com/ceffio-suite/ceffio/internal/settings"
 )
 
 const (
@@ -63,13 +65,30 @@ type Server struct {
 	// failure mode. Resolving it here also means an invalid value is
 	// reported ONCE, at startup, in the console's own logs — instead of
 	// silently degrading a certificate issuance weeks later.
+	// ModuleID is deliberately NOT set here: it belongs to the module being
+	// called, and moduleEnvReadOnly (or the install path) sets it. Two modules
+	// sharing one Env without an ID would write their settings to the same
+	// entry, and internal/settings refuses an empty ID for exactly that reason.
 	acme acme.Reglages
+
+	// settingsCM and settingsSec give modules access to the stores.
+	//
+	// They are interfaces declared in internal/module, held here as fields so a
+	// test can substitute maps for both — the console tests then exercise the
+	// settings routes without a cluster.
+	settingsCM  module.ConfigMapStore
+	settingsSec module.SecretStore
 }
 
 // New creates the console server: in-cluster K8s client (or out-of-cluster
 // kubeconfig), and Keycloak admin access read from the keycloak-admin secret.
 func New(domain, apiKey string) (*Server, error) {
-	s := &Server{Domain: domain, APIKey: apiKey, ops: newOpsManager(), acme: acme.HTTP01()}
+	s := &Server{Domain: domain, APIKey: apiKey, ops: newOpsManager(), acme: acme.HTTP01(),
+		// The stores are wired HERE, once, so every module reaches the same
+		// ConfigMap and the same Secrets through module.Env. Leaving them nil
+		// would make a module's settings save fail at runtime, on an
+		// installation where everything else works.
+		settingsCM: settings.ConfigMaps{}, settingsSec: settings.Secrets{}}
 
 	// The ACME configuration is resolved ONCE, and an invalid value is
 	// reported without preventing startup: the console is the only way an
@@ -131,6 +150,23 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/favicon.svg", s.handleIcone)
 	mux.HandleFunc("/favicon-32.png", s.handleIcone)
 	mux.HandleFunc("/apple-touch-icon.png", s.handleIcone)
+
+	// UNKNOWN /api/ PATHS ANSWER 404. Without this, the catch-all below serves
+	// the HTML page with a 200 for anything, including a route that was removed:
+	// measured, GET /api/nexistepas returned 200 text/html. A script calling a
+	// deleted endpoint would receive a page instead of a refusal, and would try
+	// to parse HTML as JSON — the failure surfaces far from its cause.
+	//
+	// It is also what made the deprecated aliases unnecessary: what removed the
+	// need for them was the page being served by the same binary as the API, so
+	// a stale page cannot exist. A stale SCRIPT now gets a clear 404.
+	//
+	// Registered before "/" because Go 1.22's mux gives the more specific
+	// pattern priority, not the first registered one.
+	mux.HandleFunc("/api/", s.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		apiErr(w, http.StatusNotFound, "no such endpoint: "+r.URL.Path)
+	}))
+
 	mux.HandleFunc("/", s.handleIndex) // public page (the JS asks for the key for /api/*)
 	mux.HandleFunc("/api/status", s.requireAuth(s.handleStatus))
 	mux.HandleFunc("/api/users", s.requireAuth(s.handleUsers))
@@ -145,12 +181,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/modules", s.requireAuth(s.handleModulesList))
 	mux.HandleFunc("GET /api/modules/{id}", s.requireAuth(s.handleModuleDetail))
 	mux.HandleFunc("POST /api/modules/{id}", s.requireAuth(s.handleModuleAction))
-	// Deprecated aliases kept for cached pages and pre-existing scripts:
-	// they delegate to the registry modules (live-transcription,
-	// exapps-daemon) instead of carrying their own logic.
-	// Deprecated: remove after v0.7.
-	mux.HandleFunc("/api/transcription", s.requireAuth(s.handleTranscriptionAlias))
-	mux.HandleFunc("/api/exapps", s.requireAuth(s.handleExappsAlias))
+	// GENERIC settings routes: they know no module by name. A feature added
+	// tomorrow is served here without touching this file — which is the whole
+	// point of the settings contract, and what a test enforces.
+	mux.HandleFunc("GET /api/modules/{id}/settings", s.requireAuth(s.handleModuleSettings))
+	mux.HandleFunc("POST /api/modules/{id}/settings/{group}", s.requireAuth(s.handleModuleSettingsSave))
+	mux.HandleFunc("POST /api/modules/{id}/settings/{group}/test", s.requireAuth(s.handleModuleSettingsTest))
 	mux.HandleFunc("/api/admin", s.requireAuth(s.handleAdmin))
 	mux.HandleFunc("/api/admin/rotate", s.requireAuth(s.handleAdminRotate))
 	// NO /api/apps routes: application management happens in the INTERFACE OF
@@ -160,8 +196,6 @@ func (s *Server) Handler() http.Handler {
 	// The link to this UI is provided by /api/admin.
 	// Platform SMTP: configuration, test and save. The test-before-save is the
 	// key point — an untested config is worthless.
-	mux.HandleFunc("/api/smtp", s.requireAuth(s.handleSmtp))
-	mux.HandleFunc("/api/smtp/tester", s.requireAuth(s.handleSmtpTester))
 	// The TLS page: which ACME challenge is active, through which DNS provider,
 	// and where the certificates stand. The credential it writes goes to
 	// OpenBao — the console holds no right in cert-manager, by design, and the
