@@ -21,83 +21,114 @@ import (
 // the issuer cert-manager is actually using.
 //
 // WHY THIS TEST EXISTS, and what it prevents: on an installation that manages
-// TLS through cert-manager, the console pod carries NO TLS variable — its
-// secrets come from the vault agent, and the DNS provider was never passed to
-// it. The stored settings do not exist either, since they were introduced after
-// the installation was set up.
+// TLS through cert-manager and was set up before settings existed, nothing is
+// stored and the console pod may carry no TLS variable. Without this read the
+// form shows an empty challenge and no provider while the cluster serves a
+// working solver, and saving the page to change anything else REBUILDS the
+// ClusterIssuer with no solver — after which every certificate stops renewing,
+// silently, the failure surfacing weeks later when the first one expires.
 //
-// WITHOUT THIS FALLBACK the field comes back EMPTY while the cluster serves a
-// working Cloudflare solver. An operator opening the page sees the challenge
-// unset, and saving the page to change something else REBUILDS the ClusterIssuer
-// with no solver — after which every certificate stops renewing, silently, and
-// the failure shows up weeks later when the first one expires.
-//
-// The table includes an http01 case, so the test cannot pass by answering
-// "dns01" unconditionally.
+// HOW IT TELLS A REAL READ FROM A FALLBACK, which is the subtle part: the
+// declared default is http01 with an empty provider, so a test expecting that
+// answer proves nothing — it passes whether or not the cluster was read. The
+// tableau below therefore includes a case whose expected answer DIFFERS from the
+// default (a dns01 solver), and a case that pins the ORDER when several solvers
+// are listed. An earlier version of this test asserted only cases that the
+// default also satisfies; it was counter-tested and passed with the read
+// disabled, which is how the flaw was found.
 func TestLesReglagesViennentDuClusterissuerEnPlace(t *testing.T) {
 	cas := []struct {
 		nom      string
-		solver   map[string]interface{}
+		solvers  []map[string]interface{}
 		attendu  map[string]string
 		explique string
 	}{
 		{
 			nom: "cloudflare in-tree",
-			solver: map[string]interface{}{"dns01": map[string]interface{}{
+			solvers: []map[string]interface{}{{"dns01": map[string]interface{}{
 				"cloudflare": map[string]interface{}{
 					"apiTokenSecretRef": map[string]interface{}{"name": "ceffio-acme-dns", "key": "api-token"},
 				},
-			}},
+			}}},
 			attendu: map[string]string{"challenge": "dns01", "dns_provider": "cloudflare"},
 		},
 		{
 			nom: "route53, also in-tree",
-			solver: map[string]interface{}{"dns01": map[string]interface{}{
+			solvers: []map[string]interface{}{{"dns01": map[string]interface{}{
 				"route53": map[string]interface{}{"region": "eu-west-3"},
-			}},
+			}}},
 			attendu: map[string]string{"challenge": "dns01", "dns_provider": "route53"},
 		},
 		{
 			nom: "a provider nobody has written yet",
-			solver: map[string]interface{}{"dns01": map[string]interface{}{
+			solvers: []map[string]interface{}{{"dns01": map[string]interface{}{
 				"infomaniak": map[string]interface{}{"apiTokenSecretRef": map[string]interface{}{"name": "x"}},
-			}},
+			}}},
 			// The name comes from the SOLVER'S SHAPE, never from a table in the
 			// code: that is what makes the mechanism hold for a provider that
-			// does not exist today.
+			// does not exist today, and for the 72 libdns webhooks.
 			attendu: map[string]string{"challenge": "dns01", "dns_provider": "infomaniak"},
 		},
 		{
 			nom: "a selector accompanies the provider and is not one",
-			solver: map[string]interface{}{"dns01": map[string]interface{}{
+			solvers: []map[string]interface{}{{"dns01": map[string]interface{}{
 				"selector": map[string]interface{}{"dnsNames": []interface{}{"*.example.org"}},
 				"acmedns":  map[string]interface{}{"accountSecretRef": map[string]interface{}{"name": "a"}},
-			}},
+			}}},
 			attendu:  map[string]string{"challenge": "dns01", "dns_provider": "acmedns"},
 			explique: "`selector` accompanies a provider; reporting it as one would offer a provider that does not exist",
 		},
 		{
 			nom: "the webhook solver, whose provider is nested",
-			solver: map[string]interface{}{"dns01": map[string]interface{}{
-				"webhook": map[string]interface{}{
-					"groupName": "acme.mycompany.com", "solverName": "my-solver",
-				},
-			}},
+			solvers: []map[string]interface{}{{"dns01": map[string]interface{}{
+				"webhook": map[string]interface{}{"groupName": "acme.mycompany.com", "solverName": "my-solver"},
+			}}},
 			attendu: map[string]string{"challenge": "dns01", "dns_provider": "webhook", "dns_zone": "acme.mycompany.com"},
 		},
 		{
-			nom: "http01: there is no provider to report",
-			solver: map[string]interface{}{"http01": map[string]interface{}{
-				"ingress": map[string]interface{}{"class": "traefik"},
-			}},
-			attendu:  map[string]string{"challenge": "http01", "dns_provider": ""},
-			explique: "answering dns01 here would offer DNS providers on an installation that uses HTTP-01",
+			// THE CASE THAT MAKES THE OTHERS MEANINGFUL. Its expected answer is
+			// NOT the default, so it fails if the cluster is not read.
+			nom: "dns01 alone, which the default cannot produce",
+			solvers: []map[string]interface{}{{"dns01": map[string]interface{}{
+				"cloudflare": map[string]interface{}{
+					"apiTokenSecretRef": map[string]interface{}{"name": "ceffio-acme-dns", "key": "api-token"},
+				},
+			}}},
+			attendu:  map[string]string{"challenge": "dns01", "dns_provider": "cloudflare"},
+			explique: "http01/empty is the declared default; only a real read answers dns01 here",
+		},
+		{
+			// THE ORDER MATTERS, and this shape is what an existing installation
+			// looks like the moment someone adds DNS-01 without removing the
+			// HTTP solver. cert-manager tries the solvers in the order they are
+			// listed and the first whose selector matches wins, so reporting the
+			// FIRST one is faithful — and a page showing the second, or nothing,
+			// would disagree with what the cluster does.
+			nom: "http01 then dns01: the first solver is the one that applies",
+			solvers: []map[string]interface{}{
+				{"http01": map[string]interface{}{"ingress": map[string]interface{}{"class": "traefik"}}},
+				{"dns01": map[string]interface{}{"cloudflare": map[string]interface{}{
+					"apiTokenSecretRef": map[string]interface{}{"name": "ceffio-acme-dns", "key": "api-token"},
+				}}},
+			},
+			attendu: map[string]string{"challenge": "http01", "dns_provider": ""},
+		},
+		{
+			// dns01 FIRST and http01 second: the read must report the DNS solver,
+			// whatever the default says.
+			nom: "dns01 then http01: the DNS solver is the one that applies",
+			solvers: []map[string]interface{}{
+				{"dns01": map[string]interface{}{"route53": map[string]interface{}{"region": "eu-west-3"}}},
+				{"http01": map[string]interface{}{"ingress": map[string]interface{}{"class": "traefik"}}},
+			},
+			attendu:  map[string]string{"challenge": "dns01", "dns_provider": "route53"},
+			explique: "the default would answer http01/empty, so this case proves the issuer was read",
 		},
 	}
 
 	for _, c := range cas {
 		t.Run(c.nom, func(t *testing.T) {
-			remplacerClient(t, issuerAvecSolver(c.solver))
+			remplacerClient(t, issuerAvecSolvers(c.solvers...))
 			m := &ingressModule{}
 			v, err := m.Current(context.Background(), envSansReglages(), groupeTLS)
 			if err != nil {
@@ -130,6 +161,22 @@ func TestSansClusterissuerLesDefautsSontRendus(t *testing.T) {
 	if v["dns_provider"] != "" {
 		t.Errorf("dns_provider = %q, expected empty: an invented provider would write a solver nobody asked for",
 			v["dns_provider"])
+	}
+}
+
+// TestUnIssuerSansSolverNeFaitPasInventer : the issuer exists but lists no
+// solver. The read succeeds and finds nothing, and the caller must still fall
+// back to the declared defaults rather than reporting a half-read configuration.
+func TestUnIssuerSansSolverNeFaitPasInventer(t *testing.T) {
+	remplacerClient(t, issuerAvecSolvers())
+	m := &ingressModule{}
+	v, err := m.Current(context.Background(), envSansReglages(), groupeTLS)
+	if err != nil {
+		t.Fatalf("Current: %v", err)
+	}
+	if v["challenge"] != "http01" || v["dns_provider"] != "" {
+		t.Errorf("challenge=%q provider=%q, expected the defaults: an issuer with no solver "+
+			"must not produce a half-read answer", v["challenge"], v["dns_provider"])
 	}
 }
 
@@ -186,8 +233,17 @@ func envSansReglages() module.Env {
 	return module.Env{Domain: "ceffio.org", ModuleID: "ingress"}
 }
 
-// issuerAvecSolver builds a ClusterIssuer carrying one solver.
-func issuerAvecSolver(solver map[string]interface{}) *unstructured.Unstructured {
+// issuerAvecSolvers builds a ClusterIssuer carrying the listed solvers, in
+// order.
+//
+// SEVERAL ARE NEEDED to make a case meaningful: an expected answer equal to the
+// declared default cannot tell "the cluster was read" from "nothing was found
+// and the default answered". Listing dns01 first distinguishes them.
+func issuerAvecSolvers(solvers ...map[string]interface{}) *unstructured.Unstructured {
+	convertis := make([]interface{}, 0, len(solvers))
+	for _, s := range solvers {
+		convertis = append(convertis, s)
+	}
 	return &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "cert-manager.io/v1",
 		"kind":       "ClusterIssuer",
@@ -195,7 +251,7 @@ func issuerAvecSolver(solver map[string]interface{}) *unstructured.Unstructured 
 		"spec": map[string]interface{}{"acme": map[string]interface{}{
 			"server":  "https://acme-v02.api.letsencrypt.org/directory",
 			"email":   "admin@ceffio.org",
-			"solvers": []interface{}{solver},
+			"solvers": convertis,
 		}},
 	}}
 }
