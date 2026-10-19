@@ -41,6 +41,7 @@ import (
 
 func newMailSSOCmd() *cobra.Command {
 	var domaineAdmin string
+	var domaineMessagerie string
 	var compteAdmin string
 	var reparer bool
 
@@ -83,12 +84,28 @@ what makes a pending change take effect.`,
 				if issuer == "" {
 					return fmt.Errorf("no OIDC directory is configured: run `ceffio install` first")
 				}
-				// The host is the mail host, which the server itself reports.
+				// THE MAIL DOMAIN AND THE WEB HOST ARE TWO DIFFERENT THINGS, and
+				// confusing them creates a domain nobody asked for: measured, a
+				// first version of this command passed "mail.ceffio.org" (the
+				// host) where the ADDRESS domain was expected, and Stalwart
+				// created a third mail domain that receives nothing.
+				//
+				// The domain comes from the ones the server already declares,
+				// minus the admin domain: those are the addresses the platform
+				// serves.
+				if domaineMessagerie == "" {
+					d, err := domaineMessagerieExistant(ctx, domaineAdmin)
+					if err != nil {
+						return err
+					}
+					domaineMessagerie = d
+				}
 				hote, err := hoteStalwart(ctx)
 				if err != nil {
 					return err
 				}
-				if err := mail.ConfigurerSSO(ctx, hote, mail.SSO{
+				fmt.Printf("  ∙ addresses domain: %s · web host: %s\n", domaineMessagerie, hote)
+				if err := mail.ConfigurerSSO(ctx, domaineMessagerie, mail.SSO{
 					Hote:         hote,
 					Issuer:       issuer,
 					ClientID:     clientID,
@@ -140,6 +157,9 @@ what makes a pending change take effect.`,
 		"Domain of the administrator accounts")
 	cmd.Flags().StringVar(&compteAdmin, "compte", "adminceffio",
 		"Name of the administrator account")
+	cmd.Flags().StringVar(&domaineMessagerie, "domaine", "",
+		"Domain of the mail ADDRESSES (default: the first domain declared by the server "+
+			"other than the admin domain) — NOT the web host")
 	cmd.Flags().BoolVar(&reparer, "repair", false,
 		"Reapply the configuration and restart Stalwart, then check again")
 	return cmd
@@ -205,6 +225,48 @@ func lireSSOExistant(ctx context.Context) (string, string, error) {
 		}
 	}
 	return "", "", nil
+}
+
+// domaineMessagerieExistant returns the mail domain the server already declares.
+//
+// THE DOMAIN OF THE ADDRESSES, read from the server rather than guessed from the
+// web host: they are different things, and mixing them creates a domain that
+// receives nothing. The admin domain is excluded — it carries accounts, not mail.
+func domaineMessagerieExistant(ctx context.Context, domaineAdmin string) (string, error) {
+	script := `. /secrets/env 2>/dev/null; ` +
+		`curl -s --max-time 15 -u "$STALWART_RECOVERY_ADMIN" -H "Content-Type: application/json" ` +
+		`-X POST http://localhost:8080/jmap -d '{"using":[],"methodCalls":[["x:Domain/get",` +
+		`{"accountId":"d333333","properties":["name"]},"c1"]]}'`
+	out, err := k8s.Command(ctx, "kubectl", "-n", "ceffio-mail", "exec", "deploy/stalwart",
+		"-c", "stalwart", "--", "sh", "-c", script).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("reading the declared domains: %w: %s", err, tronquer(string(out), 200))
+	}
+	var reponse struct {
+		MethodResponses []json.RawMessage `json:"methodResponses"`
+	}
+	if err := json.Unmarshal(out, &reponse); err != nil || len(reponse.MethodResponses) == 0 {
+		return "", fmt.Errorf("unreadable domain answer: %s", tronquer(string(out), 200))
+	}
+	var couple []json.RawMessage
+	if err := json.Unmarshal(reponse.MethodResponses[0], &couple); err != nil || len(couple) < 2 {
+		return "", fmt.Errorf("unexpected answer: %s", tronquer(string(out), 200))
+	}
+	var corps struct {
+		List []struct {
+			Name string `json:"name"`
+		} `json:"list"`
+	}
+	if err := json.Unmarshal(couple[1], &corps); err != nil {
+		return "", fmt.Errorf("unreadable domain body: %w", err)
+	}
+	for _, d := range corps.List {
+		if d.Name != "" && d.Name != domaineAdmin {
+			return d.Name, nil
+		}
+	}
+	return "", fmt.Errorf("the server declares no mail domain other than %q: "+
+		"pass --domaine explicitly", domaineAdmin)
 }
 
 // hoteStalwart returns the public host the server publishes.
