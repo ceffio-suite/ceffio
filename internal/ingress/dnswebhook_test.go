@@ -199,30 +199,77 @@ func TestAucunComposantPourUnProviderConnu(t *testing.T) {
 func TestSolverLitLeSecretInjection(t *testing.T) {
 	horsArbre := acme.Reglages{Challenge: acme.ChallengeDNS, Provider: "scaleway", WebhookGroup: webhookGroup}
 	m := webhookManifests(horsArbre)
+	// The webhook KEEPS the injector path: it has a pod, so the file mode
+	// applies and the Secret is injected at pod creation.
 	if !strings.Contains(m, "agent-inject-secret-"+secretACME) {
-		t.Errorf("the injector does not create the Secret %q:\n%s", secretACME, m)
+		t.Errorf("the webhook solver does not get its Secret from the vault:\n%s", m)
 	}
 	issuer := acmeManifest("a@b.fr", horsArbre)
 	if !strings.Contains(issuer, "name: "+secretACME) {
 		t.Errorf("the ClusterIssuer points the solver at another Secret name than %q:\n%s", secretACME, issuer)
 	}
-	// The Role must grant the read: without it the pod starts and every
-	// challenge fails on a permission denied.
 	if !strings.Contains(m, "resources: [\"secrets\"]") {
 		t.Errorf("the solver Role does not grant reading its own Secret:\n%s", m)
 	}
 
-	// THE IN-TREE PATH REFERENCES THE SAME SECRET but injects nothing: there
-	// is no pod to carry annotations. Verified on Cloudflare, the provider the
-	// demo deployment uses.
+	// THE IN-TREE PATH DECLARES THE KEYS BUT LETS CEFFIO FILL THEM: there is no
+	// pod for the injector to mutate — its admission rule is CREATE/UPDATE on
+	// pods only, verified on the cluster. An injection annotation here would
+	// leave the Secret EMPTY and every challenge would fail.
 	cf := acme.Reglages{Challenge: acme.ChallengeDNS, Provider: acme.ProviderCloudflare, Zone: "exemple.fr"}
 	sec := secretDNSManifests(cf)
-	if !strings.Contains(sec, "agent-inject-secret-"+secretACME) {
-		t.Errorf("the Cloudflare Secret is not fed from the vault:\n%s", sec)
+	if strings.Contains(sec, "vault.hashicorp.com") {
+		t.Errorf("the Cloudflare Secret carries injection annotations while no pod exists to be mutated:\n%s", sec)
+	}
+	if !strings.Contains(sec, "api-token:") {
+		t.Errorf("the Cloudflare Secret does not declare the key cert-manager reads:\n%s", sec)
 	}
 	if !strings.Contains(acmeManifest("a@b.fr", cf), "api-token") {
 		t.Errorf("the Cloudflare issuer does not ask for the key cert-manager expects:\n%s",
 			acmeManifest("a@b.fr", cf))
+	}
+}
+
+// TestTraductionClefSecretVersChampCoffre pins the single place the two naming
+// conventions meet, because a mismatch fails silently.
+//
+//	cert-manager fixes the SECRET key: `api-token`, with a hyphen.
+//	libdns — and therefore the console's TLS page — stores `api_token`, with an
+//	underscore.
+//
+// Writing one name on both sides makes ecrireSecretDNS look up a vault field
+// nobody stored, and the error names a field the operator never typed.
+func TestTraductionClefSecretVersChampCoffre(t *testing.T) {
+	for _, cas := range []struct{ provider, cleSecret, champCoffre string }{
+		{"cloudflare", "api-token", "api_token"},
+		{"route53", "access-key-id", "access_key_id"},
+		{"rfc2136", "tsig-secret", "tsig_secret"},
+		{"acmedns", "acmedns-account", "username"},
+	} {
+		t.Run(cas.provider, func(t *testing.T) {
+			trouve := false
+			for _, p := range pairesSecret(acme.Provider(cas.provider)) {
+				if p[0] == cas.cleSecret {
+					trouve = true
+					if p[1] != cas.champCoffre {
+						t.Errorf("secret key %q reads vault field %q, want %q",
+							cas.cleSecret, p[1], cas.champCoffre)
+					}
+				}
+			}
+			if !trouve {
+				t.Errorf("provider %q does not declare the secret key %q cert-manager expects",
+					cas.provider, cas.cleSecret)
+			}
+		})
+	}
+
+	// Out-of-tree: the webhook marshals the Secret straight to libdns, so the
+	// two names MUST be identical — there is nothing to translate.
+	for _, p := range pairesSecret("scaleway") {
+		if p[0] != p[1] {
+			t.Errorf("out-of-tree pair (%q, %q) renames a field while the webhook marshals it as-is", p[0], p[1])
+		}
 	}
 }
 
