@@ -242,12 +242,26 @@ func connectNextcloud(ctx context.Context) error {
 	if err := ensureOccApp(ctx, "onlyoffice"); err != nil {
 		return err
 	}
-	if err := runOcc(ctx, "config:app:set", "onlyoffice", "DocumentServerUrl", "--value="+officeService); err != nil {
-		return fmt.Errorf("DocumentServerUrl: %w", err)
-	}
 	if err := runOcc(ctx, "config:app:set", "onlyoffice", "DocumentServerInternalUrl", "--value="+officeService); err != nil {
 		return fmt.Errorf("DocumentServerInternalUrl: %w", err)
 	}
+	// DocumentServerUrl — the address the BROWSER loads the editor from — is
+	// deliberately NOT set here. internal/ingress owns it, because only that
+	// layer knows the public hostname and its TLS.
+	//
+	// WHY THIS MATTERS, and what it cost: this function used to write the
+	// INTERNAL address (.svc) here, and the ingress wrote the public one later
+	// in the sequence. A fresh install therefore ended up correct BY ORDER —
+	// the later write overwrote the earlier one. Every other path lost: an
+	// installation whose ingress wrote its value before this ran (or that
+	// never re-ran the ingress) kept a browser-facing URL pointing at
+	// "http://onlyoffice.ceffio-office.svc", a name that resolves INSIDE the
+	// cluster only. The browser could not load the editor and Nextcloud
+	// displayed "ONLYOFFICE indisponible, veuillez contacter votre
+	// administrateur" — while the Document Server itself was healthy and
+	// reachable, which is what made it expensive to diagnose.
+	//
+	// One writer per setting: the internal address here, the public one there.
 	// The ONLYOFFICE connector reads the "jwt_secret" key (AppConfig::$_jwtSecret),
 	// NOT "secret". Writing "secret" left the connector signing requests with an
 	// empty secret → the Document Server answered error -8 "Invalid token" and
