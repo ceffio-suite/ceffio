@@ -201,6 +201,10 @@ func (s *Server) Handler() http.Handler {
 	// OpenBao — the console holds no right in cert-manager, by design, and the
 	// solver reads it through the injector.
 	mux.HandleFunc("/api/tls", s.requireAuth(s.handleTLS))
+	// The machine's state: node consumption, volumes, storage. READ ONLY —
+	// see monitoring_api.go for why it is a route of its own rather than an
+	// extension of /api/status.
+	mux.HandleFunc("GET /api/monitoring", s.requireAuth(s.handleMonitoring))
 	return mux
 }
 

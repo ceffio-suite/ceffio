@@ -56,6 +56,7 @@ var routesAutorisees = map[string]string{
 	"/api/admin":        "administration account",
 	"/api/admin/rotate": "password rotation",
 	"/api/tls":          "certificates",
+	"/api/monitoring":   "the machine: node consumption, volumes, storage",
 }
 
 // routesEnregistrees reads the routes the console declares.
