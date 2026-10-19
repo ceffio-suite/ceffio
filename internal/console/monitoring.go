@@ -323,21 +323,83 @@ func (s *Server) metriquesNoeuds(ctx context.Context, avert *[]string) ([]Metriq
 
 // --- Volumes ---------------------------------------------------------------
 
-// volumes lists every PVC of the platform's namespaces.
+// volumes lists the PVCs of the platform's namespaces.
 //
-// THE NAMESPACES COME FROM THE NAMESPACES THAT EXIST, not from a list in this
-// file: a list would go stale the day a module adds one, and the page would
-// silently stop showing a volume — the worst kind of monitoring defect, since
-// it looks like there is nothing to see.
+// ONE CALL PER NAMESPACE, NOT A CLUSTER-WIDE LIST — and that is what the rights
+// allow, which the first version of this code learned the hard way by returning
+// an empty list with the message "unknown". The console holds a Role in each
+// ceffio-* namespace and no cluster-scoped right on claims: asking for all of
+// them at once is refused, and a refusal reported as "unknown" reads as a bug in
+// this page rather than as a limit of the grant.
+//
+// THE NAMESPACES COME FROM THE CLUSTER, not from a list in this file: a list
+// would go stale the day a module adds one, and the page would silently stop
+// showing a volume — the worst kind of monitoring defect, since it looks like
+// there is nothing to see.
 func (s *Server) volumes(ctx context.Context) ([]Volume, error) {
 	rc, err := s.restClient()
 	if err != nil {
 		return nil, err
 	}
-	brut, err := rc.Get().AbsPath("/api/v1/persistentvolumeclaims").DoRaw(ctx)
+
+	// The platform's namespaces, as the cluster declares them.
+	brutNs, err := rc.Get().AbsPath("/api/v1/namespaces").DoRaw(ctx)
 	if err != nil {
 		return nil, err
 	}
+	var nsListe struct {
+		Items []struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(brutNs, &nsListe); err != nil {
+		return nil, fmt.Errorf("listing the namespaces: %w", err)
+	}
+
+	out := []Volume{}
+	var premiereErreur error
+	for _, ns := range nsListe.Items {
+		nom := ns.Metadata.Name
+		if !strings.HasPrefix(nom, "ceffio-") {
+			continue
+		}
+		brut, err := rc.Get().AbsPath("/api/v1/namespaces/" + nom + "/persistentvolumeclaims").DoRaw(ctx)
+		if err != nil {
+			// ONE NAMESPACE THAT REFUSES DOES NOT HIDE THE OTHERS. The first
+			// error is kept and reported; the rest of the platform is still
+			// shown, because a page that gives up entirely on one refusal is
+			// least useful during the incident it was opened for.
+			if premiereErreur == nil {
+				premiereErreur = fmt.Errorf("namespace %s: %w", nom, err)
+			}
+			continue
+		}
+		vols, err := volumesDe(brut)
+		if err != nil {
+			if premiereErreur == nil {
+				premiereErreur = fmt.Errorf("namespace %s: %w", nom, err)
+			}
+			continue
+		}
+		out = append(out, vols...)
+	}
+	if len(out) == 0 && premiereErreur != nil {
+		return nil, premiereErreur
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Namespace != out[j].Namespace {
+			return out[i].Namespace < out[j].Namespace
+		}
+		return out[i].Nom < out[j].Nom
+	})
+	return out, nil
+}
+
+// volumesDe parses one namespace's claim list.
+func volumesDe(brut []byte) ([]Volume, error) {
 	var liste struct {
 		Items []struct {
 			Metadata struct {
@@ -370,9 +432,6 @@ func (s *Server) volumes(ctx context.Context) ([]Volume, error) {
 
 	out := []Volume{}
 	for _, p := range liste.Items {
-		if !strings.HasPrefix(p.Metadata.Namespace, "ceffio-") {
-			continue
-		}
 		// The REQUESTED size is what the operator planned for; the status
 		// capacity is what the provisioner granted. They agree on every healthy
 		// claim, and when they disagree the granted one is the truth — a claim
