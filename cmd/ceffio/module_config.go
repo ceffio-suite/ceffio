@@ -129,6 +129,12 @@ exactly as the console refuses it.`,
 // The values are read through the MODULE, not through the store: a module that
 // keeps its settings elsewhere (a path another component reads) answers here
 // too, and the CLI never has to know where they live.
+//
+// THE DECLARATION IS ALWAYS PRINTED, even when the values cannot be read. That
+// is deliberate and it is the case that matters most: an operator whose store is
+// unreachable — a pod down, a vault sealed — needs to see WHICH settings exist
+// in order to understand what is missing. Printing only "unreadable" would hide
+// the catalogue exactly when it is most useful.
 func afficherReglages(cmd *cobra.Command, m module.Module, cfg module.Configurable, groupe string) error {
 	env := moduleEnvCLI("", m.Info().ID)
 	for _, g := range cfg.Settings() {
@@ -136,14 +142,15 @@ func afficherReglages(cmd *cobra.Command, m module.Module, cfg module.Configurab
 			continue
 		}
 		vals, err := cfg.Current(cmd.Context(), env, g.ID)
-		if err != nil {
-			// One group failing to read does not hide the others.
-			fmt.Printf("%s: unreadable (%v)\n", g.ID, err)
-			continue
-		}
+
 		fmt.Printf("%s — %s\n", g.ID, g.Title)
 		if g.Description != "" {
 			fmt.Printf("  %s\n", g.Description)
+		}
+		if err != nil {
+			// The values are unavailable, the FIELDS are not: say which, so
+			// the answer stays useful.
+			fmt.Printf("  ! values unreadable: %v\n", err)
 		}
 		for _, f := range g.Fields {
 			marque := " "
@@ -153,14 +160,21 @@ func afficherReglages(cmd *cobra.Command, m module.Module, cfg module.Configurab
 			// A secret arrives as the placeholder or as empty, NEVER as its
 			// value: the store does not send it back, and the CLI has no way
 			// of showing what it does not receive.
-			fmt.Printf("  %s %-18s = %s\n", marque, f.Key, valeurAffichee(vals, f))
+			fmt.Printf("  %s %-18s = %s\n", marque, f.Key, valeurAffichee(vals, f, err != nil))
 		}
 	}
 	return nil
 }
 
 // valeurAffichee renders one field for the terminal.
-func valeurAffichee(vals module.Values, f module.Field) string {
+//
+// indisponible says the value could not be read: showing the declared default
+// instead would present a value the module is not using, which is worse than
+// saying nothing.
+func valeurAffichee(vals module.Values, f module.Field, indisponible bool) string {
+	if indisponible {
+		return "(unreadable)"
+	}
 	v, present := vals[f.Key]
 	switch {
 	case f.Type == module.Secret && v == module.SecretSet:
