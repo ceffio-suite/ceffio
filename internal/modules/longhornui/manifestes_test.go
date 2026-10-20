@@ -211,10 +211,14 @@ func TestLeChecksumRedemarreLePod(t *testing.T) {
 // sous un nom d'hôte qui a l'air protégé.
 func TestLaRouteViseLeProxy(t *testing.T) {
 	brut := manifesteServiceEtRoute("exemple.org")
-	// THE SEPARATOR IS INDENTED in the template, because the manifest is written as one
-	// Go string and indentation keeps the source readable. Splitting on a bare "---"
-	// misses it and the YAML parser then reads two documents as one.
-	for _, doc := range strings.Split(brut, "---") {
+	// THE SEPARATOR MUST BE AT INDENTATION ZERO. Kubernetes refuses an indented one with
+	// "could not find expected ':'", and the message names neither the document nor the
+	// line — found by deploying, not by reading.
+	if strings.Contains(brut, "  ---") {
+		t.Error("le séparateur de documents est indenté : kubectl refuse le manifeste avec " +
+			"'could not find expected :'")
+	}
+	for _, doc := range strings.Split(brut, "\n---\n") {
 		var o map[string]any
 		if err := yaml.Unmarshal([]byte(doc), &o); err != nil {
 			t.Fatalf("YAML invalide : %v", err)
