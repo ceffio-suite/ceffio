@@ -23,6 +23,7 @@ import (
 	_ "github.com/ceffio-suite/ceffio/internal/modules/files"
 	_ "github.com/ceffio-suite/ceffio/internal/modules/identity"
 	_ "github.com/ceffio-suite/ceffio/internal/modules/ingress"
+	_ "github.com/ceffio-suite/ceffio/internal/modules/longhornui"
 	_ "github.com/ceffio-suite/ceffio/internal/modules/mail"
 	_ "github.com/ceffio-suite/ceffio/internal/modules/office"
 	_ "github.com/ceffio-suite/ceffio/internal/modules/platform"
