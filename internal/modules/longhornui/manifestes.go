@@ -5,7 +5,6 @@ package longhornui
 
 import (
 	"fmt"
-	"strings"
 )
 
 // nomServiceAccount est celui que le rôle OpenBao désigne.
@@ -64,9 +63,8 @@ spec:
         # startup, so rewriting the ConfigMap changes nothing until the process
         # restarts; Kubernetes restarts it when this value changes, and only then.
         ceffio.io/acces-somme: "%[3]s"
-        %[4]s
     spec:
-      serviceAccountName: %[5]s
+      serviceAccountName: %[4]s
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -78,8 +76,8 @@ spec:
           image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.5
           args:
             - --provider=keycloak-oidc
-            - --oidc-issuer-url=%[6]s
-            - --client-id=%[7]s
+            - --oidc-issuer-url=%[5]s
+            - --client-id=%[6]s
             # THE SECRET COMES FROM THE ENVIRONMENT THE AGENT RENDERS, never from an
             # argument: an argument is readable in /proc/<pid>/cmdline.
             - --upstream=http://longhorn-frontend.longhorn-system.svc:80
@@ -88,10 +86,10 @@ spec:
             # declaring a domain would open the whole domain -- including every account
             # an administrator creates later -- where the file opens exactly what it
             # lists.
-            - --authenticated-emails-file=%[8]s
-            - --redirect-url=https://%[9]s/oauth2/callback
+            - --authenticated-emails-file=%[7]s
+            - --redirect-url=https://%[8]s/oauth2/callback
             - --cookie-secure=true
-            - --cookie-domain=%[9]s
+            - --cookie-domain=%[8]s
             - --cookie-expire=8h
             - --cookie-refresh=1h
             - --reverse-proxy=true
@@ -153,8 +151,8 @@ spec:
       volumes:
         - name: adresses
           configMap:
-            name: %[10]s
-`, nomDeploy, nsSysteme, somme, annotationsVault(), nomServiceAccount,
+            name: %[9]s
+`, nomDeploy, nsSysteme, somme, nomServiceAccount,
 		issuer, clientOIDC, cheminAdresses, hote, nomConfig)
 }
 
@@ -209,31 +207,11 @@ spec:
 `, nomService, nsSysteme, hote)
 }
 
-// annotationsVault renders the OpenBao agent annotations for the proxy's own entry.
-//
-// THE TEMPLATE WRITES A KUBERNETES SECRET because the pod reads these two values as
-// ENVIRONMENT VARIABLES, which is what oauth2-proxy expects for
-// OAUTH2_PROXY_CLIENT_SECRET and OAUTH2_PROXY_COOKIE_SECRET. A file would have needed a
-// shell wrapper, and a wrapper is one more place to leak a secret into an argument.
-func annotationsVault() string {
-	return strings.Join([]string{
-		`vault.hashicorp.com/agent-inject: "true"`,
-		`vault.hashicorp.com/role: "` + nomDeploy + `"`,
-		`vault.hashicorp.com/agent-inject-secret-oauth2: "` + coffreComposant + `/data/` + coffreChemin + `"`,
-		`vault.hashicorp.com/agent-inject-template-oauth2: |`,
-		`  {{- with secret "` + coffreComposant + `/data/` + coffreChemin + `" -}}`,
-		`  {{- range $k, $v := .Data.data }}`,
-		`  {{ $k }}={{ $v }}`,
-		`  {{- end }}`,
-		`  {{- end }}`,
-	}, "\n        ")
-}
-
 // manifesteServiceAccount renders the ServiceAccount the Deployment runs as.
 //
-// IT CARRIES NOTHING: no role binding inside the cluster, no token mount needed by the
-// proxy. Its purpose is to be a named identity — the name the vault role and the pod
-// refer to — so that a future grant can be attached to it without rewriting the pod.
+// IT CARRIES NOTHING: no role binding inside the cluster, no token the proxy needs. Its
+// purpose is to be a named identity — what the pod refers to — so that a grant can be
+// attached to it later without rewriting the pod.
 func manifesteServiceAccount() string {
 	return fmt.Sprintf(`apiVersion: v1
 kind: ServiceAccount

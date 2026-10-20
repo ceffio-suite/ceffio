@@ -84,10 +84,16 @@ func installer(ctx context.Context, env module.Env) error {
 	// read from it here, and written into the Secret without ever appearing in a
 	// manifest, a log or an argument.
 	//
-	// AN ÉCART, RECORDED: the plan asks for a dedicated OpenBao role bound to the
-	// proxy's ServiceAccount, on the model of the existing roles. internal/vault has no
-	// exported function for that, and adding one belongs to a lot of its own — it
-	// touches the vault's auth methods, which every component shares.
+	// AN ÉCART, RECORDED AND LOAD-BEARING: the plan asks for a dedicated OpenBao role
+	// bound to the proxy's ServiceAccount, on the model of the existing roles.
+	// internal/vault exports no function for that, and the agent annotations that would
+	// use it made the pod hang in Init with
+	//
+	//   invalid role name "longhorn-oauth2-proxy"
+	//
+	// so they are NOT used here. Adding the role belongs to a lot of its own — it
+	// touches the auth methods every component shares — and until then a Secret is
+	// what carries the two values.
 	if err := poserSecretProxy(ctx); err != nil {
 		return err
 	}
