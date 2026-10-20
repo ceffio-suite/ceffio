@@ -216,3 +216,47 @@ func EtatLePlusBas(etats ...module.State) module.State {
 func ErreurSocleIndemontable(id string) error {
 	return fmt.Errorf("%s is a core layer of the suite: it is removed with the cluster (ceffio uninstall), not on its own", id)
 }
+
+// EtatDesDeploiements reports Installed only when EVERY named Deployment is ready.
+//
+// WHY NOT EtatDuDeploiement IN A LOOP: the loop's last answer is not the whole answer.
+// A layer made of three workloads is installed when all three run — reading only the
+// last, or the first, reports Installed while the others are missing, which is how a
+// single-deployment check made the Longhorn UI look healthy while nothing could claim
+// a volume.
+//
+// A MISSING DEPLOYMENT NAMES ITSELF. Saying "the storage is absent" when only
+// longhorn-ui is missing sends the reader to look at the wrong thing.
+func EtatDesDeploiements(ctx context.Context, env module.Env, ns string, noms []string) module.State {
+	if env.Kube == nil {
+		return sansClient()
+	}
+	var absents, indisponibles []string
+	for _, nom := range noms {
+		d, err := env.Kube.AppsV1().Deployments(ns).Get(ctx, nom, metav1.GetOptions{})
+		switch {
+		case apierrors.IsNotFound(err):
+			absents = append(absents, nom)
+		case err != nil:
+			return module.State{Status: module.Unknown,
+				Detail: fmt.Sprintf("reading deployment %s/%s: %v", ns, nom, err)}
+		case d.Status.ReadyReplicas == 0:
+			indisponibles = append(indisponibles, nom)
+		}
+	}
+	if len(absents) == len(noms) {
+		return module.State{Status: module.Absent}
+	}
+	if len(absents) > 0 || len(indisponibles) > 0 {
+		var parties []string
+		if len(absents) > 0 {
+			parties = append(parties, "missing: "+strings.Join(absents, ", "))
+		}
+		if len(indisponibles) > 0 {
+			parties = append(parties, "not ready: "+strings.Join(indisponibles, ", "))
+		}
+		return module.State{Status: module.Degraded,
+			Detail: ns + " — " + strings.Join(parties, " · ")}
+	}
+	return module.State{Status: module.Installed}
+}

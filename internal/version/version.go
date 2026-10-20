@@ -164,6 +164,17 @@ var Registry = []Composant{
 		Nom: "acme-dns-webhook", Image: "ghcr.io/ceffio-suite/acme-dns-webhook:v1.1.0",
 		Module: "internal/ingress", Role: "TLS: DNS-01 solver for out-of-tree DNS hosts (libdns)",
 	},
+
+	// THE SIGN-IN IN FRONT OF AN ADMINISTRATION INTERFACE.
+	//
+	// It is pinned like every other image: oauth2-proxy carries the whole
+	// authorization decision, and an unpinned tag would let that decision change
+	// between two installs of the same Ceffio version.
+	{
+		Nom: "oauth2-proxy", Image: "quay.io/oauth2-proxy/oauth2-proxy:v7.15.5",
+		Module: "internal/modules/longhornui",
+		Role:   "Put a single sign-on in front of the Longhorn interface, which has none",
+	},
 }
 
 // Helm charts used by the platform (operators).

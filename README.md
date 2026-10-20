@@ -203,6 +203,13 @@ console's Modules page):
 | `recording` | Records Talk calls: a hidden participant joins the room, renders it and uploads the result to Nextcloud | — (workload limited to 2 GiB RAM, no model download) | — | **yes** (`--without recording` to skip) |
 | `exapps-daemon` | HaRP runs the containers Nextcloud asks for, speaking the Kubernetes API directly — prerequisite of every external application | — | — | no |
 | `live-transcription` | Transcribes speech live during a Talk call, on this server, with open source speech models; nothing is sent to a third party | ~9 GB disk, ~16 GB RAM | `exapps-daemon` (installed automatically with it) | no |
+| `longhorn-ui` | The storage interface at `longhorn.<domain>`, **behind the single sign-on and reachable by the addresses listed in its settings** | negligible (one proxy pod) | `storage`, `identity`, `ingress` | no |
+
+> **`longhorn-ui` can delete volumes, and therefore data.** It installs nothing
+> without being asked, and the interface it exposes sits behind Keycloak: an account
+> that signs in successfully but is not in its list of allowed addresses gets a 403.
+> The storage interface has no authentication of its own, which is exactly why it is
+> never exposed without the proxy in front of it.
 
 Declared dependencies are expanded by the registry: asking for
 `live-transcription` installs `exapps-daemon` first, and `ceffio module
