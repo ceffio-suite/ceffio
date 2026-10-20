@@ -76,6 +76,15 @@ type CertInfo struct {
 	Issuer                   string `json:"issuer,omitempty"`
 	Renews                   string `json:"renews,omitempty"`
 	JoursAvantRenouvellement int    `json:"jours_avant_renouvellement"`
+
+	// Noms lists EVERY name the certificate covers, not just the first.
+	//
+	// WHY IT MATTERS: the wildcard covers `*.ceffio.org`, so a host added later —
+	// longhorn.<domain> — is served without a new certificate being issued at all. A
+	// page that shows only DNSNames[0] makes that host INVISIBLE: it works, the
+	// certificate renews, and nothing says so. The reader concludes the host is
+	// unprotected.
+	Noms []string `json:"noms,omitempty"`
 }
 
 // registryNamespaces lists every namespace the registry declares, in
@@ -388,6 +397,7 @@ func (s *Server) listCerts(ctx context.Context) []CertInfo {
 		}
 		if len(it.Spec.DNSNames) > 0 {
 			c.Hote = it.Spec.DNSNames[0]
+			c.Noms = it.Spec.DNSNames
 		}
 		if it.Status.NotAfter != "" {
 			c.NotAfter = it.Status.NotAfter

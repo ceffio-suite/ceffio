@@ -353,8 +353,9 @@
         <h2 class="section-title">TLS certificates</h2>
         <p class="section-sub">Issued by cert-manager. Renewal is automatic: what matters is not the expiry date but whether the renewal is still scheduled.</p>
         <div id="tlsConfig"></div>
+        <div id="tlsHosts"></div>
         <table class="table" id="certTable">
-          <thead><tr><th>Domain</th><th>Certificate</th><th>Issuer</th><th>Status</th><th>Expires</th><th>Renews</th></tr></thead>
+          <thead><tr><th>Covers</th><th>Certificate</th><th>Issuer</th><th>Status</th><th>Expires</th><th>Renews</th></tr></thead>
           <tbody></tbody>
         </table>
       </section>
@@ -560,7 +561,7 @@
         exp = `<span class="badge ${cls}">${c.jours} d · ${d}</span>`;
       }
       return `<tr>
-        <td class="mono">${esc(c.hote || '—')}</td>
+        <td class="mono">${couvre(c)}</td>
         <td class="muted mono">${esc(c.name)}</td>
         <td class="muted">${esc(c.issuer || '—')}</td>
         <td>${ok ? '<span class="badge ok"><span class="bdot"></span>READY</span>' : '<span class="badge ko"><span class="bdot"></span>' + esc(c.condition) + '</span>'}</td>
@@ -568,6 +569,69 @@
         <td>${rendreRenouvellement(c)}</td>
       </tr>`;
     }).join('');
+  }
+
+  // couvre lists EVERY name a certificate covers, not only the first.
+  //
+  // POURQUOI C'EST LA COLONNE QUI COMPTE : le wildcard couvre *.ceffio.org, donc un
+  // hôte ajouté plus tard — longhorn.ceffio.org — est servi SANS qu'aucun certificat
+  // nouveau ne soit émis. Afficher seulement le premier nom rendait cet hôte invisible :
+  // il fonctionne, le certificat se renouvelle, et la page ne le dit pas — on en conclut
+  // que l'hôte n'est pas protégé.
+  function couvre(c) {
+    const noms = c.noms && c.noms.length ? c.noms : (c.hote ? [c.hote] : []);
+    if (!noms.length) return '<span class="muted">—</span>';
+    // LE WILDCARD EST MIS EN AVANT : c'est lui qui explique pourquoi les autres hôtes
+    // n'ont pas de ligne à eux.
+    return noms.map(n => /^\*\./.test(n)
+      ? `<span class="badge">${esc(n)}</span>`
+      : esc(n)).join('<br>');
+  }
+
+  // renderTLSHosts answers the question the certificates table cannot: WHICH HOSTS ARE
+  // ACTUALLY SERVED, AND BY WHICH CERTIFICATE.
+  //
+  // LE TABLEAU LISTE LES CERTIFICATS, PAS LES HÔTES. Un hôte qui réutilise le wildcard
+  // — longhorn.<domaine> — n'a aucun certificat à lui : il n'apparaissait donc nulle
+  // part, alors que le TLS fonctionne. On en conclut qu'il n'est pas protégé.
+  //
+  // CHAQUE HÔTE EST RÉSOLU VERS LE CERTIFICAT QUI LE COUVRE, en tenant compte du
+  // wildcard : c'est la seule façon de montrer que <sous>.domaine est bien servi.
+  function renderTLSHosts(st) {
+    const els = $('tlsHosts');
+    if (!els) return;
+    const ing = (st.ingresses || []).filter(i => i.host);
+    if (!ing.length) { els.innerHTML = ''; return; }
+    const certs = st.certs || [];
+    // Le certificat qui couvre cet hôte : correspondance exacte d'abord, puis wildcard.
+    const couvrant = (hote) => {
+      const exact = certs.find(c => (c.noms || [c.hote]).includes(hote));
+      if (exact) return exact;
+      const parts = hote.split('.');
+      if (parts.length > 2) {
+        const wildcard = '*.' + parts.slice(1).join('.');
+        return certs.find(c => (c.noms || [c.hote]).includes(wildcard));
+      }
+      return null;
+    };
+    const lignes = ing.map(i => {
+      const c = couvrant(i.host);
+      const badge = c
+        ? `<span class="badge ok"><span class="bdot"></span>${esc(c.name)}</span>`
+        : '<span class="badge ko">no certificate</span>';
+      return `<div style="display:flex;align-items:center;gap:12px;padding:6px 0;border-bottom:1px solid var(--line)">
+        <div class="mono" style="flex:1;font-size:12px">${esc(i.host)}</div>
+        ${badge}
+      </div>`;
+    }).join('');
+    els.innerHTML = `<div style="margin:0 0 18px">
+      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">
+        Hosts served (${ing.length})
+      </div>
+      <div style="background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:4px 14px">
+        ${lignes}
+      </div>
+    </div>`;
   }
 
   // rendreRenouvellement answers the question an operator actually asks.
@@ -1562,7 +1626,7 @@
     if (!key) { openKeyModal(); return; }
     try {
       const st = await api('/api/status');
-      renderDashboard(st); renderInfra(st); renderCerts(st); chargerTLS();
+      renderDashboard(st); renderInfra(st); renderCerts(st); renderTLSHosts(st); chargerTLS();
       await renderUsers();
       await renderAdmin();
       $('sideFoot').innerHTML = esc(st.domain || '') + ' · ' + esc(versionLibelle(st)) +
@@ -1571,7 +1635,7 @@
   };
 
   refresh();
-  setInterval(() => { if (key) api('/api/status').then(s => { renderDashboard(s); renderInfra(s); renderCerts(s); chargerTLS(); }).catch(() => {}); }, 30000);
+  setInterval(() => { if (key) api('/api/status').then(s => { renderDashboard(s); renderInfra(s); renderCerts(s); renderTLSHosts(s); chargerTLS(); }).catch(() => {}); }, 30000);
 })();
 </script>
 </body>

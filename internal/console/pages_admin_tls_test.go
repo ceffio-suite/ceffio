@@ -122,3 +122,46 @@ func TestLEnTeteNeMentPasSurLAutorite(t *testing.T) {
 			"désormais")
 	}
 }
+
+// TestLaPageTLSListeLesHotesServis : le tableau liste les CERTIFICATS, pas les HÔTES.
+//
+// UN HÔTE QUI RÉUTILISE LE WILDCARD — longhorn.<domaine> — n'a aucun certificat à lui :
+// il n'apparaissait donc NULLE PART, alors que son TLS fonctionne. On en conclut qu'il
+// n'est pas protégé, et on va chercher un problème qui n'existe pas.
+func TestLaPageTLSListeLesHotesServis(t *testing.T) {
+	p := page(t)
+	for _, marqueur := range []string{"tlsHosts", "renderTLSHosts", "Hosts served"} {
+		if !strings.Contains(p, marqueur) {
+			t.Errorf("%q absent : la page n'affiche pas les hôtes réellement servis, donc "+
+				"un hôte couvert par le wildcard reste invisible", marqueur)
+		}
+	}
+}
+
+// TestLaPageTLSResoutLeWildcard : chaque hôte doit être rapproché du certificat qui le
+// couvre, wildcard compris.
+//
+// SANS CETTE RÉSOLUTION, la colonne dirait « no certificate » sur un hôte servi par
+// *.domaine — exactement le contraire de la réalité.
+func TestLaPageTLSResoutLeWildcard(t *testing.T) {
+	p := page(t)
+	if !strings.Contains(p, "*.' + parts.slice(1)") {
+		t.Error("aucune résolution du wildcard : un hôte comme longhorn.exemple.org serait " +
+			"annoncé sans certificat alors que *.exemple.org le couvre")
+	}
+	if !strings.Contains(p, "no certificate") {
+		t.Error("un hôte sans certificat n'est pas signalé")
+	}
+}
+
+// TestChaqueNomEstAffiche : le certificat wildcard couvre deux noms, et n'en montrer
+// qu'un rend le second invisible.
+func TestChaqueNomEstAffiche(t *testing.T) {
+	p := page(t)
+	if !strings.Contains(p, "function couvre(") {
+		t.Error("aucune fonction qui affiche TOUS les noms d'un certificat")
+	}
+	if !strings.Contains(p, "c.noms") {
+		t.Error("la page ne lit pas la liste complète des noms couverts")
+	}
+}
