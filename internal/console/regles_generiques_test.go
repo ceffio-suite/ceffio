@@ -55,7 +55,7 @@ var routesAutorisees = map[string]string{
 	"/api/modules/{id}/settings/{group}/test": "GENERIC settings check",
 	"/api/admin":        "administration account",
 	"/api/admin/rotate": "password rotation",
-	"/api/tls":          "certificates",
+	"/api/certificates": "certificates, read-only",
 	"/api/monitoring":   "the machine: node consumption, volumes, storage",
 }
 
@@ -154,6 +154,118 @@ func TestListeFermeeEstExhaustive(t *testing.T) {
 		sort.Strings(manquantes)
 		t.Errorf("the closed list describes routes that are not registered: %v", manquantes)
 	}
+}
+
+// TestLaPageNAppelleQueDesRoutesQuiExistent : every /api/… URL the page calls
+// corresponds to a route the console actually serves.
+//
+// WHY THIS TEST EXISTS, AND WHAT IT WOULD HAVE CAUGHT: the SMTP tab was left in
+// the page after /api/smtp was removed. A menu entry, a whole section, a hundred
+// and thirty lines of JavaScript calling /api/smtp and /api/smtp/tester —
+// against routes that no longer existed. An administrator opening that tab got
+// an error, and nothing in the test suite noticed: the closed list checked that
+// every REGISTERED route was listed, never that every CALLED one was registered.
+//
+// The two directions are not the same check, and only one of them fails on the
+// operator's screen. A route registered and never called is dead code; a URL
+// called and never routed is a broken page.
+//
+// THE COMPARISON IS ON THE SHAPE, like the rest of this file: the page builds
+// module URLs by interpolating, so `/api/modules/${id}/settings` is compared as
+// its prefix, and a template is accepted exactly when a registered route covers
+// it. What is refused is a URL that NO route can serve.
+func TestLaPageNAppelleQueDesRoutesQuiExistent(t *testing.T) {
+	page := string(indexHTML(t))
+
+	enregistrees := map[string]bool{}
+	for _, r := range routesEnregistrees(t) {
+		enregistrees[r] = true
+	}
+
+	// Every /api/… occurrence in the page, from a literal or a template.
+	//
+	// THE MATCH STOPS AT THE FIRST CHARACTER THAT CANNOT BE IN A PATH: a quote
+	// ends a literal, `${` opens an interpolation. Taking the whole run would
+	// compare `/api/modules/${m.id}/settings` — a template — against a
+	// registered route, which is never equal.
+	motif := regexp.MustCompile(`/api/[A-Za-z0-9_/{}.\-]*`)
+	vus := map[string]bool{}
+	for _, u := range motif.FindAllString(page, -1) {
+		// `/api/smtp/tester` and `/api/smtp/` normalise to their route.
+		u = strings.TrimSuffix(u, "/")
+		if u == "" || u == "/api" {
+			continue
+		}
+		vus[u] = true
+	}
+	if len(vus) == 0 {
+		t.Fatal("the page calls no API URL at all: the scan is broken, not the page")
+	}
+
+	for u := range vus {
+		if _, ok := routesAutorisees[u]; ok {
+			continue
+		}
+		// A template — `/api/modules/${id}/settings` — is accepted when a
+		// registered route has the same shape: the same number of segments, with
+		// the variable ones spelled {…} in the list.
+		if couverte(u, enregistrees) {
+			continue
+		}
+		t.Errorf("the page calls %q, which no route serves.\n"+
+			"A URL the page calls and the console does not route is a BROKEN PAGE: "+
+			"the operator opens a tab and gets an error. Either register the route, or "+
+			"— if the feature moved — remove what still calls it. This is the check that "+
+			"was missing when the SMTP tab outlived its route.", u)
+	}
+}
+
+// couverte reports whether a registered route can serve a URL the page calls.
+//
+// TWO ROUTES ARE EXCLUDED, and the exclusion is the whole correctness of this
+// check. Measured, both accepted everything:
+//
+//   - `/api/` — the 404 handler. It answers the very error this test exists to
+//     catch, so "some route starts with what the page wrote" was true for every
+//     unknown path.
+//   - `/` — the page itself. EVERY string starts with "/", so it covered every
+//     URL in the file, including `/api/smtp`. This one survived the first fix:
+//     excluding `/api/` alone left the test passing with the broken page in
+//     front of it, and only a direct probe of this function showed why.
+//
+// A check that accepts anything detects nothing, which is worse than no check:
+// it reads as proof. Two rounds were needed to find both, and the second is the
+// reason this comment names the measurement rather than the intention.
+//
+// THE COMPARISON IS RESTRICTED TO /api, since that is what the page calls: the
+// icons and the page itself are not API routes and have nothing to say here.
+//
+// The page interpolates into its module URLs, so the literal it contains is a
+// PREFIX of the real one: `/api/modules/` appears in the page where the full URL
+// is `/api/modules/${id}/settings`. A prefix several routes share is therefore
+// ambiguous, and ambiguity must be accepted — refusing it would flag a correct
+// page. What is compared is that some real route starts with what the page wrote,
+// or the other way round.
+func couverte(appele string, enregistrees map[string]bool) bool {
+	if !strings.HasPrefix(appele, "/api") {
+		return false
+	}
+	for r := range enregistrees {
+		// Neither of these is a route the page may rely on: one answers the
+		// error this test exists to catch, the other is the page itself.
+		if r == "/api/" || r == "/" {
+			continue
+		}
+		if strings.HasPrefix(r, appele) {
+			return true
+		}
+		// The other way round: the page wrote more than the route names, which
+		// happens for a sub-path of a registered prefix route.
+		if strings.HasPrefix(appele, strings.TrimSuffix(r, "/")) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestLaPageNAppelleAucunModuleEnDur : index.html calls no module-specific URL

@@ -153,14 +153,16 @@ type State struct {
 // it, and Out lets it report its progress on the right channel (stdout for
 // the CLI, the operation log for the console).
 //
-// WHY Acme IS CARRIED HERE RATHER THAN READ FROM THE ENVIRONMENT BY EACH
-// MODULE: the settings of one installation must have ONE answer. A module
-// calling os.Getenv("CEFFIO_ACME_CHALLENGE") would work in isolation and then
-// silently disagree with the installer the first time the value is set in a
-// different place (a shell, a unit file, the console's own process). Passing
-// the resolved value means every module — and both frontends — see the same
-// configuration, and that a settings page can later feed it without any module
-// changing.
+// WHY THE ACME SETTINGS ARE NOT CARRIED HERE: they used to be, and the field was
+// removed when the ingress module took them over. The reason it carried them still
+// holds — one installation must have ONE answer, and a module calling
+// os.Getenv("CEFFIO_ACME_CHALLENGE") would work in isolation and then silently
+// disagree with the installer the first time the value is set elsewhere. What
+// changed is how that rule is satisfied: the module DECLARES its settings and
+// reads them through Env.Settings, so every frontend sees the same value without
+// this package knowing anything about certificates. Carrying resolved ACME
+// settings here would make this package depend on the ACME layer, which is what
+// the module contract exists to avoid — and a test forbids it.
 type Env struct {
 	Domain string
 	Kube   kubernetes.Interface // k8s.io/client-go/kubernetes
