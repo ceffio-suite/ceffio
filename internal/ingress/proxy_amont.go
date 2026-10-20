@@ -39,8 +39,8 @@ var candidatsAnciensDomaines = []string{
 // applications "the request arrived over HTTP". Applications that honor this
 // header correctly (Keycloak, Nextcloud, ONLYOFFICE) then build their redirects
 // to http://, and the user switches to clear text or lands on a nonexistent
-// URL. Setting KC_HOSTNAME_URL to https is NOT enough: the redirect proto comes
-// from the header, not from that variable.
+// URL. Naming an https hostname is NOT enough on its own: the redirect proto
+// comes from the header, not from that setting.
 //
 // The fix therefore happens in Traefik, the only place where the information is
 // reliably available, and not in each application.

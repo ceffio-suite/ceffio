@@ -38,6 +38,13 @@ only states and redacted logs.`,
 			useRegistryLayers()
 			st := stack.Collect(cmd.Context())
 			findings := diagnose(st)
+
+			// CHECKS THAT NEED THE MANIFEST, NOT JUST THE STATE. The state
+			// collected above describes pods — phases, restarts — and says
+			// nothing about HOW a container was started. A Keycloak booted with
+			// "start-dev" is Ready, serves its realms and signs nobody's
+			// certificate wrongly; only its command line tells.
+			findings = append(findings, VerifierKeycloakProduction(cmd.Context())...)
 			report := stack.Report{State: st, Findings: findings}
 
 			if asJSON {

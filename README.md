@@ -264,6 +264,30 @@ expiry dates, SSO account management. It reads the cluster's real state — it
 does not guess it. See [`internal/console/README.md`](internal/console/README.md)
 and the "Console image" section below.
 
+## The sign-in page
+
+The page every user meets first is Ceffio's, not Keycloak's. It is a theme that
+**extends `keycloak.v2` and overrides no template**: a Keycloak upgrade keeps every
+page, every flow and every fix, and only the look changes. See
+[`branding/keycloak/README.md`](branding/keycloak/README.md).
+
+It ships inside the binary and is mounted into the Keycloak pod at install time, so an
+offline installation gets it with nothing on disk.
+
+Changing it is a setting — Settings → module `identity` → group `login_page`, or:
+
+```bash
+ceffio module config identity login_page theme=ceffio      # the Ceffio page (default)
+ceffio module config identity login_page theme=keycloak.v2 # Keycloak's own page
+```
+
+Going back to Keycloak's page is the fastest way to tell a theming problem from a
+sign-in problem. Changing which theme is used applies immediately; shipping a *new*
+theme restarts the Keycloak pod, because production Keycloak caches themes.
+
+The `master` realm is never themed: that page is how Keycloak itself is administered,
+and an operator who lands on the wrong door must see it.
+
 ## Console image
 
 The console runs as a container image, built and published **by this
