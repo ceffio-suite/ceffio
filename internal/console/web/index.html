@@ -1311,24 +1311,80 @@
     return wrap;
   }
 
-  // appliquerConditions shows or hides the fields whose ShowWhen is unsatisfied.
+  // APPLIQUER LES CONDITIONS, EN RECURSIF — la même règle que module.Visible.
   //
-  // THE CONDITION IS DECLARED BY THE MODULE, applied here once and identically
-  // for every feature: a frontend deciding this itself would hard-code one
-  // module's logic. It is re-applied on every change, so the form follows the
-  // operator's choices without a reload.
+  // THE RULE IS DECLARED BY THE MODULE, applied here once and identically for every
+  // feature: a frontend deciding this itself would hard-code one module's logic.
+  // It is re-applied on every change, so the form follows the operator's choices
+  // without a reload.
+  //
+  // THE RECURSION IS WHAT MAKES A CHAIN WORK. A field is visible when its own
+  // condition holds AND the field that condition points at is visible — so a
+  // credential appears once its provider is chosen, and the provider itself only
+  // appears once dns01 is chosen. A single-level test would show the credential as
+  // soon as its own condition matched, even while the provider was hidden.
+  //
+  // IT MUST AGREE WITH module.Visible. The two are written in different languages
+  // and cannot share code, so a test compares them on the same data
+  // (TestConsoleEtContratDonnentLaMemeVisibilite). Divergence here would be
+  // invisible: a form hiding what the validator demands, or the reverse.
+  function champVisible(g, valeurs, cle, vus) {
+    const f = (g.fields || []).find(x => x.key === cle);
+    if (!f) return false;
+    return estVisible(g, valeurs, f, vus || {});
+  }
+
+  function estVisible(g, valeurs, f, vus) {
+    if (!f.show_when) return true;
+    const cible = f.show_when.key;
+    // A key already on this path means a cycle. The registry refuses one at
+    // registration, so this cannot happen on a valid group — and a function
+    // recursing on data must not be able to loop forever on bad input, because a
+    // hung page is worse than a wrong one.
+    if (vus[cible]) return false;
+    const suivant = Object.assign({}, vus);
+    suivant[cible] = true;
+    if (!champVisible(g, valeurs, cible, suivant)) return false;
+    // The values compared are the STRINGS the form holds; an absent key reads as
+    // "", which matches nothing — the same behaviour as the Go side, where a
+    // missing key is "" in a Values map.
+    const v = valeurs[cible];
+    return (v === undefined ? '' : String(v)) === String(f.show_when.equals);
+  }
+
+  // appliquerConditions shows or hides the fields whose ShowWhen is unsatisfied.
   function appliquerConditions(g, form, valeurs) {
+    // The current values, read from the FORM rather than from `valeurs`: the
+    // parameter is what the server sent, and the operator may have changed a field
+    // since. Without this the form would follow the stored state, not the one on
+    // screen.
+    const lire = () => {
+      const out = {};
+      form.querySelectorAll('input[name], select[name]').forEach(el => {
+        out[el.name] = el.type === 'checkbox' ? (el.checked ? 'true' : 'false') : el.value;
+      });
+      return out;
+    };
+
     const maj = () => {
+      const actuelles = lire();
       for (const f of (g.fields || [])) {
-        if (!f.show_when) continue;
         const champ = form.querySelector('[data-key="' + cssEchappe(f.key) + '"]');
         if (!champ) continue;
-        const source = form.querySelector('[name="' + cssEchappe(f.show_when.key) + '"]');
-        if (!source) continue;
-        const montre = (source.value === f.show_when.equals);
+        // A field with no condition is ALWAYS visible: hiding it would need a
+        // condition, and it has none.
+        const montre = champVisible(g, actuelles, f.key, {});
         champ.style.display = montre ? '' : 'none';
+        // A HIDDEN FIELD IS DISABLED, and that is not cosmetic: valeursDuFormulaire
+        // reads every input in the form, so without disabling, a credential left
+        // in a field the operator then hid would still be sent — the module would
+        // receive a provider's token it did not ask for, and would store it.
+        champ.querySelectorAll('input, select, textarea').forEach(el => {
+          el.disabled = !montre;
+        });
       }
     };
+
     for (const f of (g.fields || [])) {
       const source = form.querySelector('[name="' + cssEchappe(f.key) + '"]');
       if (source) { source.addEventListener('change', maj); source.addEventListener('input', maj); }
@@ -1340,9 +1396,20 @@
 
   // valeursDuFormulaire reads what the operator typed, in the shape the API
   // expects: every field as a string.
+  //
+  // ONLY THE VISIBLE FIELDS ARE SENT, and the test is `disabled` rather than the
+  // computed visibility: appliquerConditions disables every input of a hidden
+  // field, so `disabled` IS the visibility, read from the DOM where it is
+  // applied. Recomputing it here would be a second implementation of the same
+  // rule, and the two would drift — one hiding a field the other still sends.
+  //
+  // WHY IT MATTERS BEYOND TIDINESS: a credential typed into a provider's field
+  // and then hidden when the operator changes provider would otherwise be
+  // submitted, and the module would store a token for a provider nobody selected.
   function valeursDuFormulaire(form) {
     const out = {};
     form.querySelectorAll('input[name], select[name]').forEach(el => {
+      if (el.disabled) return;
       if (el.type === 'checkbox') { out[el.name] = el.checked ? 'true' : 'false'; }
       else if (el.type === 'password' && el.value === '') { out[el.name] = ''; }
       else { out[el.name] = el.value; }

@@ -66,6 +66,27 @@ var valeursChallenge = []module.Option{
 	{Value: "dns01", Label: "DNS-01 (wildcard certificates, needs a DNS provider)"},
 }
 
+// optionsProvider builds the dropdown of the DNS providers.
+//
+// THE LABEL COMES FROM internal/acme, THE VALUE IS THE SOLVER'S NAME: an operator
+// reads "Amazon Route 53" where the solver receives "route53". Keeping the two
+// apart is what lets a label be reworded without changing what is stored, and the
+// list is sorted on the label so it reads alphabetically.
+func optionsProvider() []module.Option {
+	var out []module.Option
+	for _, p := range providersAvecIdentifiants() {
+		d, _ := acme.Description(acme.Provider(p.Nom))
+		label := d.Label
+		if label == "" {
+			label = p.Nom
+		}
+		out = append(out, module.Option{Value: p.Nom, Label: label})
+	}
+	// Sorted by label: the caller reads a list, not the solver's naming.
+	sort.Slice(out, func(i, j int) bool { return out[i].Label < out[j].Label })
+	return out
+}
+
 // Settings declares the group.
 //
 // THE DNS FIELDS ARE GENERATED FROM THE PROVIDER TABLE in internal/acme, which
@@ -89,8 +110,10 @@ func (m *ingressModule) Settings() []module.Group {
 		{
 			Key:      "dns_provider",
 			Label:    "DNS provider",
-			Help:     "The host holding the zone. The four in-tree providers need no component deployed; the others go through a webhook solver.",
-			Type:     module.Text,
+			Help:     "The host holding the zone. Choosing one shows the credential it needs, and nothing else.",
+			Type:     module.Choice,
+			Options:  optionsProvider(),
+			Required: true,
 			ShowWhen: &module.Condition{Key: "challenge", Equals: "dns01"},
 		},
 		{
@@ -106,30 +129,39 @@ func (m *ingressModule) Settings() []module.Group {
 	// by the provider so two hosts can both have an `api_token` without one
 	// overwriting the other in the store.
 	//
-	// THE CONDITION IS ON `challenge`, NOT ON `dns_provider`, and that is
-	// deliberate: `dns_provider` is itself conditional (it appears only for
-	// dns01), and a field depending on a conditional field can never be
-	// reached — the form would hide it forever with no error anywhere. The
-	// contract refuses that shape at registration, which is how this was caught.
+	// THE CONDITION IS NOW ON `dns_provider`, and that is the point of chained
+	// conditions: a provider's credential appears once THAT PROVIDER is chosen,
+	// not once dns01 is chosen. Before the contract allowed a ShowWhen pointing at
+	// a conditional field, this was impossible — every provider's fields were drawn
+	// at once, and the operator had to find their own among the others.
 	//
-	// The cost: every provider's fields are drawn once dns01 is chosen, and the
-	// operator sees the ones for the host they picked because the others are
-	// labelled with their provider's name. A cleaner grouping would need a
-	// second level of grouping in the contract, which the plan explicitly keeps
-	// out of scope.
+	// Required comes FROM THE TABLE in internal/acme, so a host that needs a token
+	// refuses a save without one while a host that does not stays silent: the
+	// question "is this field needed" is answered where the field is declared, not
+	// guessed here.
 	for _, p := range providersAvecIdentifiants() {
-		for _, c := range p.Champs {
+		for i, c := range p.Champs {
 			t := module.Text
 			if c.Secret {
 				t = module.Secret
 			}
+			// THE FIRST FIELD OF A PROVIDER CARRIES THE PROVIDER'S HELP: it is
+			// where an operator looks when they do not know what to paste, and the
+			// sentence says where to create it and with which rights. The other
+			// fields keep their own help, which describes the key itself.
+			help := c.Help
+			if i == 0 {
+				if d, _ := acme.Description(acme.Provider(p.Nom)); d.Help != "" {
+					help = d.Help
+				}
+			}
 			champs = append(champs, module.Field{
 				Key:      cleIdentifiant(p.Nom, c.Name),
 				Label:    p.Nom + " · " + c.Label,
-				Help:     c.Help,
+				Help:     help,
 				Type:     t,
-				Required: false,
-				ShowWhen: &module.Condition{Key: "challenge", Equals: "dns01"},
+				Required: c.Required,
+				ShowWhen: &module.Condition{Key: "dns_provider", Equals: p.Nom},
 			})
 		}
 	}
@@ -153,10 +185,14 @@ type providerAvecChamps struct {
 // as a plain pair so this package does not depend on the shape of another
 // module's types.
 type identifiantTLS struct {
-	Name   string
-	Label  string
-	Help   string
-	Secret bool
+	Name  string
+	Label string
+	Help  string
+	// Required is READ FROM THE TABLE in internal/acme, so the module does not
+	// decide which credential a host needs: a choice made where the field is
+	// declared, applied here.
+	Required bool
+	Secret   bool
 }
 
 // providersAvecIdentifiants lists every provider Ceffio describes, with its
@@ -172,7 +208,8 @@ func providersAvecIdentifiants() []providerAvecChamps {
 		p := providerAvecChamps{Nom: string(nom)}
 		for _, c := range champs {
 			p.Champs = append(p.Champs, identifiantTLS{
-				Name: c.Name, Label: c.Label, Help: c.Help, Secret: c.Secret,
+				Name: c.Name, Label: c.Label, Help: c.Help,
+				Required: c.Required, Secret: c.Secret,
 			})
 		}
 		out = append(out, p)
@@ -541,7 +578,21 @@ func lireIdentifiants(ctx context.Context, env module.Env) (map[string]string, e
 	return val, nil
 }
 
-// ecrireIdentifiants writes the credential at the solver's path, MERGING.
+// ecrireIdentifiants writes the credential at the solver's path.
+//
+// WRITE ONLY THE CHOSEN PROVIDER'S CREDENTIALS, and REPLACE the entry.
+//
+// THE OLD LOOP WROTE WHATEVER IT FOUND, for every provider at once: a token typed
+// for Cloudflare stayed in the vault after the operator switched to OVH, and the
+// solver's configuration block then carried credentials for a provider nobody had
+// selected. Changing provider must not leave the previous credentials behind —
+// an entry holding two providers' keys is one whose reader has to guess which is
+// current, and the failure it produces is a DNS error naming neither.
+//
+// SO THE ENTRY IS REBUILT, not merged: the chosen provider's fields, and nothing
+// else. What is NOT rebuilt is what the operator left empty for a SECRET — that
+// means "keep the stored one", so it is carried over explicitly, and only when
+// the provider has not changed.
 func ecrireIdentifiants(ctx context.Context, env module.Env, v module.Values) error {
 	cfg := secrets.DepuisEnvironnement()
 	if cfg == nil {
@@ -549,32 +600,70 @@ func ecrireIdentifiants(ctx context.Context, env module.Env, v module.Values) er
 			"OpenBao, which is where the solver reads it")
 	}
 
-	existants, err := secrets.LireEntreeCoffre(ctx, cfg, ComposantCoffre, SousCheminCoffre)
+	challenge := strings.TrimSpace(v["challenge"])
+	provider := strings.ToLower(strings.TrimSpace(v["dns_provider"]))
+
+	// Nothing to write unless dns01 is chosen with a provider: an http01
+	// installation has no DNS credential, and writing an empty entry would erase
+	// a stored one the operator may return to.
+	if challenge != "dns01" || provider == "" {
+		return nil
+	}
+
+	// What is stored TODAY, to keep a secret the operator left empty.
+	anciens, err := secrets.LireEntreeCoffre(ctx, cfg, ComposantCoffre, SousCheminCoffre)
 	if err != nil && !estAbsent(err) {
 		return err
 	}
-	if existants == nil {
-		existants = map[string]string{}
+	if anciens == nil {
+		anciens = map[string]string{}
 	}
+	memeProvider := anciens["provider"] == provider
 
-	// The provider name is stored alongside the credential: the solver's
-	// configuration block carries it as a value, and the console reads it back.
-	if p := strings.TrimSpace(v["dns_provider"]); p != "" {
-		existants["provider"] = p
-	}
-	for _, p := range providersAvecIdentifiants() {
-		for _, c := range p.Champs {
-			cle := cleIdentifiant(p.Nom, c.Name)
-			val := strings.TrimSpace(v[cle])
-			// An empty value keeps the stored one, and the placeholder the
-			// console received is not a value.
-			if val == "" || val == module.SecretSet {
-				continue
+	// THE NEW ENTRY, built from scratch. The provider travels WITH the
+	// credential, in the same entry: a token stored for Cloudflare must not be
+	// used against an OVH zone because the two settings drifted apart.
+	nouveaux := map[string]string{"provider": provider}
+	champs, connu := coucheIngress.IdentifiantsDuProvider(acme.Provider(provider))
+	_ = connu // an unknown provider has no fields; the free-form ones below
+	// A provider absent from the table keeps whatever the operator supplied, with
+	// its own key names: the table is a convenience, not a gate.
+	connus := map[string]bool{}
+	for _, c := range champs {
+		connus[c.Name] = true
+		cle := cleIdentifiant(provider, c.Name)
+		val := strings.TrimSpace(v[cle])
+		// An empty value or the console's placeholder KEEPS the stored one, and
+		// only if the provider has not changed: a secret belonging to the
+		// previous provider must not be carried over to a new one.
+		if val == "" || val == module.SecretSet {
+			if memeProvider {
+				if ancien := anciens[c.Name]; ancien != "" {
+					nouveaux[c.Name] = ancien
+				}
 			}
-			existants[c.Name] = val
+			continue
+		}
+		nouveaux[c.Name] = val
+	}
+	// Free-form keys: anything the operator supplied that the table does not
+	// describe, for a host Ceffio does not know. Kept, because refusing them
+	// would make the table a gate.
+	for k, val := range v {
+		if !strings.HasPrefix(k, "cred_") {
+			continue
+		}
+		nom := strings.TrimPrefix(k, "cred_"+strings.ReplaceAll(provider, "-", "_")+"_")
+		if nom == k || connus[nom] {
+			continue
+		}
+		if val = strings.TrimSpace(val); val != "" && val != module.SecretSet {
+			nouveaux[nom] = val
 		}
 	}
-	return secrets.EcrireDansCoffre(ctx, cfg, ComposantCoffre, SousCheminCoffre, existants)
+
+	// A REPLACEMENT, so nothing of the previous provider survives.
+	return secrets.EcrireDansCoffre(ctx, cfg, ComposantCoffre, SousCheminCoffre, nouveaux)
 }
 
 // estAbsent tells "the entry is not there yet" from a real failure.

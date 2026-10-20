@@ -246,14 +246,23 @@ func TestVerifierGroupes(t *testing.T) {
 			veutUne: "only a Choice or a Bool",
 		},
 		{
-			nom: "un ShowWhen qui depend d'un champ conditionnel est refuse",
+			nom: "un ShowWhen qui depend d'un champ conditionnel est ACCEPTE (chaine)",
 			groupes: []Group{{ID: "g", Title: "G", Fields: []Field{
 				{Key: "mode", Label: "Mode", Type: Choice, Options: []Option{{Value: "a"}}},
-				{Key: "mid", Label: "Mid", Type: Text,
+				{Key: "mid", Label: "Mid", Type: Choice, Options: []Option{{Value: "on"}},
 					ShowWhen: &Condition{Key: "mode", Equals: "a"}},
 				{Key: "fin", Label: "Fin", Type: Text,
-					ShowWhen: &Condition{Key: "mid", Equals: "x"}}}}},
-			veutUne: "itself conditional",
+					ShowWhen: &Condition{Key: "mid", Equals: "on"}}}}},
+			veutUne: "", // accepted: a chain has a reachable root
+		},
+		{
+			nom: "un cycle est refuse",
+			groupes: []Group{{ID: "g", Title: "G", Fields: []Field{
+				{Key: "a", Label: "A", Type: Bool,
+					ShowWhen: &Condition{Key: "b", Equals: "true"}},
+				{Key: "b", Label: "B", Type: Bool,
+					ShowWhen: &Condition{Key: "a", Equals: "true"}}}}},
+			veutUne: "cycle",
 		},
 	}
 
