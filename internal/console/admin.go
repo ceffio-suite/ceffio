@@ -30,6 +30,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
@@ -54,7 +55,26 @@ type EtatAdmin struct {
 	UrlAdminNextcloud string `json:"url_admin_nextcloud"`
 	UrlAdminStalwart  string `json:"url_admin_stalwart,omitempty"`
 	UrlAdminCoffre    string `json:"url_admin_coffre,omitempty"`
-	Note              string `json:"note,omitempty"`
+
+	// THE STORAGE AND THE DIRECTORY, which the administration page listed without.
+	//
+	// They are ADMINISTRATION INTERFACES like the other three: the console takes you
+	// there rather than reimplementing them. Longhorn's knows the volumes, their
+	// replicas and their health; Keycloak's knows the realm, its clients and its
+	// sessions. Each with its own reason to be a separate page, and the same account
+	// behind both.
+	//
+	// LONGHORN IS CONDITIONAL BY NATURE: the interface is an OPTIONAL module, so the
+	// URL is present only when the module is installed. An always-present link would
+	// send an operator to a 404 on every installation that did not ask for it.
+	UrlAdminLonghorn string `json:"url_admin_longhorn,omitempty"`
+	UrlAdminKeycloak string `json:"url_admin_keycloak,omitempty"`
+
+	// LonghornPresent distinguishes "the module is not installed" from "it is but the
+	// proxy does not answer" — the two need different fixes, and a single absent link
+	// says neither.
+	LonghornPresent bool   `json:"longhorn_present"`
+	Note            string `json:"note,omitempty"`
 }
 
 // handleAdmin returns the state of the administration account.
@@ -121,6 +141,21 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	etat.CoffrePresent = s.coffreJoignable(r)
 	if etat.CoffrePresent {
 		etat.UrlAdminCoffre = "https://bao." + s.Domain + "/ui/"
+	}
+
+	// The directory itself. Its console administers the realm — the clients, the
+	// users, the sessions — which is exactly what an operator needs when a single
+	// sign-on misbehaves and the Ceffio console does not cover it.
+	etat.UrlAdminKeycloak = "https://keycloak." + s.Domain + "/admin/" + realm + "/console"
+
+	// The storage interface, ONLY when its module is installed.
+	//
+	// THE CHECK IS THE DEPLOYMENT, not the host: a DNS name can resolve to the same
+	// machine while nothing serves it, and a link that opens onto a 503 reads as a
+	// broken console rather than an uninstalled module.
+	etat.LonghornPresent = s.longhornJoignable(r)
+	if etat.LonghornPresent {
+		etat.UrlAdminLonghorn = "https://longhorn." + s.Domain
 	}
 
 	writeJSON(w, 200, etat)
@@ -550,4 +585,18 @@ func (s *Server) ncReq(r *http.Request, method, chemin, corps string) (*http.Res
 // the one generated.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// longhornJoignable reports whether the storage interface module is installed.
+//
+// IT ASKS THE CLUSTER, NOT THE NETWORK: a DNS name resolves whether or not anything
+// serves it behind, so a network probe would answer "present" on a platform where the
+// module was never installed — and send the operator to a 503.
+func (s *Server) longhornJoignable(r *http.Request) bool {
+	if s.kube == nil {
+		return false
+	}
+	_, err := s.kube.AppsV1().Deployments("ceffio-system").Get(r.Context(),
+		"longhorn-oauth2-proxy", metav1.GetOptions{})
+	return err == nil
 }

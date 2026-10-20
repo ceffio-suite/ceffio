@@ -35,8 +35,6 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
-	"github.com/ceffio-suite/ceffio/internal/secrets"
 )
 
 // nsCertManager mirrors the constant of internal/ingress: the namespace the
@@ -86,6 +84,21 @@ type CertificatTLS struct {
 	// expire is an announced outage — that is why the console shows it BEFORE
 	// it happens rather than after.
 	Jours int `json:"jours"`
+
+	// Renews is WHEN cert-manager plans to renew, which is not "when it expires".
+	//
+	// THE TWO ANSWERS SERVE DIFFERENT QUESTIONS: "expires in 88 days" is reassuring,
+	// "renews in 59 days" is the one that tells an operator whether the automation is
+	// still doing its job. A certificate that will expire and never renew looks
+	// identical to a healthy one until the day it stops.
+	Renews string `json:"renews,omitempty"`
+	// JoursAvantRenouvellement is the same value, in days, so the page can colour it.
+	JoursAvantRenouvellement int `json:"jours_avant_renouvellement"`
+
+	// Issuer is the authority that signed the certificate — the ClusterIssuer's name.
+	// It is what distinguishes the platform's own CA from Let's Encrypt, which matters
+	// when a browser trusts one and not the other.
+	Issuer string `json:"issuer,omitempty"`
 }
 
 // handleTLS lit ou écrit la configuration TLS.
@@ -144,20 +157,22 @@ func (s *Server) etatTLS(ctx context.Context) (*EtatTLS, error) {
 		etat.WebhookGroup = s.acme.WebhookGroup
 	}
 
-	// L'identifiant est-il présent ? On lit l'entrée et on ne garde QUE ce
-	// fait : la valeur ne quitte pas le serveur.
-	if entree, err := secrets.LireEntreeCoffre(ctx, secrets.DepuisEnvironnement(),
-		cheminCoffreDNS[0], cheminCoffreDNS[1]); err == nil && len(entree) > 0 {
-		// Une entrée avec seulement le nom du provider n'est PAS un
-		// identifiant : elle dirait « configuré » alors qu'aucun jeton n'est
-		// utilisable, et l'opérateur chercherait l'erreur côté DNS.
-		for k := range entree {
-			if k != "provider" {
-				etat.IdentifiantDefini = true
-				break
-			}
-		}
-	}
+	// L'IDENTIFIANT EST-IL LÀ OÙ LE SOLVER LE LIT ?
+	//
+	// THREE SOURCES, AND ONLY ONE ANSWERS THE QUESTION. The credential starts in the
+	// vault, but the SOLVER reads a Kubernetes Secret — cert-manager resolves the
+	// ClusterIssuer's secretRef, it has no way to reach OpenBao. So the honest check is
+	// that Secret, not the vault entry.
+	//
+	// The previous version read the vault through secrets.DepuisEnvironnement, which is
+	// nil inside the console container — the pod carries no vault environment
+	// variables, by design — so the answer was ALWAYS false. A page asserting "renewal
+	// will fail" on a healthy installation is worse than a page saying nothing: it
+	// teaches the operator to distrust the one warning that matters.
+	//
+	// THE VAULT ENTRY IS STILL CHECKED, as a second source: an installation that has
+	// the Secret but lost the vault entry cannot recover it on reinstall.
+	etat.IdentifiantDefini = s.identifiantDNSPresent(ctx)
 
 	if s.kube != nil {
 		etat.SolverDeploye = s.solverDNSDeploye(ctx)
@@ -175,6 +190,16 @@ func (s *Server) etatTLS(ctx context.Context) (*EtatTLS, error) {
 func (s *Server) solverDNSDeploye(ctx context.Context) bool {
 	if !s.acme.DNS01() {
 		return false
+	}
+	// AN IN-TREE SOLVER NEEDS NO POD, and looking for one reported "not running" on a
+	// platform whose certificates renew perfectly. Cloudflare, Route53 and the other
+	// built-ins live INSIDE cert-manager: the only thing that can be missing is their
+	// credential, which identifiantDNSPresent already answers.
+	//
+	// A WEBHOOK (the libdns out-of-tree hosts) does need its pod, and the selector is
+	// kept for that case.
+	if s.acme.Provider != "" && solverEstIntegre(string(s.acme.Provider)) {
+		return true
 	}
 	pods, err := s.kube.CoreV1().Pods(nsCertManager).List(ctx,
 		metav1.ListOptions{LabelSelector: "app=ceffio-acme-dns-webhook"})
@@ -218,11 +243,15 @@ func (s *Server) certificats(ctx context.Context) []CertificatTLS {
 				Namespace string `json:"namespace"`
 			} `json:"metadata"`
 			Spec struct {
-				DNSNames []string `json:"dnsNames"`
+				DNSNames  []string `json:"dnsNames"`
+				IssuerRef struct {
+					Name string `json:"name"`
+				} `json:"issuerRef"`
 			} `json:"spec"`
 			Status struct {
-				NotAfter   string `json:"notAfter"`
-				Conditions []struct {
+				NotAfter    string `json:"notAfter"`
+				RenewalTime string `json:"renewalTime"`
+				Conditions  []struct {
 					Type    string `json:"type"`
 					Status  string `json:"status"`
 					Reason  string `json:"reason"`
@@ -236,10 +265,12 @@ func (s *Server) certificats(ctx context.Context) []CertificatTLS {
 	}
 	for _, it := range doc.Items {
 		c := CertificatTLS{
-			Nom:       it.Metadata.Name,
-			Namespace: it.Metadata.Namespace,
-			Noms:      it.Spec.DNSNames,
-			Jours:     -1,
+			Nom:                      it.Metadata.Name,
+			Namespace:                it.Metadata.Namespace,
+			Noms:                     it.Spec.DNSNames,
+			Jours:                    -1,
+			JoursAvantRenouvellement: -1,
+			Issuer:                   it.Spec.IssuerRef.Name,
 		}
 		for _, cond := range it.Status.Conditions {
 			if cond.Type != "Ready" {
@@ -266,7 +297,74 @@ func (s *Server) certificats(ctx context.Context) []CertificatTLS {
 				c.Jours = int(time.Until(t).Hours() / 24)
 			}
 		}
+		// THE RENEWAL IS READ SEPARATELY, and its absence is meaningful: a certificate
+		// cert-manager does not plan to renew is one nobody is watching.
+		if it.Status.RenewalTime != "" {
+			c.Renews = it.Status.RenewalTime
+			if t, err := time.Parse(time.RFC3339, it.Status.RenewalTime); err == nil {
+				c.JoursAvantRenouvellement = int(time.Until(t).Hours() / 24)
+			}
+		}
 		out = append(out, c)
 	}
 	return out
+}
+
+// solverEstIntegre reports whether the provider has an in-tree DNS-01 solver.
+//
+// THE LIST IS cert-manager's OWN, and it is deliberately short: the eight built-ins. A
+// host outside it is served by a webhook, which is a pod that can genuinely be down.
+func solverEstIntegre(provider string) bool {
+	switch provider {
+	case "cloudflare", "route53", "azuredns", "acmedns", "clouddns",
+		"digitalocean", "rfc2136", "webhook":
+		return true
+	}
+	return false
+}
+
+// identifiantDNSPresent reports whether the DNS credential is in place.
+//
+// IT ASKS THE CERTIFICATES, NOT THE SECRET — and that is the third answer to the same
+// question, arrived at by finding out what this process may actually read.
+//
+//  1. The vault through secrets.DepuisEnvironnement: nil in this container, so ALWAYS
+//     false. The pod carries no vault environment, by design.
+//  2. The Secret cert-manager reads: refused. Reading Secrets in cert-manager from a web
+//     page is the shortest path to leaking all of them, and the RBAC reference is right
+//     to forbid it.
+//  3. The ClusterIssuer: also refused — it is cluster-scoped, and the console's
+//     ClusterRole does not carry cert-manager.io.
+//
+// WHAT THE CONSOLE CAN SEE IS BETTER THAN ANY OF THEM. A Certificate that is Ready and
+// whose condition says "up to date" PROVES the solver could sign — a DNS-01 issuance
+// cannot succeed without a working credential. So the question "is the credential
+// configured?" is answered by the platform itself, on the evidence of what it has
+// already done.
+//
+// A CERTIFICATE THAT HAS NEVER BEEN ISSUED IS THE CASE THAT MATTERS, and it is exactly
+// the one where the other three sources would have lied in whichever direction.
+func (s *Server) identifiantDNSPresent(ctx context.Context) bool {
+	if s.kube == nil || !s.acme.DNS01() {
+		return false
+	}
+	return identifiantDepuisCertificats(s.certificats(ctx))
+}
+
+// issuerEnPlace is the ClusterIssuer the platform uses. A variable so a test can aim at
+// another name.
+var issuerEnPlace = "ceffio-letsencrypt"
+
+// identifiantDepuisCertificats decides from the certificates the console may read.
+//
+// IT IS A SEPARATE FUNCTION so the rule can be tested without a cluster: the decision is
+// "at least one certificate has been signed and is still valid", and that is a pure
+// function of the list.
+func identifiantDepuisCertificats(certs []CertificatTLS) bool {
+	for _, c := range certs {
+		if c.Ready && c.Jours > 0 {
+			return true
+		}
+	}
+	return false
 }

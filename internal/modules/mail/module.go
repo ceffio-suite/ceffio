@@ -60,6 +60,21 @@ func (m *mailModule) Info() module.Info {
 		Permissions: []module.Permission{socle.StandardPermission(nsMail)},
 
 		Warning: "Installed by the install sequence only: it needs the outbound SMTP relay settings, which the registry does not carry.",
+
+		// THE WEB INTERFACE'S HOST. It was missing from the registry, so `ceffio dns`
+		// never checked it: the mail host could stop resolving and nothing said so
+		// until someone opened it. SSO is true because the WebUI signs in through
+		// Keycloak (the stalwart-webui client).
+		Services: []module.Service{
+			{
+				Sub:         "mail",
+				Name:        "Mail",
+				Role:        "Mail server and webmail",
+				Technical:   false,
+				SSO:         true,
+				PodPrefixes: []string{"stalwart"},
+			},
+		},
 	}
 }
 

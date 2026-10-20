@@ -66,6 +66,25 @@ type CertInfo struct {
 	NotAfter  string `json:"notAfter"` // RFC3339 (empty if unknown)
 	Jours     int    `json:"jours"`    // days before expiry (-1 if unknown)
 	Hote      string `json:"hote"`     // covered domain (deduced from the name)
+
+	// ISSUER AND RENEWAL, which the expiry date alone does not tell.
+	//
+	// "88 days left" is reassuring and says nothing about the automation: a
+	// certificate that will expire and never renew looks exactly like a healthy one
+	// until the day it stops. Renews is when cert-manager PLANS to act, and its
+	// absence is itself a finding.
+	Issuer                   string `json:"issuer,omitempty"`
+	Renews                   string `json:"renews,omitempty"`
+	JoursAvantRenouvellement int    `json:"jours_avant_renouvellement"`
+
+	// Noms lists EVERY name the certificate covers, not just the first.
+	//
+	// WHY IT MATTERS: the wildcard covers `*.ceffio.org`, so a host added later —
+	// longhorn.<domain> — is served without a new certificate being issued at all. A
+	// page that shows only DNSNames[0] makes that host INVISIBLE: it works, the
+	// certificate renews, and nothing says so. The reader concludes the host is
+	// unprotected.
+	Noms []string `json:"noms,omitempty"`
 }
 
 // registryNamespaces lists every namespace the registry declares, in
@@ -345,11 +364,15 @@ func (s *Server) listCerts(ctx context.Context) []CertInfo {
 				Namespace string `json:"namespace"`
 			} `json:"metadata"`
 			Spec struct {
-				DNSNames []string `json:"dnsNames"`
+				DNSNames  []string `json:"dnsNames"`
+				IssuerRef struct {
+					Name string `json:"name"`
+				} `json:"issuerRef"`
 			} `json:"spec"`
 			Status struct {
-				NotAfter   string `json:"notAfter"`
-				Conditions []struct {
+				NotAfter    string `json:"notAfter"`
+				RenewalTime string `json:"renewalTime"`
+				Conditions  []struct {
 					Type   string `json:"type"`
 					Status string `json:"status"`
 				} `json:"conditions"`
@@ -361,9 +384,11 @@ func (s *Server) listCerts(ctx context.Context) []CertInfo {
 	}
 	for _, it := range doc.Items {
 		c := CertInfo{
-			Name:  it.Metadata.Name,
-			NS:    it.Metadata.Namespace,
-			Jours: -1,
+			Name:                     it.Metadata.Name,
+			NS:                       it.Metadata.Namespace,
+			Jours:                    -1,
+			JoursAvantRenouvellement: -1,
+			Issuer:                   it.Spec.IssuerRef.Name,
 		}
 		for _, cond := range it.Status.Conditions {
 			if cond.Type == "Ready" {
@@ -372,11 +397,18 @@ func (s *Server) listCerts(ctx context.Context) []CertInfo {
 		}
 		if len(it.Spec.DNSNames) > 0 {
 			c.Hote = it.Spec.DNSNames[0]
+			c.Noms = it.Spec.DNSNames
 		}
 		if it.Status.NotAfter != "" {
 			c.NotAfter = it.Status.NotAfter
 			if t, err := time.Parse(time.RFC3339, it.Status.NotAfter); err == nil {
 				c.Jours = int(time.Until(t).Hours() / 24)
+			}
+		}
+		if it.Status.RenewalTime != "" {
+			c.Renews = it.Status.RenewalTime
+			if t, err := time.Parse(time.RFC3339, it.Status.RenewalTime); err == nil {
+				c.JoursAvantRenouvellement = int(time.Until(t).Hours() / 24)
 			}
 		}
 		out = append(out, c)

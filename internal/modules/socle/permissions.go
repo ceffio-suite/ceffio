@@ -85,3 +85,47 @@ func StandardPermission(namespace string) module.Permission {
 		},
 	}
 }
+
+// LectureSeulePermission is the read-only counterpart of StandardPermission.
+//
+// WHY IT EXISTS: some namespaces hold data the console must DISPLAY and must never
+// change. The storage is the clearest case — its volumes carry PostgreSQL, the
+// Nextcloud files, the mail store — and the monitoring tab reads Longhorn's CRDs to
+// show the REAL used space, but nothing on that page should be able to delete a
+// volume. Spelling that as a separate constructor makes the intent impossible to miss
+// in a diff, where `StandardPermission` would have looked like a copy-paste.
+//
+// IT COVERS THE CRDS TOO: the Longhorn resources are what an operator needs to read
+// to understand a fill-up, and they are read with `get`/`list`.
+func LectureSeulePermission(namespace string) module.Permission {
+	return module.Permission{
+		Namespace: namespace,
+		Rules: []rbacv1.PolicyRule{
+			{
+				APIGroups: []string{""},
+				Resources: []string{"pods", "services", "configmaps", "persistentvolumeclaims",
+					"serviceaccounts", "events"},
+				Verbs: []string{"get", "list", "watch"},
+			},
+			{
+				APIGroups: []string{"apps"},
+				Resources: []string{"deployments", "statefulsets", "daemonsets", "replicasets"},
+				Verbs:     []string{"get", "list", "watch"},
+			},
+			{
+				// The logs and the exec-free half of pod inspection: reading a log is
+				// how an operator finds out WHY a replica is not rebuilding.
+				APIGroups: []string{""},
+				Resources: []string{"pods/log"},
+				Verbs:     []string{"get"},
+			},
+			{
+				// THE STORAGE'S OWN RESOURCES: this is what the monitoring page reads
+				// to report the space actually used, as opposed to the space requested.
+				APIGroups: []string{"longhorn.io"},
+				Resources: []string{"volumes", "nodes", "replicas", "engines", "replicas"},
+				Verbs:     []string{"get", "list", "watch"},
+			},
+		},
+	}
+}

@@ -590,3 +590,57 @@ reason the seventh feature costs as little as the first.
    test of the demo module's settings checks exactly that for its own package.
    A console route, a page in `web/index.html` or a CLI subcommand named after
    your feature means the contract was not extended where it should have been.
+
+---
+
+## Second complete example: `longhorn-ui`
+
+`internal/modules/longhornui` is worth reading after the demo module, because it does
+the one thing the demo cannot: **it declares its own OIDC client**, without touching
+`internal/sso`'s list of core clients.
+
+```go
+secret, err := sso.AssurerClient(ctx, sso.Client{
+	ID:              "longhorn",
+	Redirects:       "https://longhorn." + domaine + "/oauth2/callback",
+	PostLogout:      "https://longhorn." + domaine + "/",
+	Audience:        true,           // the relying party verifies `aud`
+	CoffreComposant: "longhorn-ui",  // the MODULE's own vault path
+	CoffreChemin:    "oauth2-proxy",
+})
+```
+
+WHAT THAT BUYS, and why it is the generic form rather than a shortcut: the core's
+clients stay in `clientsOIDC`, the module's client is declared where the feature lives,
+and `internal/sso` never learns the module's name.
+
+FOUR THINGS THIS MODULE DOES THAT ARE WORTH COPYING:
+
+1. **It validates before it contacts anything.** A wrong description — no ID, no
+   redirect URI — is refused before the vault or the cluster is touched, so an operator
+   with a sealed vault learns about their mistake rather than about the vault.
+
+2. **It reuses its secrets instead of regenerating them.** The cookie secret is created
+   once and kept: regenerating it would sign every user out after each upgrade, while
+   looking like a working deployment.
+
+3. **It writes what the form shows AND what the process reads.** `Apply` stores the
+   setting and rewrites the ConfigMap the proxy mounts; writing only the first makes the
+   form agree with itself while the proxy keeps the old value — the worst kind of change,
+   because it looks saved.
+
+4. **It declares a `Warning` that decides the install.** The interface can delete
+   volumes; that sentence is why the module is `Optional` with `Default: false`, and why
+   it is not in the core.
+
+WHAT IT DOES *NOT* DO, and this is the part that keeps the console generic: there is no
+route for `longhorn-ui`, no section in `web/index.html`, no CLI subcommand. Its settings
+group (`access`) appears in Settings and in `ceffio module config` because the contract
+draws it. If you find yourself adding any of those for your module, the right move is to
+extend the contract — declared in `internal/module`, drawn once by the console — not to
+add a section named after your feature.
+
+ONE THING TO WATCH, learned by deploying: a module that ships a Deployment **must create
+its ServiceAccount first**. A Deployment whose ServiceAccount does not exist reports
+`0/1` and names the account without saying who was meant to create it, and the pod is
+never even attempted.
