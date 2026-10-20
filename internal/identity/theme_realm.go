@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/ceffio-suite/ceffio/internal/k8s"
-	"github.com/ceffio-suite/ceffio/internal/secrets"
 )
 
 // realm à thémer. Le realm `master` n'est JAMAIS touché : sa page de connexion sert
@@ -100,41 +99,37 @@ func appliquerThemeRealm(ctx context.Context, ns string, r ReglagesRealm) error 
 	return kcadmExec(ctx, ns, script, r.Theme, r.Locale, r.DisplayName, DisplayNameHTML)
 }
 
-// kcadmConnecte authenticates kcadm inside the pod, reading the password on stdin.
+// kcadmConnecte authenticates kcadm inside the pod.
+//
+// THE CREDENTIALS COME FROM /secrets/env INSIDE THE POD, not from an environment
+// variable passed to kubectl. The first version set KC_ADMIN_USER on the kubectl
+// process and read it back inside the container — which reads as empty, and kcadm
+// answers "Invalid user credentials" for a username nobody supplied. The failure
+// looks like a wrong password, which is the worst shape a credential error can take.
+//
+// SOURCING /secrets/env IS THE MECHANISM THE REST OF THE PACKAGE ALREADY USES: the
+// OpenBao injector writes that file, and k8s.AvecSecrets exists for exactly this.
 //
 // THE PASSWORD NEVER TRAVELS ON THE COMMAND LINE, which every process on the node
-// can read. `IFS= read -r` keeps it intact: no trimming, no backslash
-// interpretation, so a password containing $ or \\ still authenticates.
+// can read: it stays in the shell variable the file defines.
 func kcadmConnecte() string {
-	return `IFS= read -r motdepasse; ` +
+	return `set -a; . /secrets/env; set +a; ` +
 		`/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 ` +
-		`--realm master --user "$KC_ADMIN_USER" --password "$motdepasse" >/dev/null && `
+		`--realm master --user "$KC_BOOTSTRAP_ADMIN_USERNAME" ` +
+		`--password "$KC_BOOTSTRAP_ADMIN_PASSWORD" >/dev/null && `
 }
 
-// kcadmExec runs a kcadm script in the keycloak pod with the admin password on
-// stdin and the realm settings as arguments.
+// kcadmExec runs a kcadm script in the keycloak pod.
 //
-// THE SETTINGS TRAVEL AS ARGUMENTS, not interpolated into the script: the display
-// name is HTML, and building a shell line out of it would need quoting rules that a
-// future edit would get wrong. `python3 - "$@"` reads them back safely.
+// THE SETTINGS TRAVEL AS POSITIONAL ARGUMENTS rather than interpolated into the
+// script: the display name is HTML, and building a shell line out of it needs quoting
+// rules a future edit would get wrong. `sh -c script sh "$@"` hands them over intact.
 func kcadmExec(ctx context.Context, ns, script string, args ...string) error {
-	coffre := secrets.DepuisEnvironnement()
-	entree, err := secrets.LireEntreeCoffre(ctx, coffre, "keycloak", "admin")
-	if err != nil {
-		return fmt.Errorf("keycloak admin credentials unreadable in the vault: %w", err)
-	}
-	utilisateur, motdepasse := entree["username"], entree["password"]
-	if utilisateur == "" || motdepasse == "" {
-		return fmt.Errorf("incomplete keycloak/admin vault entry (username and password required)")
-	}
-
 	commande := []string{"exec", "-i", "-n", ns, "deploy/keycloak", "-c", "keycloak",
 		"--", "sh", "-c", script, "sh"}
 	commande = append(commande, args...)
 
 	cmd := k8s.Command(ctx, "kubectl", commande...)
-	cmd.Env = append(k8s.Env(), "KC_ADMIN_USER="+utilisateur)
-	cmd.Stdin = strings.NewReader(motdepasse + "\n")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("applying the login page to the realm: %w: %s",
@@ -168,15 +163,8 @@ func LireLoginTheme(ctx context.Context, ns string) (theme, locale string, err e
 		`/opt/keycloak/bin/kcadm.sh get realms/` + realmCeffio +
 		` --fields loginTheme,defaultLocale 2>/dev/null`
 
-	coffre := secrets.DepuisEnvironnement()
-	entree, err := secrets.LireEntreeCoffre(ctx, coffre, "keycloak", "admin")
-	if err != nil {
-		return "", "", err
-	}
 	cmd := k8s.Command(ctx, "kubectl", "exec", "-i", "-n", ns, "deploy/keycloak", "-c", "keycloak",
 		"--", "sh", "-c", script)
-	cmd.Env = append(k8s.Env(), "KC_ADMIN_USER="+entree["username"])
-	cmd.Stdin = strings.NewReader(entree["password"] + "\n")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", "", fmt.Errorf("reading the realm's login page: %w: %s", err,
