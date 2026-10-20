@@ -600,7 +600,15 @@
   function renderTLSHosts(st) {
     const els = $('tlsHosts');
     if (!els) return;
-    const ing = (st.ingress || []).filter(i => i.host);
+    // UN HÔTE PEUT AVOIR PLUSIEURS INGRESS — cloud.<domaine> en a deux, dont un pour
+    // appapi-harp qui ne porte pas de TLS. Lister l'hôte deux fois fait croire à deux
+    // entrées distinctes ; ce qui compte est le couple hôte + certificat.
+    const vus = new Set();
+    const ing = (st.ingress || []).filter(i => i.host).filter(i => {
+      if (vus.has(i.host)) return false;
+      vus.add(i.host);
+      return true;
+    });
     if (!ing.length) { els.innerHTML = ''; return; }
     const certs = st.certs || [];
     // Le certificat qui couvre cet hôte : correspondance exacte d'abord, puis wildcard.

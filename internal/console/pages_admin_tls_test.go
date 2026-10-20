@@ -177,3 +177,14 @@ func TestLaPageLitLaBonneCle(t *testing.T) {
 			"servis resterait vide sans rien signaler")
 	}
 }
+
+// TestUnHoteNEstListeQuUneFois : cloud.<domaine> a deux Ingress, dont un sans TLS.
+//
+// LISTER L'HÔTE DEUX FOIS FAIT CROIRE À DEUX ENTRÉES DISTINCTES, et celui qui lit ne
+// sait pas laquelle des deux porte le certificat.
+func TestUnHoteNEstListeQuUneFois(t *testing.T) {
+	p := page(t)
+	if !strings.Contains(p, "vus.has(i.host)") {
+		t.Error("aucune déduplication : un hôte porté par deux Ingress apparaît deux fois")
+	}
+}
