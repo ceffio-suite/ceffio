@@ -71,6 +71,21 @@ func Deploy(ctx context.Context) error {
 		return err
 	}
 
+	// THE LOGIN PAGE, applied AFTER the realm exists and BEFORE anyone can sign in.
+	//
+	// A THEME THAT DOES NOT APPLY IS INVISIBLE: the realm simply keeps
+	// `loginTheme: keycloak`, every user lands on Keycloak's own page, and nothing
+	// in the platform reports it. It is therefore a failure, not a warning — an
+	// operator who installed Ceffio for its sign-in page deserves to know at install
+	// time, not by comparing screenshots.
+	//
+	// IT IS IDEMPOTENT (kcadm update -s writes only the named fields), so every
+	// upgrade reapplies the same five values without touching the realm's clients,
+	// roles, flows or keys.
+	if err := appliquerThemeDepuisDeploiement(ctx, ns); err != nil {
+		return err
+	}
+
 	// THE ADMINISTRATOR ACCOUNT ITSELF, created HERE and not from the console.
 	//
 	// WHY AT INSTALLATION: the realm and the account are two things, and
