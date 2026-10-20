@@ -323,26 +323,75 @@ func solverEstIntegre(provider string) bool {
 	return false
 }
 
-// identifiantDNSPresent reports whether the solver has a usable credential.
+// identifiantDNSPresent reports whether the solver HAS A CREDENTIAL CONFIGURED.
 //
-// IT LISTS THE SECRETS cert-manager CAN READ and checks that at least one carries the
-// expected key — without ever reading the VALUE. Naming the values here would put them
-// in an HTTP response, which is the one thing this package must not do.
+// IT READS THE CLUSTERISSUER, NOT THE SECRET. The console is deliberately NOT allowed
+// to read Secrets in cert-manager — a rule the RBAC reference freezes, and a right
+// account: reading the platform's Secrets from a web page is the shortest path to
+// leaking all of them. My first version read the Secret and answered "absent" on a
+// perfectly configured installation, for the worst possible reason: a permission the
+// design forbids.
+//
+// THE ISSUER IS THE RIGHT SOURCE ANYWAY. It is what cert-manager consults: a solver
+// entry naming a secretRef is a configured solver, and a solver with no credential
+// reference cannot sign anything — whatever happens to be in a Secret nobody names.
+//
+// THE NAME IS CHECKED, NEVER THE VALUE.
 func (s *Server) identifiantDNSPresent(ctx context.Context) bool {
 	if s.kube == nil || !s.acme.DNS01() {
 		return false
 	}
-	// THE SECRET THE ISSUER NAMES, which can change with the provider.
-	for _, nom := range []string{"ceffio-acme-dns", "ceffio-acme"} {
-		sec, err := s.kube.CoreV1().Secrets(nsCertManager).Get(ctx, nom, metav1.GetOptions{})
-		if err != nil {
+	issuer := issuerEnPlace
+	if issuer == "" {
+		issuer = "ceffio-letsencrypt"
+	}
+	cr, err := lireIssuer(ctx, issuer)
+	if err != nil || len(cr) == 0 {
+		return false
+	}
+	var doc struct {
+		Spec struct {
+			ACME struct {
+				Solvers []map[string]map[string]any `json:"solvers"`
+			} `json:"acme"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(cr, &doc); err != nil {
+		return false
+	}
+	for _, solver := range doc.Spec.ACME.Solvers {
+		dns, ok := solver["dns01"]
+		if !ok {
 			continue
 		}
-		for _, cle := range []string{"api-token", "api_token", "cloudflare_api_token", "credentials"} {
-			if len(sec.Data[cle]) > 0 {
-				return true
+		// ANY PROVIDER BLOCK CARRYING A SECRET REFERENCE IS A CONFIGURED SOLVER. The
+		// shape differs per host (apiTokenSecretRef, accessKeyIDSecretRef, …), so the
+		// search is for the pattern rather than for one field name.
+		for _, bloc := range dns {
+			m, ok := bloc.(map[string]any)
+			if !ok {
+				continue
+			}
+			for cle := range m {
+				if strings.HasSuffix(strings.ToLower(cle), "secretref") {
+					return true
+				}
 			}
 		}
 	}
 	return false
+}
+
+// issuerEnPlace is the ClusterIssuer the platform uses. A variable so a test can aim at
+// another name.
+var issuerEnPlace = "ceffio-letsencrypt"
+
+// lireIssuer reads a ClusterIssuer. A variable so a test can answer instead of reaching
+// for a cluster — the same shape used for every other cluster read in this package.
+//
+// THE DEFAULT IMPLEMENTATION IS WIRED IN console.go, where the server has a client: a
+// package-level variable cannot reach it, and a fake clientset exposes no Discovery REST
+// client.
+var lireIssuer = func(ctx context.Context, nom string) ([]byte, error) {
+	return nil, nil
 }

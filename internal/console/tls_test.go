@@ -5,14 +5,13 @@ package console
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/ceffio-suite/ceffio/internal/acme"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -160,54 +159,66 @@ func TestLaRouteDesCertificatsEstEnLectureSeule(t *testing.T) {
 	}
 }
 
-// TestLIdentifiantVientDuSecretQueCertManagerLit : la fausse alerte qui a motivé ce
-// test.
+// TestLIdentifiantSeLitDansLeClusterIssuer : LA SOURCE EST L'ISSUER, PAS LE SECRET.
 //
-// LA PAGE AFFICHAIT « no credential in the vault — renewal will fail » sur une
-// installation dont les certificats se renouvelaient parfaitement. La cause :
-// identifiantDefini lisait le coffre à travers secrets.DepuisEnvironnement, qui est nil
-// dans le conteneur de la console — le pod ne porte aucune variable de coffre, par
-// construction. La réponse était donc TOUJOURS fausse.
+// La console n'a PAS le droit de lire les Secrets de cert-manager — règle figée par la
+// référence RBAC, et juste sur le fond : lire les Secrets de la plateforme depuis une
+// page web est le chemin le plus court pour les divulguer tous.
 //
-// CE QUI COMPTE EST LÀ OÙ LE SOLVER LIT. cert-manager résout le secretRef du
-// ClusterIssuer : il n'a aucun moyen d'atteindre OpenBao. Le bon contrôle est ce Secret.
-func TestLIdentifiantVientDuSecretQueCertManagerLit(t *testing.T) {
-	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "ceffio-acme-dns", Namespace: "cert-manager"},
-		Data:       map[string][]byte{"api-token": []byte("un-jeton-quelconque")},
+// Ma première version lisait le Secret et répondait « absent » sur une installation
+// parfaitement configurée, pour la pire des raisons : une permission que le dispositif
+// interdit.
+//
+// L'ISSUER EST DE TOUTE FAÇON LA BONNE SOURCE : c'est lui que cert-manager consulte. Un
+// solver nommant une secretRef est configuré ; un solver sans référence ne peut rien
+// signer, quel que soit le contenu d'un Secret que personne ne nomme.
+func TestLIdentifiantSeLitDansLeClusterIssuer(t *testing.T) {
+	// The fake clientset's Discovery has no REST client: the test reads the issuer
+	// through a stubbed reader instead, which is also what keeps it from depending on
+	// the cluster.
+	issuerAvant := lireIssuer
+	t.Cleanup(func() { lireIssuer = issuerAvant })
+	lireIssuer = func(ctx context.Context, nom string) ([]byte, error) {
+		return []byte(`{"spec":{"acme":{"solvers":[
+			{"dns01":{"cloudflare":{"apiTokenSecretRef":{"name":"ceffio-acme-dns","key":"api-token"}}}}
+		]}}}`), nil
 	}
-	s := &Server{kube: fake.NewSimpleClientset(sec), Domain: "exemple.org",
-		acme: acme.Reglages{Challenge: acme.ChallengeDNS, Provider: "cloudflare", Zone: "exemple.org"}}
 
-	if !s.identifiantDNSPresent(context.Background()) {
-		t.Error("le Secret que le solver lit existe et porte api-token, et le contrôle " +
-			"répond absent : la page annoncerait un échec de renouvellement sur une " +
-			"installation saine")
-	}
-}
-
-// TestPasDeSecretPasDIdentifiant : l'inverse doit aussi être vrai, sinon l'indicateur
-// ne sert à rien.
-func TestPasDeSecretPasDIdentifiant(t *testing.T) {
 	s := &Server{kube: fake.NewSimpleClientset(), Domain: "exemple.org",
-		acme: acme.Reglages{Challenge: acme.ChallengeDNS, Provider: "cloudflare", Zone: "exemple.org"}}
-	if s.identifiantDNSPresent(context.Background()) {
-		t.Error("aucun Secret n'existe et le contrôle répond présent : la page dirait " +
-			"« configuré » sur une installation qui ne peut pas renouveler")
+		acme: acme.Reglages{Challenge: acme.ChallengeDNS, Provider: "cloudflare"}}
+	if !s.identifiantDNSPresent(context.Background()) {
+		t.Error("le ClusterIssuer nomme un secretRef et le contrôle répond absent : la " +
+			"page annoncerait un échec de renouvellement sur une installation saine")
 	}
 }
 
-// TestUnSecretSansCleNeComptePas : un Secret existant mais vide ne permet aucune
-// signature.
-func TestUnSecretSansCleNeComptePas(t *testing.T) {
-	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "ceffio-acme-dns", Namespace: "cert-manager"},
-		Data:       map[string][]byte{"autre-chose": []byte("x")},
+// TestUnSolverSansSecretRefNeComptePas : l'inverse doit être vrai, sinon l'indicateur ne
+// sert à rien.
+func TestUnSolverSansSecretRefNeComptePas(t *testing.T) {
+	issuerAvant := lireIssuer
+	t.Cleanup(func() { lireIssuer = issuerAvant })
+	lireIssuer = func(ctx context.Context, nom string) ([]byte, error) {
+		return []byte(`{"spec":{"acme":{"solvers":[{"dns01":{"rfc2136":{}}}]}}}`), nil
 	}
-	s := &Server{kube: fake.NewSimpleClientset(sec), Domain: "exemple.org",
-		acme: acme.Reglages{Challenge: acme.ChallengeDNS, Provider: "cloudflare", Zone: "exemple.org"}}
+	s := &Server{kube: fake.NewSimpleClientset(), Domain: "exemple.org",
+		acme: acme.Reglages{Challenge: acme.ChallengeDNS, Provider: "rfc2136"}}
 	if s.identifiantDNSPresent(context.Background()) {
-		t.Error("un Secret sans la clé attendue est compté comme un identifiant")
+		t.Error("un solver sans secretRef est compté comme configuré : il ne peut rien signer")
+	}
+}
+
+// TestUnIssuerIllisibleNeMentPas : un issuer qu'on ne peut pas lire n'est pas un
+// identifiant présent.
+func TestUnIssuerIllisibleNeMentPas(t *testing.T) {
+	issuerAvant := lireIssuer
+	t.Cleanup(func() { lireIssuer = issuerAvant })
+	lireIssuer = func(ctx context.Context, nom string) ([]byte, error) {
+		return nil, errors.New("not found")
+	}
+	s := &Server{kube: fake.NewSimpleClientset(), Domain: "exemple.org",
+		acme: acme.Reglages{Challenge: acme.ChallengeDNS, Provider: "cloudflare"}}
+	if s.identifiantDNSPresent(context.Background()) {
+		t.Error("un issuer illisible est compté comme configuré")
 	}
 }
 
