@@ -153,3 +153,39 @@ func cssEmbede(t *testing.T) string {
 	t.Fatal("ceffio.css is not in the embedded theme")
 	return ""
 }
+
+// TestCorpsJSONIsoleLeDocument : kcadm writes its progress to the same stream as the
+// document, and a straight Unmarshal fails on the 'L' of "Logging into…". This was
+// found in production, where the settings form rendered empty with
+// `invalid character 'L' after top-level value`.
+func TestCorpsJSONIsoleLeDocument(t *testing.T) {
+	for _, cas := range []struct {
+		nom, entree, attendu string
+	}{
+		{
+			"kcadm precede le document de sa ligne de connexion",
+			"Logging into http://localhost:8080 as user admin of realm master\n" +
+				"{\n  \"loginTheme\" : \"ceffio\",\n  \"defaultLocale\" : \"fr\"\n}\n",
+			"{\n  \"loginTheme\" : \"ceffio\",\n  \"defaultLocale\" : \"fr\"\n}",
+		},
+		{
+			"un document seul",
+			`{"loginTheme":"keycloak.v2"}`,
+			`{"loginTheme":"keycloak.v2"}`,
+		},
+		{
+			"sans document, rien",
+			"Invalid user credentials\n",
+			"",
+		},
+		{
+			"des accolades vides, rien d'exploitable",
+			"}{",
+			"",
+		},
+	} {
+		if got := corpsJSON(cas.entree); got != cas.attendu {
+			t.Errorf("%s :\n  obtenu  %q\n  attendu %q", cas.nom, got, cas.attendu)
+		}
+	}
+}

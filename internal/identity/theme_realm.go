@@ -206,11 +206,20 @@ func LireLoginTheme(ctx context.Context, ns string) (theme, locale string, err e
 			strings.TrimSpace(out))
 	}
 
+	// KCADM WRITES ITS PROGRESS TO THE SAME STREAM as the JSON: "Logging into
+	// http://localhost:8080 as user admin of realm master" precedes the document, and
+	// a straight Unmarshal fails on the 'L'. The JSON body is isolated by taking the
+	// first line that opens a brace to the last that closes one.
+	corps := corpsJSON(out)
+	if corps == "" {
+		return "", "", fmt.Errorf("reading the realm's login page: no JSON in the answer: %s",
+			strings.TrimSpace(out))
+	}
 	var r struct {
 		LoginTheme    string `json:"loginTheme"`
 		DefaultLocale string `json:"defaultLocale"`
 	}
-	if err := json.Unmarshal([]byte(out), &r); err != nil {
+	if err := json.Unmarshal([]byte(corps), &r); err != nil {
 		return "", "", fmt.Errorf("reading the realm's login page: %w", err)
 	}
 	return r.LoginTheme, r.DefaultLocale, nil
@@ -238,4 +247,18 @@ func AppliquerLoginPage(ctx context.Context, ns, theme, locale string) error {
 		` -s internationalizationEnabled=true` +
 		` -s defaultLocale=` + shellQuote(locale)
 	return kcadmExec(ctx, ns, script, theme, locale)
+}
+
+// corpsJSON returns the JSON document inside a stream that carries other text.
+//
+// THE SHAPE IS KNOWN AND NARROW: kcadm prints one or two progress lines, then the
+// document. Rather than a lenient parser, the braces are located — an output with no
+// braces returns "" and the caller reports what it actually received.
+func corpsJSON(sortie string) string {
+	debut := strings.Index(sortie, "{")
+	fin := strings.LastIndex(sortie, "}")
+	if debut < 0 || fin <= debut {
+		return ""
+	}
+	return sortie[debut : fin+1]
 }
