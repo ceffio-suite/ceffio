@@ -90,71 +90,36 @@ type CertificatTLS struct {
 
 // handleTLS lit ou écrit la configuration TLS.
 //
-//	GET  /api/tls   → l'état (challenge, provider, certificats)
-//	POST /api/tls   → enregistre l'identifiant DNS dans le coffre
-func (s *Server) handleTLS(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		etat, err := s.etatTLS(r.Context())
-		if err != nil {
-			apiErr(w, 500, err.Error())
-			return
-		}
-		writeJSON(w, 200, etat)
-
-	case http.MethodPost:
-		var entree struct {
-			Provider string `json:"provider"`
-			Zone     string `json:"zone"`
-			// Les champs de l'identifiant, tels que l'hébergeur les nomme.
-			// On accepte un dictionnaire libre : refuser une clé inconnue
-			// obligerait à republier Ceffio pour un hébergeur de plus, ce que
-			// tout ce mécanisme existe pour éviter.
-			Identifiant map[string]string `json:"identifiant"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&entree); err != nil {
-			apiErr(w, 400, "unreadable JSON: "+err.Error())
-			return
-		}
-		if strings.TrimSpace(entree.Provider) == "" {
-			apiErr(w, 400, "provider is required: it is what tells the solver which API to call")
-			return
-		}
-		if len(entree.Identifiant) == 0 {
-			apiErr(w, 400, "no credential given: an empty credential would replace the stored one with nothing")
-			return
-		}
-
-		// LE PROVIDER EST ÉCRIT AVEC L'IDENTIFIANT, dans la MÊME entrée.
-		//
-		// WHY THEY TRAVEL TOGETHER: a token stored for Cloudflare must not be
-		// used against a Scaleway zone because the two settings drifted apart
-		// — that is the failure that produces an authorization error never
-		// mentioning the mismatch.
-		donnees := map[string]string{"provider": strings.ToLower(strings.TrimSpace(entree.Provider))}
-		for k, v := range entree.Identifiant {
-			// Un champ vide n'est PAS écrit : il écraserait une valeur
-			// existante par du vide, et le solver démarrerait sur une
-			// configuration incomplète.
-			if strings.TrimSpace(v) != "" {
-				donnees[k] = v
-			}
-		}
-
-		if err := secrets.EcrireDansCoffre(r.Context(), secrets.DepuisEnvironnement(),
-			cheminCoffreDNS[0], cheminCoffreDNS[1], donnees); err != nil {
-			apiErr(w, 500, "writing to the vault: "+err.Error())
-			return
-		}
-		writeJSON(w, 200, map[string]any{
-			"ok": true,
-			"message": "credential stored in the vault. The solver picks it up on its " +
-				"next restart; nothing has to be copied into the cluster by hand.",
-		})
-
-	default:
-		apiErr(w, 405, "method not allowed")
+//	GET  /api/certificates → the state (challenge, provider, certificates)
+//
+// THE POST IS GONE, and it had to be: it wrote the DNS credential to
+// kv/data/ceffio/tls/dns-provider, which is now the ingress module's settings. Two
+// writers for one entry is a source of drift — the module reads back what it last
+// wrote and would overwrite, with its own view, an identifier changed through this
+// route, or the reverse. The credential has exactly ONE path now: the module
+// declares it, the console draws it, the CLI applies it.
+//
+// REMOVED RATHER THAN RESTRICTED, because a read-only route that keeps its POST
+// has not fixed anything: it is the same defect with a comment saying it should
+// not be used. What remains is what the Certificates tab needs — observing.
+func (s *Server) handleCertificates(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		// 405, not 404: the path exists and the method does not. An operator
+		// who tries to write here must be told the route is read-only, not sent
+		// looking for a typo in the URL.
+		w.Header().Set("Allow", http.MethodGet)
+		apiErr(w, http.StatusMethodNotAllowed,
+			"this route is read-only: the DNS credential is written through the "+
+				"ingress module's settings (Settings → ingress → tls), which is the "+
+				"single path to the vault entry")
+		return
 	}
+	etat, err := s.etatTLS(r.Context())
+	if err != nil {
+		apiErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, etat)
 }
 
 // cheminCoffreDNS : le chemin OpenBao des identifiants DNS, en deux parties

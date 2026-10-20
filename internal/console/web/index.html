@@ -192,10 +192,6 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 4 6v6c0 5 3.4 9.2 8 10 4.6-.8 8-5 8-10V6l-8-4z"/><path d="M12 11v4M12 8.5v.5"/></svg>
       Administration
     </div>
-    <div class="nav-item" data-tab="smtp">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="m2 7 10 6 10-6"/></svg>
-      Mail
-    </div>
     <div class="nav-item" data-tab="users">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17.5" cy="8.5" r="2.5"/><path d="M21 20c0-2.5-1.5-4.5-3.5-5.5"/></svg>
       Users
@@ -352,47 +348,6 @@
         </div>
       </section>
 
-      <!-- MAIL -->
-      <section class="section" id="tab-smtp">
-        <h2 class="section-title">Platform mail</h2>
-        <p class="section-sub">Configuration of mail sending by Nextcloud itself:
-        share invitations, password reset, notifications.
-        This is not your Mail app account — that one reads your own mailboxes;
-        this one is the address the platform writes from.</p>
-
-        <div class="card">
-          <h3>Sending server</h3>
-          <div class="form-row">
-            <input id="s_hote" placeholder="Server (e.g. send.one.com)" style="flex:2">
-            <input id="s_port" placeholder="Port" style="flex:1">
-            <select id="s_securite" style="flex:1">
-              <option value="tls">TLS (STARTTLS)</option>
-              <option value="ssl">SSL</option>
-              <option value="aucune">No encryption</option>
-            </select>
-          </div>
-          <div class="form-row">
-            <input id="s_user" placeholder="User (sender address)" style="flex:2">
-            <input id="s_pass" type="password" placeholder="Password" style="flex:2"
-                   autocomplete="new-password">
-          </div>
-          <div class="form-row">
-            <input id="s_exped" placeholder="Sender (e.g. noreply@example.com)" style="flex:2">
-            <input id="s_domaine" placeholder="Domain" style="flex:2">
-          </div>
-          <div class="note" id="s_etat">—</div>
-          <div class="form-row" style="margin-top:12px">
-            <button class="btn-ghost" id="btnTestSmtp" onclick="testerSmtp()">Test sending</button>
-            <button class="btn" id="btnSaveSmtp" onclick="sauverSmtp()">Save</button>
-          </div>
-        </div>
-
-        <div class="card" id="smtpResultat" style="display:none">
-          <h3>Test result</h3>
-          <pre class="mono" id="smtpJournal" style="max-height:260px;overflow:auto;font-size:11.5px;background:var(--bg2);padding:12px;border-radius:8px;white-space:pre-wrap"></pre>
-        </div>
-      </section>
-
       <!-- CERTIFICATES -->
       <section class="section" id="tab-certs">
         <h2 class="section-title">TLS certificates</h2>
@@ -485,7 +440,6 @@
     dashboard: ["Overview", 'platform status'],
     services:  ['Applications', 'public exposures and roles'],
     apps:      ['Nextcloud apps', 'installation and uninstallation'],
-    smtp:      ['Mail', 'platform mail delivery'],
     users:     ['Users', 'single sign-on accounts'],
     certs:     ['TLS certificates', 'validity and expiry'],
     infra:     ['Infrastructure', 'internal layers and pods'],
@@ -1141,122 +1095,6 @@
     }
   }
 
-  // ── Mail (platform SMTP) ─────────────────────────────────
-  //
-  // THE TEST BEFORE SAVE is the important point: we test what is ENTERED, not
-  // what is saved. The user adjusts, tests, then saves only when the test
-  // passes — instead of discovering the error afterwards.
-  async function chargerSmtp() {
-    try {
-      const d = await api('/api/smtp');
-      $('s_hote').value = d.hote || '';
-      $('s_port').value = d.port || 587;
-      $('s_securite').value = d.securite || 'tls';
-      $('s_user').value = d.utilisateur || '';
-      $('s_exped').value = d.expediteur || '';
-      $('s_domaine').value = d.nom_expediteur || '';
-      // The password is NEVER sent back by the API: we only say whether it is
-      // already set, so the user knows they can test without retyping it.
-      $('s_etat').innerHTML = d.hote
-        ? (d.mot_de_passe_defini
-            ? 'Current configuration: <b>' + esc(d.hote) + ':' + d.port +
-              '</b> — password saved'
-            : 'Current configuration: <b>' + esc(d.hote) + ':' + d.port +
-              '</b> — no password saved')
-        : 'No sending server configured. The platform\'s mails are not being sent.';
-    } catch (e) {
-      $('s_etat').textContent = 'Error: ' + e.message;
-    }
-  }
-
-  function corpsSmtp() {
-    return {
-      hote: $('s_hote').value.trim(),
-      port: parseInt($('s_port').value || '587', 10),
-      securite: $('s_securite').value,
-      utilisateur: $('s_user').value.trim(),
-      mot_de_passe: $('s_pass').value,
-      expediteur: $('s_exped').value.trim(),
-      nom_expediteur: $('s_domaine').value.trim(),
-    };
-  }
-
-  // Any change to a field CANCELS the test: otherwise we would test a
-  // configuration, change one field, and save something other than what was
-  // verified — the lock would be pointless.
-  ['s_hote', 's_port', 's_securite', 's_user', 's_pass', 's_exped', 's_domaine']
-    .forEach(id => {
-      const el = $(id);
-      if (el) el.addEventListener('input', () => { smtpTeste = false; majBoutonSmtp(); });
-      if (el) el.addEventListener('change', () => { smtpTeste = false; majBoutonSmtp(); });
-    });
-
-  // The Save button stays LOCKED as long as the configuration has not been
-  // tested successfully. So an unverified configuration cannot be saved: this
-  // is exactly what avoids breaking mail sending for the whole instance with
-  // a typo.
-  let smtpTeste = false;   // has a test succeeded for what is ENTERED?
-
-  window.majBoutonSmtp = () => {
-    const b = $('btnSaveSmtp');
-    if (!b) return;
-    b.disabled = !smtpTeste;
-    b.title = smtpTeste ? '' : 'Test the configuration first';
-    b.style.opacity = smtpTeste ? '' : '.45';
-  };
-
-  window.testerSmtp = async () => {
-    const c = corpsSmtp();
-    if (!c.hote || !c.utilisateur) { toast('Server and user required', 'ko'); return; }
-    $('btnTestSmtp').disabled = true;
-    $('smtpResultat').style.display = '';
-    $('smtpJournal').textContent = 'Test in progress…';
-    try {
-      const d = await api('/api/smtp/tester', { method: 'POST', body: JSON.stringify(c) });
-      // We show EACH step: "it doesn't work" does not say what to fix,
-      // whereas "credentials refused" is directly actionable.
-      $('smtpJournal').textContent = (d.etapes || []).join('\n');
-      smtpTeste = !!d.ok;
-      majBoutonSmtp();
-      toast(d.ok ? 'Test passed — you can save' : 'Test failed: ' + (d.erreur || ''),
-            d.ok ? 'ok' : 'ko');
-    } catch (e) {
-      smtpTeste = false; majBoutonSmtp();
-      $('smtpJournal').textContent = 'Error: ' + e.message;
-      toast('Error: ' + e.message, 'ko');
-    } finally {
-      $('btnTestSmtp').disabled = false;
-    }
-  };
-
-  window.sauverSmtp = async () => {
-    const c = corpsSmtp();
-    if (!c.hote || !c.utilisateur) { toast('Server and user required', 'ko'); return; }
-    if (!smtpTeste) { toast('Test the configuration before saving', 'ko'); return; }
-    $('btnSaveSmtp').disabled = true;
-    try {
-      const d = await api('/api/smtp', { method: 'POST', body: JSON.stringify(c) });
-      // The server tests BEFORE saving: if it refuses, nothing was written
-      // and we show the detail so the user corrects.
-      if (d.ok === false) {
-        $('smtpResultat').style.display = '';
-        $('smtpJournal').textContent = (d.etapes || []).join('\n');
-        toast('NOT saved: ' + (d.erreur || 'test failed'), 'ko');
-        smtpTeste = false; majBoutonSmtp();
-        return;
-      }
-      toast(d.message || 'Configuration saved');
-      $('s_pass').value = '';
-      smtpTeste = false; majBoutonSmtp();   // a new entry will have to be tested
-      await chargerSmtp();
-    } catch (e) {
-      toast('Error: ' + e.message, 'ko');
-    } finally {
-      $('btnSaveSmtp').disabled = !smtpTeste;
-    }
-  };
-
-  majBoutonSmtp();
 
   // THE FUNCTIONS THE GENERATED CARDS CALL MUST BE ON `window`.
   //
@@ -1574,7 +1412,6 @@
       renderDashboard(st); renderInfra(st); renderCerts(st);
       await renderUsers();
       await renderAdmin();
-      await chargerSmtp();
       $('sideFoot').innerHTML = esc(st.domain || '') + ' · ' + esc(versionLibelle(st)) +
         '<br>UPD ' + new Date().toLocaleTimeString('en-GB');
     } catch (e) { if (e.message !== 'auth') toast('Error: ' + e.message, 'ko'); }
