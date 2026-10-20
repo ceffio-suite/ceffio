@@ -180,3 +180,24 @@ func LireLoginTheme(ctx context.Context, ns string) (theme, locale string, err e
 	}
 	return r.LoginTheme, r.DefaultLocale, nil
 }
+
+// AppliquerLoginPage is the entry point the settings system uses: change WHICH theme
+// the realm serves, and in which language.
+//
+// IT DOES NOT TOUCH THE FILES. The theme assets ship with the binary and are mounted
+// in the pod (lot T2); this function only tells the realm which one to use. That is
+// why changing it needs NO RESTART — Keycloak resolves the realm's loginTheme per
+// request — while shipping a NEW theme restarts the pod, because the files are
+// cached at startup.
+//
+// displayNameHtml IS LEFT ALONE. It belongs to the theme's identity, not to the
+// choice: switching to Keycloak's default page should not strip Ceffio's name from
+// the realm, and switching back must find it intact.
+func AppliquerLoginPage(ctx context.Context, ns, theme, locale string) error {
+	script := kcadmConnecte() +
+		`/opt/keycloak/bin/kcadm.sh update realms/` + realmCeffio +
+		` -s loginTheme=` + shellQuote(theme) + " " +
+		` -s internationalizationEnabled=true` +
+		` -s defaultLocale=` + shellQuote(locale)
+	return kcadmExec(ctx, ns, script, theme, locale)
+}
