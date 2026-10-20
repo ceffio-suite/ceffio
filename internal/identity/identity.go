@@ -14,6 +14,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"github.com/ceffio-suite/ceffio/internal/identity/theme"
 	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"github.com/ceffio-suite/ceffio/internal/vault"
@@ -182,7 +183,22 @@ func applyWorkload(ctx context.Context) error {
 			}},
 		}))
 
-	manifest := manifesteKeycloak(ns, annotations, keycloakImage, dbService, dbName)
+	// THE THEME ARRIVES BEFORE THE POD THAT MOUNTS IT. Creating the Deployment first
+	// would leave the volume unscheduled until the ConfigMap exists, and the pod's
+	// first start would fail on a missing volume it cannot fix by retrying.
+	cm, err := theme.ManifesteConfigMap(ns)
+	if err != nil {
+		return err
+	}
+	if err := apply(ctx, cm); err != nil {
+		return err
+	}
+	somme, err := theme.Checksum()
+	if err != nil {
+		return err
+	}
+
+	manifest := manifesteKeycloak(ns, annotations, keycloakImage, dbService, dbName, somme)
 	return apply(ctx, manifest)
 }
 
@@ -193,7 +209,7 @@ func applyWorkload(ctx context.Context) error {
 // difference between production and development mode, and the hostname the
 // issuer is built from. A test can read them here; it cannot read them from a
 // string built inside a function that calls apply.
-func manifesteKeycloak(ns, annotations, keycloakImage, dbService, dbName string) string {
+func manifesteKeycloak(ns, annotations, keycloakImage, dbService, dbName, sommeTheme string) string {
 	return fmt.Sprintf(`apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -214,6 +230,14 @@ spec:
       # SECRETS ARE LAID DOWN BY THE OPENBAO INJECTOR (vault.AnnotationsAgent).
       annotations:
 %s
+      # THE RESTART MECHANISM FOR THE THEME, not a label for humans.
+      #
+      # In production Keycloak CACHES themes: replacing the files in the mounted
+      # volume changes nothing until the process restarts. This annotation's value
+      # is the theme's checksum, so Kubernetes restarts the pod BY ITSELF when the
+      # theme changes — and, just as importantly, does not restart it when nothing
+      # did.
+        ceffio.io/theme-checksum: "%s"
     spec:
       # THIS ServiceAccount IS THE ONE THE VAULT ROLE DESIGNATES.
       serviceAccountName: keycloak
@@ -318,12 +342,32 @@ spec:
             initialDelaySeconds: 120
             periodSeconds: 15
             failureThreshold: 6
+          # THE LOGIN THEME, MOUNTED READ-ONLY.
+          #
+          # Keycloak reads /opt/keycloak/themes/<name> AT STARTUP, and a directory
+          # dropped there needs no "kc.sh build". Read-only because Keycloak only ever
+          # reads it: a writable mount would let a compromised process rewrite the
+          # page every user signs in through.
+          volumeMounts:
+            - name: keycloak-theme
+              mountPath: /opt/keycloak/themes/ceffio
+              readOnly: true
           resources:
             requests:
               memory: 1536Mi
               cpu: 250m
             limits:
               memory: 3Gi
+      # THE CONFIGMAP IS FLAT; THE THEME IS A TREE. items[].path rebuilds it, and
+      # without that Keycloak would find every file at the theme root, look for
+      # login/theme.properties, miss it, and render the DEFAULT page with no error
+      # anywhere.
+      volumes:
+        - name: keycloak-theme
+          configMap:
+            name: %s
+            items:
+%s
 ---
 apiVersion: v1
 kind: Service
@@ -337,7 +381,7 @@ spec:
     - name: http
       port: 8080
       targetPort: 8080
-`, ns, annotations, keycloakImage, dbService, dbName, ns)
+`, ns, annotations, sommeTheme, keycloakImage, dbService, dbName, theme.NomConfigMap, theme.ItemsYAML(), ns)
 }
 
 func waitKeycloakReady(ctx context.Context) error {

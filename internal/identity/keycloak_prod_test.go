@@ -21,7 +21,7 @@ func deploye(t *testing.T) map[string]any {
 	// fixture was wrong before it was right.
 	brut := manifesteKeycloak("ceffio-identity", vault.AnnotationsAgent(8, "keycloak",
 		"kv/data/ceffio/keycloak/db", vault.GabaritSecret("kv/data/ceffio/keycloak/db", []string{"username", "password"})),
-		"quay.io/keycloak/keycloak:26.7.3", "keycloak-db", "keycloak")
+		"quay.io/keycloak/keycloak:26.7.3", "keycloak-db", "keycloak", "deadbeef")
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(brut), &doc); err != nil {
 		t.Fatalf("the manifest is not valid YAML: %v", err)
