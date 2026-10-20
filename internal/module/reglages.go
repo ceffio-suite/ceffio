@@ -247,7 +247,13 @@ func Validate(g Group, v Values) error {
 
 		// A hidden field is not validated: its value is not meant to be read.
 		// Refusing it would break a form that submits every field it drew.
-		if f.ShowWhen != nil && v[f.ShowWhen.Key] != f.ShowWhen.Equals {
+		//
+		// THE TEST IS module.Visible, not a comparison of one condition: a field
+		// gated by a chain is visible only when EVERY link holds, so checking
+		// `v[key] == expected` here would validate a credential belonging to a
+		// provider that is not the chosen one — the case the chained contract
+		// exists to express.
+		if !Visible(g, v, f.Key) {
 			continue
 		}
 
@@ -421,24 +427,81 @@ func verifierGroupes(id string, groupes []Group) error {
 				return fmt.Errorf("module %q group %q field %q: ShowWhen points at %q, "+
 					"which is not a field of this group", id, g.ID, f.Key, f.ShowWhen.Key)
 			}
-			// The condition must be reachable: a ShowWhen on a field that is
-			// itself hidden can never be satisfied.
-			for _, cible := range g.Fields {
-				if cible.Key != f.ShowWhen.Key {
-					continue
-				}
-				if cible.ShowWhen != nil {
-					return fmt.Errorf("module %q group %q field %q: ShowWhen depends on %q, "+
-						"which is itself conditional — the field could never appear",
-						id, g.ID, f.Key, cible.Key)
-				}
-				if cible.Type != Choice && cible.Type != Bool {
-					return fmt.Errorf("module %q group %q field %q: ShowWhen depends on %q, "+
-						"a %s — only a Choice or a Bool has a value one can compare",
-						id, g.ID, f.Key, cible.Key, cible.Type)
-				}
+			cible, _ := champDe(g, f.ShowWhen.Key)
+
+			// A CHAIN IS ALLOWED, A CYCLE IS NOT.
+			//
+			// A ShowWhen may point at a field that is itself conditional: that is
+			// what lets a form show a credential once a provider is chosen, when
+			// the provider itself only appears once a challenge is chosen. The
+			// rule is the one in visibilite.go — a field is visible when its
+			// condition holds AND the field it points at is visible.
+			//
+			// WHAT IS STILL REFUSED is a cycle: A depends on B which depends on
+			// A. Neither can ever be visible, so both would stay hidden forever
+			// with no error anywhere — the failure this check exists to catch.
+			// The cycle is detected HERE rather than left to Visible, which
+			// guards itself against looping but would answer "invisible" without
+			// saying why.
+			if cycle(g, f.Key) {
+				return fmt.Errorf("module %q group %q field %q: ShowWhen forms a cycle — "+
+					"%s. A field waiting on a field that waits on it can never appear, and "+
+					"nothing would report it: the form would simply show neither.",
+					id, g.ID, f.Key, cheminCycle(g, f.Key))
+			}
+			if cible.Type != Choice && cible.Type != Bool {
+				return fmt.Errorf("module %q group %q field %q: ShowWhen depends on %q, "+
+					"a %s — only a Choice or a Bool has a value one can compare",
+					id, g.ID, f.Key, cible.Key, cible.Type)
 			}
 		}
 	}
 	return nil
+}
+
+// cycle reports whether the condition chain starting at key comes back to it.
+//
+// The walk follows ShowWhen links; a key already seen on the path means the chain
+// loops. The visited set is per-call, so two independent chains sharing a target
+// (a diamond) are not mistaken for a cycle.
+func cycle(g Group, depart string) bool {
+	vus := map[string]bool{}
+	courant := depart
+	for {
+		f, ok := champDe(g, courant)
+		if !ok || f.ShowWhen == nil {
+			return false
+		}
+		suivant := f.ShowWhen.Key
+		if suivant == depart || vus[suivant] {
+			return true
+		}
+		vus[suivant] = true
+		courant = suivant
+	}
+}
+
+// cheminCycle renders the chain for the error message, so the reader sees which
+// fields form the loop rather than only that one exists.
+func cheminCycle(g Group, depart string) string {
+	var chemin []string
+	vus := map[string]bool{}
+	courant := depart
+	for len(chemin) < len(g.Fields)+1 {
+		chemin = append(chemin, courant)
+		f, ok := champDe(g, courant)
+		if !ok || f.ShowWhen == nil {
+			break
+		}
+		courant = f.ShowWhen.Key
+		if courant == depart {
+			chemin = append(chemin, depart)
+			break
+		}
+		if vus[courant] {
+			break
+		}
+		vus[courant] = true
+	}
+	return strings.Join(chemin, " → ")
 }
