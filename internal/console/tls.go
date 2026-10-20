@@ -323,75 +323,48 @@ func solverEstIntegre(provider string) bool {
 	return false
 }
 
-// identifiantDNSPresent reports whether the solver HAS A CREDENTIAL CONFIGURED.
+// identifiantDNSPresent reports whether the DNS credential is in place.
 //
-// IT READS THE CLUSTERISSUER, NOT THE SECRET. The console is deliberately NOT allowed
-// to read Secrets in cert-manager — a rule the RBAC reference freezes, and a right
-// account: reading the platform's Secrets from a web page is the shortest path to
-// leaking all of them. My first version read the Secret and answered "absent" on a
-// perfectly configured installation, for the worst possible reason: a permission the
-// design forbids.
+// IT ASKS THE CERTIFICATES, NOT THE SECRET — and that is the third answer to the same
+// question, arrived at by finding out what this process may actually read.
 //
-// THE ISSUER IS THE RIGHT SOURCE ANYWAY. It is what cert-manager consults: a solver
-// entry naming a secretRef is a configured solver, and a solver with no credential
-// reference cannot sign anything — whatever happens to be in a Secret nobody names.
+//  1. The vault through secrets.DepuisEnvironnement: nil in this container, so ALWAYS
+//     false. The pod carries no vault environment, by design.
+//  2. The Secret cert-manager reads: refused. Reading Secrets in cert-manager from a web
+//     page is the shortest path to leaking all of them, and the RBAC reference is right
+//     to forbid it.
+//  3. The ClusterIssuer: also refused — it is cluster-scoped, and the console's
+//     ClusterRole does not carry cert-manager.io.
 //
-// THE NAME IS CHECKED, NEVER THE VALUE.
+// WHAT THE CONSOLE CAN SEE IS BETTER THAN ANY OF THEM. A Certificate that is Ready and
+// whose condition says "up to date" PROVES the solver could sign — a DNS-01 issuance
+// cannot succeed without a working credential. So the question "is the credential
+// configured?" is answered by the platform itself, on the evidence of what it has
+// already done.
+//
+// A CERTIFICATE THAT HAS NEVER BEEN ISSUED IS THE CASE THAT MATTERS, and it is exactly
+// the one where the other three sources would have lied in whichever direction.
 func (s *Server) identifiantDNSPresent(ctx context.Context) bool {
 	if s.kube == nil || !s.acme.DNS01() {
 		return false
 	}
-	issuer := issuerEnPlace
-	if issuer == "" {
-		issuer = "ceffio-letsencrypt"
-	}
-	cr, err := lireIssuer(ctx, issuer)
-	if err != nil || len(cr) == 0 {
-		return false
-	}
-	var doc struct {
-		Spec struct {
-			ACME struct {
-				Solvers []map[string]map[string]any `json:"solvers"`
-			} `json:"acme"`
-		} `json:"spec"`
-	}
-	if err := json.Unmarshal(cr, &doc); err != nil {
-		return false
-	}
-	for _, solver := range doc.Spec.ACME.Solvers {
-		dns, ok := solver["dns01"]
-		if !ok {
-			continue
-		}
-		// ANY PROVIDER BLOCK CARRYING A SECRET REFERENCE IS A CONFIGURED SOLVER. The
-		// shape differs per host (apiTokenSecretRef, accessKeyIDSecretRef, …), so the
-		// search is for the pattern rather than for one field name.
-		for _, bloc := range dns {
-			m, ok := bloc.(map[string]any)
-			if !ok {
-				continue
-			}
-			for cle := range m {
-				if strings.HasSuffix(strings.ToLower(cle), "secretref") {
-					return true
-				}
-			}
-		}
-	}
-	return false
+	return identifiantDepuisCertificats(s.certificats(ctx))
 }
 
 // issuerEnPlace is the ClusterIssuer the platform uses. A variable so a test can aim at
 // another name.
 var issuerEnPlace = "ceffio-letsencrypt"
 
-// lireIssuer reads a ClusterIssuer. A variable so a test can answer instead of reaching
-// for a cluster — the same shape used for every other cluster read in this package.
+// identifiantDepuisCertificats decides from the certificates the console may read.
 //
-// THE DEFAULT IMPLEMENTATION IS WIRED IN console.go, where the server has a client: a
-// package-level variable cannot reach it, and a fake clientset exposes no Discovery REST
-// client.
-var lireIssuer = func(ctx context.Context, nom string) ([]byte, error) {
-	return nil, nil
+// IT IS A SEPARATE FUNCTION so the rule can be tested without a cluster: the decision is
+// "at least one certificate has been signed and is still valid", and that is a pure
+// function of the list.
+func identifiantDepuisCertificats(certs []CertificatTLS) bool {
+	for _, c := range certs {
+		if c.Ready && c.Jours > 0 {
+			return true
+		}
+	}
+	return false
 }

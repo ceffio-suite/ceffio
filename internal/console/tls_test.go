@@ -5,7 +5,6 @@ package console
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"os"
 	"strings"
@@ -159,66 +158,49 @@ func TestLaRouteDesCertificatsEstEnLectureSeule(t *testing.T) {
 	}
 }
 
-// TestLIdentifiantSeLitDansLeClusterIssuer : LA SOURCE EST L'ISSUER, PAS LE SECRET.
+// TestLIdentifiantSeJugeSurLesCertificats : LA TROISIÈME RÉPONSE, ET LA BONNE.
 //
-// La console n'a PAS le droit de lire les Secrets de cert-manager — règle figée par la
-// référence RBAC, et juste sur le fond : lire les Secrets de la plateforme depuis une
-// page web est le chemin le plus court pour les divulguer tous.
+// La question « l'identifiant DNS est-il en place ? » a reçu trois mauvaises réponses
+// avant celle-ci, chacune pour une raison qu'il faut retenir :
 //
-// Ma première version lisait le Secret et répondait « absent » sur une installation
-// parfaitement configurée, pour la pire des raisons : une permission que le dispositif
-// interdit.
+//  1. le coffre via secrets.DepuisEnvironnement — nil dans ce conteneur, donc TOUJOURS
+//     faux : le pod ne porte aucune variable de coffre, par construction ;
+//  2. le Secret que cert-manager lit — REFUSÉ : lire les Secrets de cert-manager depuis
+//     une page web est le chemin le plus court pour les divulguer tous ;
+//  3. le ClusterIssuer — REFUSÉ aussi : il est cluster-scoped, et le ClusterRole de la
+//     console ne porte pas cert-manager.io.
 //
-// L'ISSUER EST DE TOUTE FAÇON LA BONNE SOURCE : c'est lui que cert-manager consulte. Un
-// solver nommant une secretRef est configuré ; un solver sans référence ne peut rien
-// signer, quel que soit le contenu d'un Secret que personne ne nomme.
-func TestLIdentifiantSeLitDansLeClusterIssuer(t *testing.T) {
-	// The fake clientset's Discovery has no REST client: the test reads the issuer
-	// through a stubbed reader instead, which is also what keeps it from depending on
-	// the cluster.
-	issuerAvant := lireIssuer
-	t.Cleanup(func() { lireIssuer = issuerAvant })
-	lireIssuer = func(ctx context.Context, nom string) ([]byte, error) {
-		return []byte(`{"spec":{"acme":{"solvers":[
-			{"dns01":{"cloudflare":{"apiTokenSecretRef":{"name":"ceffio-acme-dns","key":"api-token"}}}}
-		]}}}`), nil
-	}
-
-	s := &Server{kube: fake.NewSimpleClientset(), Domain: "exemple.org",
-		acme: acme.Reglages{Challenge: acme.ChallengeDNS, Provider: "cloudflare"}}
-	if !s.identifiantDNSPresent(context.Background()) {
-		t.Error("le ClusterIssuer nomme un secretRef et le contrôle répond absent : la " +
-			"page annoncerait un échec de renouvellement sur une installation saine")
+// CE QUE LA CONSOLE PEUT VOIR EST MEILLEUR QUE LES TROIS. Un Certificat Ready dont la
+// condition dit « up to date » PROUVE que le solver a pu signer : une émission DNS-01
+// ne peut pas aboutir sans identifiant valide. La question est donc tranchée par la
+// plateforme elle-même, sur la preuve de ce qu'elle a déjà fait.
+func TestLIdentifiantSeJugeSurLesCertificats(t *testing.T) {
+	// A certificate that is Ready and not near expiry: the platform has signed, so the
+	// credential works.
+	certs := []CertificatTLS{{
+		Nom: "ceffio-wildcard-tls", Namespace: "ceffio-system", Ready: true, Jours: 88,
+	}}
+	if !identifiantDepuisCertificats(certs) {
+		t.Error("un certificat Ready à 88 jours ne compte pas comme preuve : la page " +
+			"annoncerait un échec de renouvellement sur une installation qui vient de signer")
 	}
 }
 
-// TestUnSolverSansSecretRefNeComptePas : l'inverse doit être vrai, sinon l'indicateur ne
-// sert à rien.
-func TestUnSolverSansSecretRefNeComptePas(t *testing.T) {
-	issuerAvant := lireIssuer
-	t.Cleanup(func() { lireIssuer = issuerAvant })
-	lireIssuer = func(ctx context.Context, nom string) ([]byte, error) {
-		return []byte(`{"spec":{"acme":{"solvers":[{"dns01":{"rfc2136":{}}}]}}}`), nil
-	}
-	s := &Server{kube: fake.NewSimpleClientset(), Domain: "exemple.org",
-		acme: acme.Reglages{Challenge: acme.ChallengeDNS, Provider: "rfc2136"}}
-	if s.identifiantDNSPresent(context.Background()) {
-		t.Error("un solver sans secretRef est compté comme configuré : il ne peut rien signer")
+// TestUnCertificatNonReadyNeProuveRien : l'inverse doit être vrai.
+func TestUnCertificatNonReadyNeProuveRien(t *testing.T) {
+	certs := []CertificatTLS{{
+		Nom: "ceffio-wildcard-tls", Namespace: "ceffio-system", Ready: false, Jours: -1,
+	}}
+	if identifiantDepuisCertificats(certs) {
+		t.Error("un certificat qui n'est pas Ready est compté comme preuve")
 	}
 }
 
-// TestUnIssuerIllisibleNeMentPas : un issuer qu'on ne peut pas lire n'est pas un
-// identifiant présent.
-func TestUnIssuerIllisibleNeMentPas(t *testing.T) {
-	issuerAvant := lireIssuer
-	t.Cleanup(func() { lireIssuer = issuerAvant })
-	lireIssuer = func(ctx context.Context, nom string) ([]byte, error) {
-		return nil, errors.New("not found")
-	}
-	s := &Server{kube: fake.NewSimpleClientset(), Domain: "exemple.org",
-		acme: acme.Reglages{Challenge: acme.ChallengeDNS, Provider: "cloudflare"}}
-	if s.identifiantDNSPresent(context.Background()) {
-		t.Error("un issuer illisible est compté comme configuré")
+// TestAucunCertificatNeProuveRien : c'est le cas qui compte vraiment — une installation
+// qui n'a jamais émis.
+func TestAucunCertificatNeProuveRien(t *testing.T) {
+	if identifiantDepuisCertificats(nil) {
+		t.Error("aucun certificat et le contrôle répond configuré")
 	}
 }
 

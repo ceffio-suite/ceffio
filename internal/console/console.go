@@ -105,13 +105,6 @@ func New(domain, apiKey string) (*Server, error) {
 		cs, err := kubernetes.NewForConfig(cfg)
 		if err == nil {
 			s.kube = cs
-			// THE ISSUER READER, wired here because this is where the client exists: a
-			// package-level variable cannot reach it, and the fake clientset used in tests
-			// exposes no Discovery REST client.
-			lireIssuer = func(ctx context.Context, nom string) ([]byte, error) {
-				return cs.Discovery().RESTClient().Get().
-					AbsPath("/apis/cert-manager.io/v1/clusterissuers", nom).DoRaw(ctx)
-			}
 		}
 	}
 	if s.kube == nil {
@@ -119,13 +112,6 @@ func New(domain, apiKey string) (*Server, error) {
 		if cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{}).ClientConfig(); err == nil {
 			if cs, err := kubernetes.NewForConfig(cfg); err == nil {
 				s.kube = cs
-				// THE ISSUER READER, wired here because this is where the client exists: a
-				// package-level variable cannot reach it, and the fake clientset used in tests
-				// exposes no Discovery REST client.
-				lireIssuer = func(ctx context.Context, nom string) ([]byte, error) {
-					return cs.Discovery().RESTClient().Get().
-						AbsPath("/apis/cert-manager.io/v1/clusterissuers", nom).DoRaw(ctx)
-				}
 			}
 		}
 	}
