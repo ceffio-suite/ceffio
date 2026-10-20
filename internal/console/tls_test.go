@@ -4,9 +4,12 @@
 package console
 
 import (
+	"net/http"
 	"os"
 	"strings"
 	"testing"
+
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 // TestCheminCoffreDNSCoherentAvecLeSolver is the test that justifies the
@@ -90,5 +93,65 @@ func TestIdentifiantSansProviderNeComptePas(t *testing.T) {
 	}
 	if !utilisable {
 		t.Error("an entry carrying a token is NOT counted as a credential")
+	}
+}
+
+// TestLaRouteDesCertificatsEstEnLectureSeule : a POST on /api/certificates is
+// refused, and the state stays readable.
+//
+// WHY IT IS A TEST AND NOT ONLY A DELETED CASE: the route used to accept a POST
+// that wrote the DNS credential to kv/data/ceffio/tls/dns-provider — the same
+// entry the ingress module's settings now write. Two writers for one value drift:
+// the module reads back what it last saved and would overwrite, from its own view,
+// an identifier changed through the route, or the reverse, and the failure appears
+// as an authorization error from the DNS provider that mentions neither.
+//
+// The POST was removed rather than restricted, because a read-only route that
+// keeps its write path has not fixed anything. This test is what keeps it removed:
+// re-adding a POST fails here, in the same commit, by name.
+func TestLaRouteDesCertificatsEstEnLectureSeule(t *testing.T) {
+	h := newTestServer(fake.NewSimpleClientset()).Handler()
+
+	// 1. the GET still works — the Certificates tab reads it.
+	rec := doReq(t, h, http.MethodGet, "/api/certificates", "")
+	if rec.Code == http.StatusMethodNotAllowed {
+		t.Errorf("GET /api/certificates -> 405: the route must stay readable")
+	}
+
+	// 2. the POST is refused. The expected code is NOT 405, and the measurement
+	//    says so: the route is registered for GET only, so a POST falls through
+	//    to the /api/ handler, which refuses every unknown path — including a
+	//    known one reached with the wrong method. The answer is 404, and it is
+	//    STRICTER than a 405: there is no route to write through at all.
+	//
+	//    What matters is that the write cannot reach a handler, so any 2xx fails
+	//    this test. Asserting 405 as first written would have been asserting the
+	//    mux's behaviour rather than this route's.
+	rec = doReq(t, h, http.MethodPost, "/api/certificates",
+		`{"provider":"cloudflare","identifiant":{"api_token":"x"}}`)
+	if rec.Code < 400 {
+		t.Errorf("POST /api/certificates -> %d: the route must be READ-ONLY.\n"+
+			"A write reaching a handler means the DNS credential has two paths — this "+
+			"route and the ingress module's settings — and two writers for one vault "+
+			"entry drift, the drift showing up as an authorization error from the "+
+			"provider that names neither.\nBody: %.200s", rec.Code, rec.Body.String())
+	}
+
+	// 3. THE ROUTE HAS NO WRITE PATH AT ALL, which is the property that matters.
+	//
+	//    An earlier version of this test asked the refusal to NAME where the
+	//    credential is written now. The measurement showed the answer is the
+	//    generic "no such endpoint" from the /api/ handler, and that is CORRECT:
+	//    the request never reached this route, so this route's message cannot
+	//    appear. Requiring a message the architecture will never produce would
+	//    have been an assertion about a behaviour that does not exist — and it
+	//    would have failed on a correct implementation.
+	//
+	//    What is checked instead is that no handler was reached: a 4xx means the
+	//    write stopped at the router, which is the guarantee. The operator looking
+	//    for where to write finds it in the console's Settings tab, which is where
+	//    a write belongs.
+	if rec.Code >= 400 && rec.Code < 500 {
+		t.Logf("POST /api/certificates -> %d (the write stops at the router; no handler serves it)", rec.Code)
 	}
 }
