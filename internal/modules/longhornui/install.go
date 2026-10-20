@@ -92,7 +92,17 @@ func installer(ctx context.Context, env module.Env) error {
 		return err
 	}
 
-	// 4. THE LIST OF ALLOWED ADDRESSES, written as a ConfigMap.
+	// 4. THE SERVICE ACCOUNT, WHICH MUST EXIST BEFORE THE POD.
+	//
+	// The Deployment names it, and a pod whose ServiceAccount does not exist is never
+	// created at all: the ReplicaSet reports FailedCreate, the Deployment stays at 0/1,
+	// and Kubernetes' message names the account but not who was supposed to create it.
+	// Found by deploying -- the Deployment applied cleanly and produced no pod.
+	if err := appliquer(ctx, manifesteServiceAccount()); err != nil {
+		return err
+	}
+
+	// 5. THE LIST OF ALLOWED ADDRESSES, written as a ConfigMap.
 	//
 	// THE SETTING WINS OVER THE DEFAULT, and an absent setting is the normal first
 	// installation: the default is the administrator's own address, so the module is
@@ -107,7 +117,7 @@ func installer(ctx context.Context, env module.Env) error {
 		return err
 	}
 
-	// 5. THE WORKLOAD, THE SERVICE AND THE ROUTE.
+	// 6. THE WORKLOAD, THE SERVICE AND THE ROUTE.
 	somme := sommeAdresses(adresses)
 	if err := appliquer(ctx, manifesteProxy(domaine, somme)); err != nil {
 		return err

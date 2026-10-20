@@ -228,3 +228,20 @@ func annotationsVault() string {
 		`  {{- end }}`,
 	}, "\n        ")
 }
+
+// manifesteServiceAccount renders the ServiceAccount the Deployment runs as.
+//
+// IT CARRIES NOTHING: no role binding inside the cluster, no token mount needed by the
+// proxy. Its purpose is to be a named identity — the name the vault role and the pod
+// refer to — so that a future grant can be attached to it without rewriting the pod.
+func manifesteServiceAccount() string {
+	return fmt.Sprintf(`apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: %[1]s
+  namespace: %[2]s
+  labels:
+    app: %[1]s
+    app.kubernetes.io/part-of: ceffio
+`, nomServiceAccount, nsSysteme)
+}

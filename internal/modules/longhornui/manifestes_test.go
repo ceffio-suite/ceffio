@@ -282,3 +282,31 @@ func TestAucunDroitSurLonghornSystem(t *testing.T) {
 		}
 	}
 }
+
+// TestLeServiceAccountDoitExister : le Deployment le nomme, et un pod dont le
+// ServiceAccount n'existe pas n'est JAMAIS créé.
+//
+// TROUVÉ EN DÉPLOYANT : le Deployment s'appliquait proprement, restait à 0/1, et le
+// ReplicaSet répondait FailedCreate en nommant le compte sans dire qui devait le créer.
+func TestLeServiceAccountDoitExister(t *testing.T) {
+	brut := manifesteServiceAccount()
+	var o map[string]any
+	if err := yaml.Unmarshal([]byte(brut), &o); err != nil {
+		t.Fatalf("YAML invalide : %v", err)
+	}
+	if o["kind"] != "ServiceAccount" {
+		t.Errorf("kind = %v", o["kind"])
+	}
+	md := o["metadata"].(map[string]any)
+	if md["name"] != nomServiceAccount {
+		t.Errorf("nom = %v, attendu %v", md["name"], nomServiceAccount)
+	}
+
+	// ET LE POD LE NOMME BIEN : un compte créé sous un autre nom ne servirait à rien.
+	doc := proxyDe(t)
+	spec := doc["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	if spec["serviceAccountName"] != md["name"] {
+		t.Errorf("le pod tourne comme %v alors que le compte créé est %v : le pod ne "+
+			"serait jamais créé", spec["serviceAccountName"], md["name"])
+	}
+}

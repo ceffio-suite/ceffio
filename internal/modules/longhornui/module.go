@@ -118,3 +118,8 @@ func erreurDomaine() error {
 // nomConfigReglages is the ConfigMap the SETTINGS store writes to (not the one holding
 // the rendered file of addresses: one is the source, the other is what the proxy reads).
 const nomConfigReglages = "ceffio-settings-longhorn-ui"
+
+// ManifestePourTest exposes the Service and Ingress documents for the plan's proof.
+func ManifestePourTest(domaine string) string {
+	return manifesteServiceEtRoute(domaine)
+}
