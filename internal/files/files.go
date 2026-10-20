@@ -412,8 +412,9 @@ func ConfigureOIDC(ctx context.Context, domain string) error {
 	// redirected the browser to an address unreachable from outside
 	// (observed: "keycloak...:8080" in the authorization URL).
 	//
-	// Keycloak carries KC_HOSTNAME_URL: queried by its public name, it announces
-	// public endpoints — the ones the browser can actually reach.
+	// Keycloak carries a public hostname (KC_HOSTNAME, as a full URL): queried by
+	// its public name, it announces public endpoints — the ones the browser can
+	// actually reach.
 	// The domain is therefore no longer hardcoded here: it comes from the deployment.
 	if domain == "" {
 		return fmt.Errorf("domain required to build the OIDC discovery endpoint")

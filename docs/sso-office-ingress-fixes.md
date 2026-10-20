@@ -27,8 +27,7 @@ not threaded through to it). Its redirections pointed to the old host →
 `http://auth.ceffio.local/admin/` → 404.
 Fixes (`kubectl set env deploy/keycloak -n ceffio-identity`):
 ```
-KC_HOSTNAME=keycloak.<domain>
-KC_HOSTNAME_URL=https://keycloak.<domain>
+KC_HOSTNAME=https://keycloak.<domain>
 KC_HOSTNAME_STRICT=false
 KC_PROXY_HEADERS=xforwarded
 ```
