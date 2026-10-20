@@ -86,6 +86,21 @@ type CertificatTLS struct {
 	// expire is an announced outage — that is why the console shows it BEFORE
 	// it happens rather than after.
 	Jours int `json:"jours"`
+
+	// Renews is WHEN cert-manager plans to renew, which is not "when it expires".
+	//
+	// THE TWO ANSWERS SERVE DIFFERENT QUESTIONS: "expires in 88 days" is reassuring,
+	// "renews in 59 days" is the one that tells an operator whether the automation is
+	// still doing its job. A certificate that will expire and never renew looks
+	// identical to a healthy one until the day it stops.
+	Renews string `json:"renews,omitempty"`
+	// JoursAvantRenouvellement is the same value, in days, so the page can colour it.
+	JoursAvantRenouvellement int `json:"jours_avant_renouvellement"`
+
+	// Issuer is the authority that signed the certificate — the ClusterIssuer's name.
+	// It is what distinguishes the platform's own CA from Let's Encrypt, which matters
+	// when a browser trusts one and not the other.
+	Issuer string `json:"issuer,omitempty"`
 }
 
 // handleTLS lit ou écrit la configuration TLS.
@@ -218,11 +233,15 @@ func (s *Server) certificats(ctx context.Context) []CertificatTLS {
 				Namespace string `json:"namespace"`
 			} `json:"metadata"`
 			Spec struct {
-				DNSNames []string `json:"dnsNames"`
+				DNSNames  []string `json:"dnsNames"`
+				IssuerRef struct {
+					Name string `json:"name"`
+				} `json:"issuerRef"`
 			} `json:"spec"`
 			Status struct {
-				NotAfter   string `json:"notAfter"`
-				Conditions []struct {
+				NotAfter    string `json:"notAfter"`
+				RenewalTime string `json:"renewalTime"`
+				Conditions  []struct {
 					Type    string `json:"type"`
 					Status  string `json:"status"`
 					Reason  string `json:"reason"`
@@ -236,10 +255,12 @@ func (s *Server) certificats(ctx context.Context) []CertificatTLS {
 	}
 	for _, it := range doc.Items {
 		c := CertificatTLS{
-			Nom:       it.Metadata.Name,
-			Namespace: it.Metadata.Namespace,
-			Noms:      it.Spec.DNSNames,
-			Jours:     -1,
+			Nom:                      it.Metadata.Name,
+			Namespace:                it.Metadata.Namespace,
+			Noms:                     it.Spec.DNSNames,
+			Jours:                    -1,
+			JoursAvantRenouvellement: -1,
+			Issuer:                   it.Spec.IssuerRef.Name,
 		}
 		for _, cond := range it.Status.Conditions {
 			if cond.Type != "Ready" {
@@ -264,6 +285,14 @@ func (s *Server) certificats(ctx context.Context) []CertificatTLS {
 			c.Expire = it.Status.NotAfter
 			if t, err := time.Parse(time.RFC3339, it.Status.NotAfter); err == nil {
 				c.Jours = int(time.Until(t).Hours() / 24)
+			}
+		}
+		// THE RENEWAL IS READ SEPARATELY, and its absence is meaningful: a certificate
+		// cert-manager does not plan to renew is one nobody is watching.
+		if it.Status.RenewalTime != "" {
+			c.Renews = it.Status.RenewalTime
+			if t, err := time.Parse(time.RFC3339, it.Status.RenewalTime); err == nil {
+				c.JoursAvantRenouvellement = int(time.Until(t).Hours() / 24)
 			}
 		}
 		out = append(out, c)
