@@ -165,3 +165,15 @@ func TestChaqueNomEstAffiche(t *testing.T) {
 		t.Error("la page ne lit pas la liste complète des noms couverts")
 	}
 }
+
+// TestLaPageLitLaBonneCle : le statut expose « ingress », pas « ingresses ».
+//
+// UNE CLÉ MAL NOMMÉE DONNE UNE LISTE VIDE, donc une section qui ne s'affiche jamais —
+// et un test qui vérifie la présence du code ne le voit pas. Celle-ci vérifie la clé.
+func TestLaPageLitLaBonneCle(t *testing.T) {
+	p := page(t)
+	if !strings.Contains(p, "st.ingress ||") {
+		t.Error("la page ne lit pas la clé « ingress » du statut : la section des hôtes " +
+			"servis resterait vide sans rien signaler")
+	}
+}

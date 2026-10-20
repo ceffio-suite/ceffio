@@ -600,7 +600,7 @@
   function renderTLSHosts(st) {
     const els = $('tlsHosts');
     if (!els) return;
-    const ing = (st.ingresses || []).filter(i => i.host);
+    const ing = (st.ingress || []).filter(i => i.host);
     if (!ing.length) { els.innerHTML = ''; return; }
     const certs = st.certs || [];
     // Le certificat qui couvre cet hôte : correspondance exacte d'abord, puis wildcard.
