@@ -4,11 +4,13 @@
 package console
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/ceffio-suite/ceffio/internal/acme"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -153,5 +155,76 @@ func TestLaRouteDesCertificatsEstEnLectureSeule(t *testing.T) {
 	//    a write belongs.
 	if rec.Code >= 400 && rec.Code < 500 {
 		t.Logf("POST /api/certificates -> %d (the write stops at the router; no handler serves it)", rec.Code)
+	}
+}
+
+// TestLIdentifiantSeJugeSurLesCertificats : LA TROISIÈME RÉPONSE, ET LA BONNE.
+//
+// La question « l'identifiant DNS est-il en place ? » a reçu trois mauvaises réponses
+// avant celle-ci, chacune pour une raison qu'il faut retenir :
+//
+//  1. le coffre via secrets.DepuisEnvironnement — nil dans ce conteneur, donc TOUJOURS
+//     faux : le pod ne porte aucune variable de coffre, par construction ;
+//  2. le Secret que cert-manager lit — REFUSÉ : lire les Secrets de cert-manager depuis
+//     une page web est le chemin le plus court pour les divulguer tous ;
+//  3. le ClusterIssuer — REFUSÉ aussi : il est cluster-scoped, et le ClusterRole de la
+//     console ne porte pas cert-manager.io.
+//
+// CE QUE LA CONSOLE PEUT VOIR EST MEILLEUR QUE LES TROIS. Un Certificat Ready dont la
+// condition dit « up to date » PROUVE que le solver a pu signer : une émission DNS-01
+// ne peut pas aboutir sans identifiant valide. La question est donc tranchée par la
+// plateforme elle-même, sur la preuve de ce qu'elle a déjà fait.
+func TestLIdentifiantSeJugeSurLesCertificats(t *testing.T) {
+	// A certificate that is Ready and not near expiry: the platform has signed, so the
+	// credential works.
+	certs := []CertificatTLS{{
+		Nom: "ceffio-wildcard-tls", Namespace: "ceffio-system", Ready: true, Jours: 88,
+	}}
+	if !identifiantDepuisCertificats(certs) {
+		t.Error("un certificat Ready à 88 jours ne compte pas comme preuve : la page " +
+			"annoncerait un échec de renouvellement sur une installation qui vient de signer")
+	}
+}
+
+// TestUnCertificatNonReadyNeProuveRien : l'inverse doit être vrai.
+func TestUnCertificatNonReadyNeProuveRien(t *testing.T) {
+	certs := []CertificatTLS{{
+		Nom: "ceffio-wildcard-tls", Namespace: "ceffio-system", Ready: false, Jours: -1,
+	}}
+	if identifiantDepuisCertificats(certs) {
+		t.Error("un certificat qui n'est pas Ready est compté comme preuve")
+	}
+}
+
+// TestAucunCertificatNeProuveRien : c'est le cas qui compte vraiment — une installation
+// qui n'a jamais émis.
+func TestAucunCertificatNeProuveRien(t *testing.T) {
+	if identifiantDepuisCertificats(nil) {
+		t.Error("aucun certificat et le contrôle répond configuré")
+	}
+}
+
+// TestUnSolverIntegreNExigePasDePod : Cloudflare, Route53 et les autres solvers
+// intégrés vivent DANS cert-manager.
+//
+// LE CONTRÔLE CHERCHAIT UN POD app=ceffio-acme-dns-webhook, qui n'existe que pour les
+// hôtes hors arborescence : sur une plateforme dont les certificats se renouvellent, il
+// répondait « solver not running ».
+func TestUnSolverIntegreNExigePasDePod(t *testing.T) {
+	s := &Server{kube: fake.NewSimpleClientset(), Domain: "exemple.org",
+		acme: acme.Reglages{Challenge: acme.ChallengeDNS, Provider: "cloudflare", Zone: "exemple.org"}}
+	if !s.solverDNSDeploye(context.Background()) {
+		t.Error("cloudflare est integré à cert-manager, sans pod : le contrôle répond " +
+			"« not running » sur une configuration qui fonctionne")
+	}
+}
+
+// TestUnWebhookSansPodEstSignale : l'inverse, pour les hôtes hors arborescence.
+func TestUnWebhookSansPodEstSignale(t *testing.T) {
+	s := &Server{kube: fake.NewSimpleClientset(), Domain: "exemple.org",
+		acme: acme.Reglages{Challenge: acme.ChallengeDNS, Provider: "infomaniak", WebhookGroup: "acme.infomaniak.com"}}
+	if s.solverDNSDeploye(context.Background()) {
+		t.Error("un hôte hors arborescence sans pod déployé est annoncé comme disponible : " +
+			"le challenge ne peut pas aboutir")
 	}
 }

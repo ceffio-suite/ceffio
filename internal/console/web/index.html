@@ -351,9 +351,10 @@
       <!-- CERTIFICATES -->
       <section class="section" id="tab-certs">
         <h2 class="section-title">TLS certificates</h2>
-        <p class="section-sub">Issued by cert-manager (authority "ceffio-ca"). Expiry is monitored: an expired certificate breaks the HTTPS of the corresponding service.</p>
+        <p class="section-sub">Issued by cert-manager. Renewal is automatic: what matters is not the expiry date but whether the renewal is still scheduled.</p>
+        <div id="tlsConfig"></div>
         <table class="table" id="certTable">
-          <thead><tr><th>Domain</th><th>Certificate</th><th>Status</th><th>Expires</th></tr></thead>
+          <thead><tr><th>Domain</th><th>Certificate</th><th>Issuer</th><th>Status</th><th>Expires</th><th>Renews</th></tr></thead>
           <tbody></tbody>
         </table>
       </section>
@@ -561,10 +562,62 @@
       return `<tr>
         <td class="mono">${esc(c.hote || '—')}</td>
         <td class="muted mono">${esc(c.name)}</td>
+        <td class="muted">${esc(c.issuer || '—')}</td>
         <td>${ok ? '<span class="badge ok"><span class="bdot"></span>READY</span>' : '<span class="badge ko"><span class="bdot"></span>' + esc(c.condition) + '</span>'}</td>
         <td>${exp}</td>
+        <td>${rendreRenouvellement(c)}</td>
       </tr>`;
     }).join('');
+  }
+
+  // rendreRenouvellement answers the question an operator actually asks.
+  //
+  // "88 days left" is reassuring and says nothing about the automation: a
+  // certificate that will expire and never renew looks exactly like a healthy
+  // one until the day it stops. What must be visible is WHEN the renewal is
+  // PLANNED, and -1 must read as "unknown", not as "soon".
+  function rendreRenouvellement(c) {
+    if (c.jours_avant_renouvellement === undefined || c.jours_avant_renouvellement < 0) {
+      // A missing renewal date is not a detail: cert-manager always schedules one
+      // for a certificate it manages. Its absence means nobody is renewing this.
+      return '<span class="badge warn">not scheduled</span>';
+    }
+    const j = c.jours_avant_renouvellement;
+    const cls = j <= 0 ? 'warn' : 'ok';
+    const d = new Date(c.renews).toLocaleDateString('en-GB');
+    return `<span class="badge ${cls}">${j <= 0 ? 'due' : j + ' d'} · ${d}</span>`;
+  }
+
+  // renderTLSConfig shows HOW the certificates are obtained.
+  //
+  // Without it, the page lists certificates without saying whether they come from a
+  // DNS challenge or an HTTP one, nor from which provider — which is the first thing
+  // to check when a renewal fails. The data comes from /api/certificates, the route
+  // that reports the RESOLVED configuration of the pod rather than a stored guess.
+  async function chargerTLS() {
+    let d;
+    try { d = await api('/api/certificates'); } catch (e) { return; }
+    const parts = [];
+    const challenge = d.challenge === 'dns01'
+      ? 'DNS-01 — the challenge is written as a DNS record'
+      : 'HTTP-01 — the challenge is served over HTTP on port 80';
+    parts.push(`<span class="badge">${esc(challenge)}</span>`);
+    if (d.provider) { parts.push(`<span class="badge">provider: ${esc(d.provider)}</span>`); }
+    if (d.zone) { parts.push(`<span class="badge">zone: ${esc(d.zone)}</span>`); }
+    // A DNS-01 SETUP WITHOUT A STORED CREDENTIAL CANNOT RENEW, and it will only say
+    // so at renewal time — which is exactly when nobody is looking.
+    if (d.challenge === 'dns01') {
+      parts.push(d.identifiant_defini
+        ? '<span class="badge ok">credential stored in the vault</span>'
+        : '<span class="badge ko">no credential in the vault — renewal will fail</span>');
+      parts.push(d.solver_deploye
+        ? '<span class="badge ok">solver deployed</span>'
+        : '<span class="badge warn">solver not running</span>');
+    }
+    const cfg = $('tlsConfig');
+    if (cfg) {
+      cfg.innerHTML = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px">${parts.join('')}</div>`;
+    }
   }
 
   async function renderUsers() {
@@ -724,6 +777,39 @@
           the service is in place.</div>
         </div>`;
       }
+      // STORAGE: the interface of an OPTIONAL module, so the link appears only when
+      // the module is installed — and a sentence says so when it is not, because a
+      // missing row would read as a bug in this page rather than as a choice.
+      if (d.url_admin_longhorn) {
+        liens += `
+        <div style="display:flex;align-items:center;gap:10px;padding-top:10px;border-top:1px solid var(--line)">
+          <div style="flex:1">
+            <div style="font-weight:600;font-size:13px">Storage (Longhorn)</div>
+            <div class="muted" style="font-size:12px">Volumes, their replicas and their
+            health. Behind the single sign-on, for the addresses allowed in its settings.</div>
+          </div>
+          <a class="btn-ghost" href="${esc(d.url_admin_longhorn)}" target="_blank" rel="noopener">Open ↗</a>
+        </div>`;
+      } else {
+        liens += `
+        <div style="padding-top:10px;border-top:1px solid var(--line)">
+          <div style="font-weight:600;font-size:13px" class="muted">Storage (Longhorn)</div>
+          <div class="muted" style="font-size:12px">Not installed. The interface is an
+          optional module: <span class="mono">ceffio module install longhorn-ui</span>
+          puts it behind the single sign-on.</div>
+        </div>`;
+      }
+      // THE DIRECTORY: the realm's own console, for what this page does not cover —
+      // clients, sessions, the sign-in flows.
+      liens += `
+        <div style="display:flex;align-items:center;gap:10px;padding-top:10px;border-top:1px solid var(--line)">
+          <div style="flex:1">
+            <div style="font-weight:600;font-size:13px">Directory (Keycloak)</div>
+            <div class="muted" style="font-size:12px">The realm's clients, users and
+            sessions. Change a sign-in flow or revoke a session here.</div>
+          </div>
+          <a class="btn-ghost" href="${esc(d.url_admin_keycloak)}" target="_blank" rel="noopener">Open ↗</a>
+        </div>`;
       liens += `</div>`;
       $('adminLiens').innerHTML = liens;
 
@@ -1476,7 +1562,7 @@
     if (!key) { openKeyModal(); return; }
     try {
       const st = await api('/api/status');
-      renderDashboard(st); renderInfra(st); renderCerts(st);
+      renderDashboard(st); renderInfra(st); renderCerts(st); chargerTLS();
       await renderUsers();
       await renderAdmin();
       $('sideFoot').innerHTML = esc(st.domain || '') + ' · ' + esc(versionLibelle(st)) +
@@ -1485,7 +1571,7 @@
   };
 
   refresh();
-  setInterval(() => { if (key) api('/api/status').then(s => { renderDashboard(s); renderInfra(s); renderCerts(s); }).catch(() => {}); }, 30000);
+  setInterval(() => { if (key) api('/api/status').then(s => { renderDashboard(s); renderInfra(s); renderCerts(s); chargerTLS(); }).catch(() => {}); }, 30000);
 })();
 </script>
 </body>
