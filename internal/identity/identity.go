@@ -14,6 +14,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"github.com/ceffio-suite/ceffio/internal/identity/theme"
 	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"github.com/ceffio-suite/ceffio/internal/vault"
@@ -67,6 +68,21 @@ func Deploy(ctx context.Context) error {
 		return err
 	}
 	if err := verifyRealm(ctx); err != nil {
+		return err
+	}
+
+	// THE LOGIN PAGE, applied AFTER the realm exists and BEFORE anyone can sign in.
+	//
+	// A THEME THAT DOES NOT APPLY IS INVISIBLE: the realm simply keeps
+	// `loginTheme: keycloak`, every user lands on Keycloak's own page, and nothing
+	// in the platform reports it. It is therefore a failure, not a warning — an
+	// operator who installed Ceffio for its sign-in page deserves to know at install
+	// time, not by comparing screenshots.
+	//
+	// IT IS IDEMPOTENT (kcadm update -s writes only the named fields), so every
+	// upgrade reapplies the same five values without touching the realm's clients,
+	// roles, flows or keys.
+	if err := appliquerThemeDepuisDeploiement(ctx, ns); err != nil {
 		return err
 	}
 
@@ -182,7 +198,34 @@ func applyWorkload(ctx context.Context) error {
 			}},
 		}))
 
-	manifest := fmt.Sprintf(`apiVersion: apps/v1
+	// THE THEME ARRIVES BEFORE THE POD THAT MOUNTS IT. Creating the Deployment first
+	// would leave the volume unscheduled until the ConfigMap exists, and the pod's
+	// first start would fail on a missing volume it cannot fix by retrying.
+	cm, err := theme.ManifesteConfigMap(ns)
+	if err != nil {
+		return err
+	}
+	if err := apply(ctx, cm); err != nil {
+		return err
+	}
+	somme, err := theme.Checksum()
+	if err != nil {
+		return err
+	}
+
+	manifest := manifesteKeycloak(ns, annotations, keycloakImage, dbService, dbName, somme)
+	return apply(ctx, manifest)
+}
+
+// manifesteKeycloak builds the Keycloak Deployment.
+//
+// IT IS A FUNCTION OF ITS OWN SO THE OPTIONS CAN BE TESTED: what matters about
+// this manifest is not that it applies, it is WHICH OPTIONS IT CARRIES — the
+// difference between production and development mode, and the hostname the
+// issuer is built from. A test can read them here; it cannot read them from a
+// string built inside a function that calls apply.
+func manifesteKeycloak(ns, annotations, keycloakImage, dbService, dbName, sommeTheme string) string {
+	return fmt.Sprintf(`apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: keycloak
@@ -202,21 +245,38 @@ spec:
       # SECRETS ARE LAID DOWN BY THE OPENBAO INJECTOR (vault.AnnotationsAgent).
       annotations:
 %s
+      # THE RESTART MECHANISM FOR THE THEME, not a label for humans.
+      #
+      # In production Keycloak CACHES themes: replacing the files in the mounted
+      # volume changes nothing until the process restarts. This annotation's value
+      # is the theme's checksum, so Kubernetes restarts the pod BY ITSELF when the
+      # theme changes — and, just as importantly, does not restart it when nothing
+      # did.
+        ceffio.io/theme-checksum: "%s"
     spec:
       # THIS ServiceAccount IS THE ONE THE VAULT ROLE DESIGNATES.
       serviceAccountName: keycloak
       containers:
         - name: keycloak
           image: %s
-          # THE IMAGE ENTRYPOINT IS kc.sh: we call it back explicitly, with the
-          # same arguments as before ("start-dev").
+          # PRODUCTION MODE, NOT DEVELOPMENT.
+          #
+          # "start-dev" is what Keycloak's own documentation forbids in
+          # production: it loosens protections, disables the caches — INCLUDING
+          # THE THEME CACHE — and is not meant to last. The platform shipped with
+          # it since the beginning, which is why the login page could not be
+          # themed reliably and why a restart behaved unlike a restart.
+          #
+          # THE DATA SURVIVES THE SWITCH: the realm lives in PostgreSQL
+          # (KC_DB=postgres below), not in the in-memory H2 database start-dev
+          # uses. No account, no OIDC client and no realm setting is lost.
           command: ["/bin/bash", "-c"]
           args:
             - |
               set -a
               . /secrets/env
               set +a
-              exec /opt/keycloak/bin/kc.sh start-dev
+              exec /opt/keycloak/bin/kc.sh start
           env:
             - name: KC_DB
               value: postgres
@@ -226,12 +286,34 @@ spec:
               value: "true"
             - name: KC_METRICS_ENABLED
               value: "true"
+            # TRAEFIK TERMINATES TLS, Keycloak listens in plain HTTP inside the
+            # cluster. Without this, "start" refuses to come up: production mode
+            # insists on a certificate unless it is told the TLS is handled
+            # elsewhere.
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            # KEYCLOAK READS THE PUBLIC ADDRESS FROM TRAEFIK'S HEADERS. In
+            # development mode it inferred the host from the request; in
+            # production it builds absolute URLs — the OIDC issuer, the redirect
+            # after login — from the scheme and host it BELIEVES it serves. This
+            # value used to be set later, by the ingress phase, so the very first
+            # start announced the wrong host and every SSO redirect pointed at a
+            # name that did not exist. It is here now, so the pod is correct from
+            # its first second.
+            - name: KC_PROXY_HEADERS
+              value: xforwarded
+            # ONE REPLICA, SO A LOCAL CACHE. The default production cache is
+            # Infinispan distributed: it looks for other nodes over JGroups, waits
+            # for them, and logs complaints about a cluster of one. That is pure
+            # startup latency for a platform that runs a single Keycloak.
+            - name: KC_CACHE
+              value: local
             # KC_HOSTNAME is NOT set here: its value was frozen on the old domain
             # (auth.ceffio.local), and Keycloak uses it to build the endpoints it
             # ANNOUNCES — so the SSO redirect went to a nonexistent domain. It is
-            # the ingress phase (adoptKeycloakHost) that sets KC_HOSTNAME /
-            # KC_HOSTNAME_URL with the current domain. A hardcoded duplicate here
-            # would only contradict it.
+            # the ingress phase (adoptKeycloakHost) that sets it, with the current
+            # domain, as a full URL (the v2 hostname system). A hardcoded
+            # duplicate here would only contradict it.
             - name: KC_HOSTNAME_STRICT
               value: "false"
           ports:
@@ -239,6 +321,29 @@ spec:
               containerPort: 8080
             - name: management
               containerPort: 9000
+          # THE FIRST START IS LONG, AND IT IS NORMAL.
+          #
+          # "start" without "--optimized" REBUILDS the server's configuration at
+          # every boot, because KC_DB, KC_HEALTH_ENABLED and KC_METRICS_ENABLED
+          # are BUILD-time options: the aot build, the database dialect and the
+          # feature list are regenerated. On a busy node this takes minutes.
+          #
+          # THE STARTUP PROBE IS WHAT MAKES THAT SAFE: Kubernetes does not apply
+          # the liveness probe until it has succeeded, so a slow first boot is not
+          # mistaken for a dead container. The margin is deliberately wide —
+          # 10 s × 60 = 10 minutes — because the alternative is a restart loop
+          # that never converges: the pod is killed at 2 minutes, starts over,
+          # and rebuilds for ever.
+          #
+          # AN IMAGE BUILT AHEAD ("kc.sh build" at image time, then "--optimized")
+          # would remove this phase entirely. It is out of scope here and recorded
+          # as the next improvement.
+          startupProbe:
+            httpGet:
+              path: /health/started
+              port: management
+            periodSeconds: 10
+            failureThreshold: 60
           readinessProbe:
             httpGet:
               path: /health/ready
@@ -252,12 +357,32 @@ spec:
             initialDelaySeconds: 120
             periodSeconds: 15
             failureThreshold: 6
+          # THE LOGIN THEME, MOUNTED READ-ONLY.
+          #
+          # Keycloak reads /opt/keycloak/themes/<name> AT STARTUP, and a directory
+          # dropped there needs no "kc.sh build". Read-only because Keycloak only ever
+          # reads it: a writable mount would let a compromised process rewrite the
+          # page every user signs in through.
+          volumeMounts:
+            - name: keycloak-theme
+              mountPath: /opt/keycloak/themes/ceffio
+              readOnly: true
           resources:
             requests:
               memory: 1536Mi
               cpu: 250m
             limits:
               memory: 3Gi
+      # THE CONFIGMAP IS FLAT; THE THEME IS A TREE. items[].path rebuilds it, and
+      # without that Keycloak would find every file at the theme root, look for
+      # login/theme.properties, miss it, and render the DEFAULT page with no error
+      # anywhere.
+      volumes:
+        - name: keycloak-theme
+          configMap:
+            name: %s
+            items:
+%s
 ---
 apiVersion: v1
 kind: Service
@@ -271,8 +396,7 @@ spec:
     - name: http
       port: 8080
       targetPort: 8080
-`, ns, annotations, keycloakImage, dbService, dbName, ns)
-	return apply(ctx, manifest)
+`, ns, annotations, sommeTheme, keycloakImage, dbService, dbName, theme.NomConfigMap, theme.ItemsYAML(), ns)
 }
 
 func waitKeycloakReady(ctx context.Context) error {

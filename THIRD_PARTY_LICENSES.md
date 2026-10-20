@@ -87,6 +87,20 @@ Redis is distributed under RSALv2/SSPLv1 since version 7.4 — licenses that
 are not open source. Ceffio deploys **Valkey** (BSD-3-Clause), the Linux
 Foundation fork maintained by Redis's original authors, protocol-compatible.
 
+## Embedded assets
+
+### Sora typeface — SIL Open Font License 1.1
+
+The Ceffio login theme for Keycloak embeds Sora, by Jonathan Barnbrook and the
+Sora Project Authors, as Web Open Font Format files (`sora-latin-400-normal.woff2`
+and `sora-latin-600-normal.woff2`). It is distributed under the **SIL Open Font
+License 1.1**, which permits embedding and redistribution.
+
+The licence text ships alongside the fonts, at
+`branding/keycloak/ceffio/login/resources/fonts/OFL.txt`, and is embedded with
+them. A theme is a redistributable artifact, so the licence travels with it rather
+than being referenced from this file alone.
+
 ## Go dependencies
 
 Generated with `go-licenses report ./...` on 2026-10-14. All 56 modules are

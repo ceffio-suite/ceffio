@@ -181,7 +181,7 @@ func Deploy(ctx context.Context, domain string, reglages acme.Reglages) error {
 	// KEYCLOAK'S PUBLIC HOSTNAME IS SET HERE, NOT LATER.
 	//
 	// It used to happen in AdoptURLs, which runs after the application
-	// layers. Too late: without KC_HOSTNAME_URL, Keycloak builds its OIDC
+	// layers. Too late: without a public hostname, Keycloak builds its OIDC
 	// discovery document with the scheme it sees internally — http — so the
 	// issuer came out as
 	//
@@ -312,13 +312,20 @@ func AdoptURLs(ctx context.Context, domain string) error {
 	return nil
 }
 
-// adoptKeycloakHost forces Keycloak's public hostname (browser redirects) with
-// an https frontend URL and Traefik's proxy headers. Idempotent.
+// adoptKeycloakHost sets Keycloak's public hostname (browser redirects) as a
+// FULL URL, which is what the v2 hostname system expects, and Traefik's proxy
+// headers. Idempotent.
+//
+// IT IS ONE VARIABLE, NOT TWO. KC_HOSTNAME_URL belonged to the v1 system and no
+// longer exists in Keycloak 26: `kc.sh start --help` does not list it, and the
+// variable was silently ignored. KC_HOSTNAME now accepts a hostname OR a URL, so
+// "https://keycloak.example.org" carries both pieces — the name the issuer is
+// built from and the scheme the redirect must use. Setting only the host made
+// Keycloak announce http:// URLs behind a TLS terminator.
 func adoptKeycloakHost(ctx context.Context, domain string) error {
-	host := "keycloak." + domain
-	url := "https://" + host
+	url := "https://keycloak." + domain
 	cmd := k8s.Command(ctx, "kubectl", "set", "env", "-n", "ceffio-identity", "deploy/keycloak",
-		"KC_HOSTNAME="+host, "KC_HOSTNAME_URL="+url,
+		"KC_HOSTNAME="+url,
 		"KC_HOSTNAME_STRICT=false", "KC_PROXY_HEADERS=xforwarded")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
