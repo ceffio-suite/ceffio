@@ -27,6 +27,7 @@ import (
 	_ "github.com/ceffio-suite/ceffio/internal/modules/office"
 	_ "github.com/ceffio-suite/ceffio/internal/modules/platform"
 	_ "github.com/ceffio-suite/ceffio/internal/modules/recording"
+	_ "github.com/ceffio-suite/ceffio/internal/modules/storage"
 	_ "github.com/ceffio-suite/ceffio/internal/modules/talk"
 	_ "github.com/ceffio-suite/ceffio/internal/modules/transcription"
 	_ "github.com/ceffio-suite/ceffio/internal/modules/vault"

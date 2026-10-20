@@ -15,7 +15,7 @@ import (
 // the one of the install sequence (cmd/ceffio/install.go), so that the
 // table below stays readable like the product itself.
 var idsSocle = []string{
-	"platform", "data", "vault", "identity", "files",
+	"storage", "platform", "data", "vault", "identity", "files",
 	"office", "talk", "ingress", "mail", "console",
 }
 
@@ -110,11 +110,15 @@ func TestChaqueEntreeCatalogueVitDansExactementUnModule(t *testing.T) {
 	}
 }
 
-// TestLesDixCouchesDuSocleSontDesModulesCore checks the common contract of
-// the ten Core modules: registered, Kind Core, Default=true (semantics:
+// TestLesCouchesDuSocleSontDesModulesCore checks the common contract of
+// the Core modules: registered, Kind Core, Default=true (semantics:
 // `ceffio install` lays them all down), real namespaces declared, and an
 // explicit refusal of per-layer uninstall.
-func TestLesDixCouchesDuSocleSontDesModulesCore(t *testing.T) {
+//
+// THE COUNT IS NOT IN THE NAME ANY MORE. It used to say "dix", and the storage
+// layer made it eleven — a rename with a number in it turns every added layer into a
+// false claim about the test's scope.
+func TestLesCouchesDuSocleSontDesModulesCore(t *testing.T) {
 	for _, id := range idsSocle {
 		m, ok := module.Get(id)
 		if !ok {
@@ -135,12 +139,17 @@ func TestLesDixCouchesDuSocleSontDesModulesCore(t *testing.T) {
 			t.Errorf("module %q: Namespaces must not be empty — status and doctor read the layers through them", id)
 		}
 		for _, ns := range info.Namespaces {
-			if !strings.HasPrefix(ns, "ceffio-") && ns != "cert-manager" && ns != "cnpg-system" {
+			// THE NAMESPACE SET IS CLOSED ON PURPOSE: a core layer that invents a
+			// namespace is a layer nobody planned for, and the console's RBAC derives
+			// from this list. `longhorn-system` joins it with its reason: Longhorn
+			// installs itself there through Helm and cannot be moved.
+			if !strings.HasPrefix(ns, "ceffio-") && ns != "cert-manager" &&
+				ns != "cnpg-system" && ns != "longhorn-system" {
 				t.Errorf("module %q: namespace %q is not a real one (no layer deploys into it)", id, ns)
 			}
 		}
 
-		// Uninstall MUST refuse: the ten layers are the product. A
+		// Uninstall MUST refuse: the layers are the product. A
 		// per-layer removal would leave an amnesiac suite that believes
 		// itself healthy — the explicit error is the behavior.
 		if err := m.Uninstall(context.Background(), module.Env{}); err == nil {
