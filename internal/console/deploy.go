@@ -778,6 +778,44 @@ roleRef:
   name: ceffio-console-occ
   apiGroup: rbac.authorization.k8s.io
 ---
+# THE SIGN-IN PAGE SETTING NEEDS THE SAME ACCESS, in the identity namespace.
+#
+# The console reads the realm's loginTheme from the RUNNING Keycloak — not from a
+# stored value — because someone may have changed it from the Keycloak admin console,
+# and a form showing a stored value would lie about what users see. That read is a
+# kcadm call inside the keycloak pod, so it needs pods/exec there.
+#
+# THE SAME SHAPE AS THE FILES ONE, deliberately: "create" on pods/exec is what running
+# a command in a pod requires, and there is no narrower verb. What runs is the
+# module's own command — kcadm reading or writing the realm's login page — never
+# anything a request supplies.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ceffio-console-identity
+  namespace: ceffio-identity
+rules:
+- apiGroups: [""]
+  resources: [pods]
+  verbs: [get, list]
+- apiGroups: [""]
+  resources: [pods/exec]
+  verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ceffio-console-identity
+  namespace: ceffio-identity
+subjects:
+- kind: ServiceAccount
+  name: ceffio-admin
+  namespace: ` + deployNS + `
+roleRef:
+  kind: Role
+  name: ceffio-console-identity
+  apiGroup: rbac.authorization.k8s.io
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
