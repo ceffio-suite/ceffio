@@ -1,0 +1,135 @@
+/*
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ * Copyright © MANDEM
+ *
+ * Ceffio skin over keycloak.v2 (PatternFly 5).
+ *
+ * WHY VARIABLES FIRST: keycloak.v2 draws everything from PatternFly's global
+ * tokens. Re-pointing the tokens restyles every page of every flow (login,
+ * reset, OTP, required actions) without naming a single one of them, which is
+ * what keeps this file valid across Keycloak upgrades.
+ *
+ * Colours are the Ceffio palette: primary #2B4FD8 (6.5:1 on white), ink
+ * #12151C, and the four pillar colours on the card's top edge.
+ */
+
+@font-face {
+  font-family: "Sora";
+  font-weight: 400;
+  font-display: swap;
+  src: url("../fonts/sora-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Sora";
+  font-weight: 600;
+  font-display: swap;
+  src: url("../fonts/sora-latin-600-normal.woff2") format("woff2");
+}
+
+:root {
+  --keycloak-logo-url: url("../img/logo.svg");
+  --keycloak-bg-logo-url: url("../img/background.jpg");
+  --keycloak-logo-height: 64px;
+  --keycloak-logo-width: 240px;
+
+  --pf-v5-global--primary-color--100: #2B4FD8;
+  --pf-v5-global--primary-color--200: #1F3CAE;
+  --pf-v5-global--link--Color: #2B4FD8;
+  --pf-v5-global--link--Color--hover: #1F3CAE;
+  --pf-v5-c-button--m-primary--BackgroundColor: #2B4FD8;
+  --pf-v5-c-button--m-primary--hover--BackgroundColor: #1F3CAE;
+  --pf-v5-c-button--m-primary--focus--BackgroundColor: #1F3CAE;
+  --pf-v5-c-button--m-primary--active--BackgroundColor: #1F3CAE;
+  --pf-v5-c-form-control--focus--BorderBottomColor: #2B4FD8;
+  --pf-v5-c-check__input--accent-color: #2B4FD8;
+
+  --ceffio-font: "Sora", "Segoe UI", system-ui, sans-serif;
+}
+
+/* Dark: PatternFly redefines the primary tokens under .pf-v5-theme-dark, so the
+   button colours are set again here or the default blue comes back. A lighter
+   blue keeps links and focus readable on the dark card. */
+.pf-v5-theme-dark {
+  --pf-v5-global--primary-color--100: #2B4FD8;
+  --pf-v5-global--primary-color--200: #1F3CAE;
+  --pf-v5-c-button--m-primary--BackgroundColor: #2B4FD8;
+  --pf-v5-c-button--m-primary--hover--BackgroundColor: #3A5CE6;
+  --pf-v5-c-button--m-primary--focus--BackgroundColor: #3A5CE6;
+  --pf-v5-c-button--m-primary--active--BackgroundColor: #3A5CE6;
+  --pf-v5-global--link--Color: #8DA4FF;
+  --pf-v5-global--link--Color--hover: #B3C2FF;
+  --pf-v5-c-form-control--focus--BorderBottomColor: #8DA4FF;
+}
+
+/* The ground behind the image, on html too: when the page is shorter than the
+   window, the area under body would otherwise show the browser's black. */
+html.login-pf,
+.login-pf body {
+  background-color: #12151C;
+  min-height: 100%;
+}
+
+/* The parent pins the image with background-attachment: fixed, which some
+   browsers (and headless renderers) paint short of the bottom edge. Scrolling
+   with the page costs nothing here: the login page rarely scrolls. */
+.login-pf body {
+  background-attachment: scroll;
+}
+
+/* The primary button, set on the component itself: PatternFly declares the
+   button's colour variables on .pf-v5-c-button, and again for the dark theme,
+   so a value set only on :root does not win in dark mode. */
+.pf-v5-c-button.pf-m-primary,
+.pf-v5-theme-dark .pf-v5-c-button.pf-m-primary {
+  --pf-v5-c-button--m-primary--BackgroundColor: #2B4FD8;
+  --pf-v5-c-button--m-primary--Color: #FFFFFF;
+  --pf-v5-c-button--m-primary--hover--BackgroundColor: #1F3CAE;
+  --pf-v5-c-button--m-primary--hover--Color: #FFFFFF;
+  --pf-v5-c-button--m-primary--focus--BackgroundColor: #1F3CAE;
+  --pf-v5-c-button--m-primary--active--BackgroundColor: #1F3CAE;
+}
+
+/* The card's top edge: the four pillars of the suite, as in the logo. */
+.pf-v5-c-login__main-header {
+  border-top: 4px solid transparent;
+  border-image: linear-gradient(90deg,
+      #6A3FC8 0 25%, #0B8A6F 25% 50%, #2B4FD8 50% 75%, #F28C28 75% 100%) 1;
+}
+
+.pf-v5-c-login__main {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.pf-v5-c-login__main-header .pf-v5-c-title,
+#kc-page-title {
+  font-family: var(--ceffio-font);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.pf-v5-c-button.pf-m-primary {
+  font-family: var(--ceffio-font);
+  font-weight: 600;
+  border-radius: 999px;
+}
+
+/* Header above the card: the logo, then the tagline (both come from the
+   realm's display name HTML, see README). */
+#kc-header-wrapper {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+#kc-header-wrapper .ceffio-slogan {
+  margin: 0;
+  font-family: var(--ceffio-font);
+  font-weight: 400;
+  font-size: 15px;
+  color: rgba(255, 255, 255, 0.82);
+}
