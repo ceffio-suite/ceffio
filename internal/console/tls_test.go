@@ -4,11 +4,15 @@
 package console
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/ceffio-suite/ceffio/internal/acme"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -153,5 +157,81 @@ func TestLaRouteDesCertificatsEstEnLectureSeule(t *testing.T) {
 	//    a write belongs.
 	if rec.Code >= 400 && rec.Code < 500 {
 		t.Logf("POST /api/certificates -> %d (the write stops at the router; no handler serves it)", rec.Code)
+	}
+}
+
+// TestLIdentifiantVientDuSecretQueCertManagerLit : la fausse alerte qui a motivé ce
+// test.
+//
+// LA PAGE AFFICHAIT « no credential in the vault — renewal will fail » sur une
+// installation dont les certificats se renouvelaient parfaitement. La cause :
+// identifiantDefini lisait le coffre à travers secrets.DepuisEnvironnement, qui est nil
+// dans le conteneur de la console — le pod ne porte aucune variable de coffre, par
+// construction. La réponse était donc TOUJOURS fausse.
+//
+// CE QUI COMPTE EST LÀ OÙ LE SOLVER LIT. cert-manager résout le secretRef du
+// ClusterIssuer : il n'a aucun moyen d'atteindre OpenBao. Le bon contrôle est ce Secret.
+func TestLIdentifiantVientDuSecretQueCertManagerLit(t *testing.T) {
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "ceffio-acme-dns", Namespace: "cert-manager"},
+		Data:       map[string][]byte{"api-token": []byte("un-jeton-quelconque")},
+	}
+	s := &Server{kube: fake.NewSimpleClientset(sec), Domain: "exemple.org",
+		acme: acme.Reglages{Challenge: acme.ChallengeDNS, Provider: "cloudflare", Zone: "exemple.org"}}
+
+	if !s.identifiantDNSPresent(context.Background()) {
+		t.Error("le Secret que le solver lit existe et porte api-token, et le contrôle " +
+			"répond absent : la page annoncerait un échec de renouvellement sur une " +
+			"installation saine")
+	}
+}
+
+// TestPasDeSecretPasDIdentifiant : l'inverse doit aussi être vrai, sinon l'indicateur
+// ne sert à rien.
+func TestPasDeSecretPasDIdentifiant(t *testing.T) {
+	s := &Server{kube: fake.NewSimpleClientset(), Domain: "exemple.org",
+		acme: acme.Reglages{Challenge: acme.ChallengeDNS, Provider: "cloudflare", Zone: "exemple.org"}}
+	if s.identifiantDNSPresent(context.Background()) {
+		t.Error("aucun Secret n'existe et le contrôle répond présent : la page dirait " +
+			"« configuré » sur une installation qui ne peut pas renouveler")
+	}
+}
+
+// TestUnSecretSansCleNeComptePas : un Secret existant mais vide ne permet aucune
+// signature.
+func TestUnSecretSansCleNeComptePas(t *testing.T) {
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "ceffio-acme-dns", Namespace: "cert-manager"},
+		Data:       map[string][]byte{"autre-chose": []byte("x")},
+	}
+	s := &Server{kube: fake.NewSimpleClientset(sec), Domain: "exemple.org",
+		acme: acme.Reglages{Challenge: acme.ChallengeDNS, Provider: "cloudflare", Zone: "exemple.org"}}
+	if s.identifiantDNSPresent(context.Background()) {
+		t.Error("un Secret sans la clé attendue est compté comme un identifiant")
+	}
+}
+
+// TestUnSolverIntegreNExigePasDePod : Cloudflare, Route53 et les autres solvers
+// intégrés vivent DANS cert-manager.
+//
+// LE CONTRÔLE CHERCHAIT UN POD app=ceffio-acme-dns-webhook, qui n'existe que pour les
+// hôtes hors arborescence : sur une plateforme dont les certificats se renouvellent, il
+// répondait « solver not running ».
+func TestUnSolverIntegreNExigePasDePod(t *testing.T) {
+	s := &Server{kube: fake.NewSimpleClientset(), Domain: "exemple.org",
+		acme: acme.Reglages{Challenge: acme.ChallengeDNS, Provider: "cloudflare", Zone: "exemple.org"}}
+	if !s.solverDNSDeploye(context.Background()) {
+		t.Error("cloudflare est integré à cert-manager, sans pod : le contrôle répond " +
+			"« not running » sur une configuration qui fonctionne")
+	}
+}
+
+// TestUnWebhookSansPodEstSignale : l'inverse, pour les hôtes hors arborescence.
+func TestUnWebhookSansPodEstSignale(t *testing.T) {
+	s := &Server{kube: fake.NewSimpleClientset(), Domain: "exemple.org",
+		acme: acme.Reglages{Challenge: acme.ChallengeDNS, Provider: "infomaniak", WebhookGroup: "acme.infomaniak.com"}}
+	if s.solverDNSDeploye(context.Background()) {
+		t.Error("un hôte hors arborescence sans pod déployé est annoncé comme disponible : " +
+			"le challenge ne peut pas aboutir")
 	}
 }
