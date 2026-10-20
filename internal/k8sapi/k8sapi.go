@@ -850,3 +850,34 @@ func (c *Client) ListerPVC(ctx context.Context, ns string) ([]string, error) {
 	}
 	return noms, nil
 }
+
+// Pod est ce que la lecture des pods renvoie: le nom, la phase et l'état Ready.
+type Pod struct {
+	Name  string
+	Phase string
+	Ready bool
+}
+
+// Pods lists the pods of a namespace, optionally filtered by a label selector.
+//
+// THE FILTER IS PASSED THROUGH rather than applied here: doing it server-side is what
+// keeps a namespace with hundreds of pods from being transferred to answer a question
+// about two of them.
+func (c *Client) Pods(ctx context.Context, ns, selecteur string) ([]Pod, error) {
+	l, err := c.cs.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: selecteur})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Pod, 0, len(l.Items))
+	for _, p := range l.Items {
+		ready := false
+		for _, cs := range p.Status.ContainerStatuses {
+			if cs.Ready {
+				ready = true
+				break
+			}
+		}
+		out = append(out, Pod{Name: p.Name, Phase: string(p.Status.Phase), Ready: ready})
+	}
+	return out, nil
+}

@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ceffio-suite/ceffio/internal/k8s"
+	"github.com/ceffio-suite/ceffio/internal/k8sapi"
 )
 
 // realm à thémer. Le realm `master` n'est JAMAIS touché : sa page de connexion sert
@@ -119,23 +119,52 @@ func kcadmConnecte() string {
 		`--password "$KC_BOOTSTRAP_ADMIN_PASSWORD" >/dev/null && `
 }
 
-// kcadmExec runs a kcadm script in the keycloak pod.
+// kcadmExec runs a kcadm script inside the keycloak pod.
 //
-// THE SETTINGS TRAVEL AS POSITIONAL ARGUMENTS rather than interpolated into the
-// script: the display name is HTML, and building a shell line out of it needs quoting
-// rules a future edit would get wrong. `sh -c script sh "$@"` hands them over intact.
+// IT GOES THROUGH THE KUBERNETES API, NOT THROUGH kubectl. The console container has
+// no kubectl binary — verified in production, where the settings form rendered an
+// empty selector and the API answered `exec: "kubectl": executable file not found in
+// $PATH`. k8sapi.Client.Executer speaks the SPDY exec protocol directly, so the same
+// code works from a binary on an operator's machine AND from inside the console.
+//
+// THE POD IS FOUND FIRST: an exec needs a pod name, and the deployment's name is not
+// one. The first Ready pod of app=keycloak is the one that serves the realm.
 func kcadmExec(ctx context.Context, ns, script string, args ...string) error {
-	commande := []string{"exec", "-i", "-n", ns, "deploy/keycloak", "-c", "keycloak",
-		"--", "sh", "-c", script, "sh"}
-	commande = append(commande, args...)
+	cli, err := clientK8s()
+	if err != nil {
+		return fmt.Errorf("connecting to the cluster: %w", err)
+	}
+	pod, err := podKeycloak(ctx, cli, ns)
+	if err != nil {
+		return err
+	}
 
-	cmd := k8s.Command(ctx, "kubectl", commande...)
-	out, err := cmd.CombinedOutput()
+	commande := append([]string{"sh", "-c", script, "sh"}, args...)
+	out, err := cli.Executer(ctx, ns, pod, "keycloak", commande...)
 	if err != nil {
 		return fmt.Errorf("applying the login page to the realm: %w: %s",
-			err, strings.TrimSpace(string(out)))
+			err, strings.TrimSpace(out))
 	}
 	return nil
+}
+
+// podKeycloak returns the Ready keycloak pod of the identity namespace.
+//
+// IT TAKES A READY ONE rather than the first listed: during a rollout the terminating
+// pod answers NotFound on exec, and during the first start the new one has no listening
+// realm yet. Both produce a failure that reads like a credential problem.
+func podKeycloak(ctx context.Context, cli *k8sapi.Client, ns string) (string, error) {
+	pods, err := cli.Pods(ctx, ns, "app=keycloak")
+	if err != nil {
+		return "", fmt.Errorf("listing the keycloak pods: %w", err)
+	}
+	for _, p := range pods {
+		if p.Ready && p.Phase == "Running" {
+			return p.Name, nil
+		}
+	}
+	return "", fmt.Errorf("no Ready keycloak pod in %s: the realm cannot be read or "+
+		"written until one is running", ns)
 }
 
 // appliquerThemeDepuisDeploiement is the lot T3 entry point: the theme and the
@@ -153,22 +182,28 @@ func appliquerThemeDepuisDeploiement(ctx context.Context, ns string) error {
 	return nil
 }
 
-// LireLoginTheme returns the realm's current loginTheme, for the settings system.
+// LireLoginTheme returns the realm's current loginTheme and default locale.
 //
-// AN EMPTY RESULT MEANS "the realm does not say", which Keycloak reads as the
-// default theme. Returning an error instead would make the settings form unusable
-// on an installation whose realm was created before the theme existed.
+// AN EMPTY RESULT MEANS "the realm does not say", which Keycloak reads as the default
+// theme. Returning an error instead would make the settings form unusable on an
+// installation whose realm was created before the theme existed.
 func LireLoginTheme(ctx context.Context, ns string) (theme, locale string, err error) {
 	script := kcadmConnecte() +
 		`/opt/keycloak/bin/kcadm.sh get realms/` + realmCeffio +
 		` --fields loginTheme,defaultLocale 2>/dev/null`
 
-	cmd := k8s.Command(ctx, "kubectl", "exec", "-i", "-n", ns, "deploy/keycloak", "-c", "keycloak",
-		"--", "sh", "-c", script)
-	out, err := cmd.CombinedOutput()
+	cli, err := clientK8s()
+	if err != nil {
+		return "", "", fmt.Errorf("connecting to the cluster: %w", err)
+	}
+	pod, err := podKeycloak(ctx, cli, ns)
+	if err != nil {
+		return "", "", err
+	}
+	out, err := cli.Executer(ctx, ns, pod, "keycloak", "sh", "-c", script)
 	if err != nil {
 		return "", "", fmt.Errorf("reading the realm's login page: %w: %s", err,
-			strings.TrimSpace(string(out)))
+			strings.TrimSpace(out))
 	}
 
 	var r struct {
@@ -181,18 +216,21 @@ func LireLoginTheme(ctx context.Context, ns string) (theme, locale string, err e
 	return r.LoginTheme, r.DefaultLocale, nil
 }
 
+// clientK8s is the Kubernetes client the package uses, as a variable so a test can
+// inject a fake instead of reaching for a cluster.
+var clientK8s = k8sapi.Nouveau
+
 // AppliquerLoginPage is the entry point the settings system uses: change WHICH theme
 // the realm serves, and in which language.
 //
-// IT DOES NOT TOUCH THE FILES. The theme assets ship with the binary and are mounted
-// in the pod (lot T2); this function only tells the realm which one to use. That is
-// why changing it needs NO RESTART — Keycloak resolves the realm's loginTheme per
-// request — while shipping a NEW theme restarts the pod, because the files are
-// cached at startup.
+// IT DOES NOT TOUCH THE FILES. The theme assets ship with the binary and are mounted in
+// the pod; this function only tells the realm which one to use. That is why changing it
+// needs NO RESTART — Keycloak resolves the realm's loginTheme per request — while
+// shipping a NEW theme restarts the pod, because the files are cached at startup.
 //
-// displayNameHtml IS LEFT ALONE. It belongs to the theme's identity, not to the
-// choice: switching to Keycloak's default page should not strip Ceffio's name from
-// the realm, and switching back must find it intact.
+// displayNameHtml IS LEFT ALONE. It belongs to the theme's identity, not to the choice:
+// switching to Keycloak's default page should not strip Ceffio's name from the realm,
+// and switching back must find it intact.
 func AppliquerLoginPage(ctx context.Context, ns, theme, locale string) error {
 	script := kcadmConnecte() +
 		`/opt/keycloak/bin/kcadm.sh update realms/` + realmCeffio +
