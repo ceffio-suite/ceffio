@@ -96,9 +96,11 @@ func domaineDeLaPlateforme(ctx context.Context) string {
 	// keycloak.<domain>, written by the ingress layer and read back here. Reading the
 	// running configuration rather than asking for a flag means no second source of
 	// truth, and no --domain to forget on a command that never had one.
-	obj, ok, err := cli.LireObjet(ctx,
+	// A NAMESPACED READ: the Ingress lives in ceffio-identity, and LireObjet looks in
+	// the default namespace — it would answer NotFound for an object that exists.
+	obj, ok, err := cli.LireObjetDans(ctx,
 		schema.GroupVersionKind{Group: "networking.k8s.io", Version: "v1", Kind: "Ingress"},
-		"keycloak")
+		"ceffio-identity", "keycloak")
 	if err != nil || !ok {
 		return ""
 	}
