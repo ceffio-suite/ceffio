@@ -4,8 +4,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"os"
+	"strings"
 
 	"github.com/ceffio-suite/ceffio/internal/files"
 	"github.com/ceffio-suite/ceffio/internal/identity"
@@ -66,9 +70,53 @@ account come from the vault, and the pod reads them through the injector.`,
 		SilenceUsage: true,
 		RunE: func(c *cobra.Command, args []string) error {
 			resoudreCoffre(c)
+			// THE DOMAIN, before Deploy: it reapplies the suite's OIDC clients, and
+			// their return addresses are built from it. Without it the clients are
+			// left alone rather than pointed at a guessed host.
+			if d := domaineDeLaPlateforme(c.Context()); d != "" {
+				identity.PoserDomaine(d)
+			}
 			return identity.Deploy(c.Context())
 		},
 	}
+}
+
+// domaineDeLaPlateforme reads the installation's domain from the ingress layer's own
+// configuration, so `ceffio identity` has no second --domain flag.
+//
+// AN EMPTY ANSWER IS NOT FATAL: Deploy then skips the OIDC clients rather than writing
+// return addresses built from a guess. The rest of the identity layer — the realm, the
+// theme, the administrator — needs no domain.
+func domaineDeLaPlateforme(ctx context.Context) string {
+	cli, err := k8sapi.Nouveau()
+	if err != nil {
+		return ""
+	}
+	// THE KEYCLOAK INGRESS IS THE DOMAIN'S OWN RECORD: its host is
+	// keycloak.<domain>, written by the ingress layer and read back here. Reading the
+	// running configuration rather than asking for a flag means no second source of
+	// truth, and no --domain to forget on a command that never had one.
+	obj, ok, err := cli.LireObjet(ctx,
+		schema.GroupVersionKind{Group: "networking.k8s.io", Version: "v1", Kind: "Ingress"},
+		"keycloak")
+	if err != nil || !ok {
+		return ""
+	}
+	regles, found, err := unstructured.NestedSlice(obj.Object, "spec", "rules")
+	if err != nil || !found {
+		return ""
+	}
+	for _, r := range regles {
+		m, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		hote, _ := m["host"].(string)
+		if strings.HasPrefix(hote, "keycloak.") {
+			return strings.TrimPrefix(hote, "keycloak.")
+		}
+	}
+	return ""
 }
 
 // resoudreCoffre puts vault access into the environment, before any read.

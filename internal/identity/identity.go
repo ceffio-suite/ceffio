@@ -17,6 +17,7 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/identity/theme"
 	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
+	"github.com/ceffio-suite/ceffio/internal/sso"
 	"github.com/ceffio-suite/ceffio/internal/vault"
 	"os"
 	"strings"
@@ -106,9 +107,52 @@ func Deploy(ctx context.Context) error {
 		return err
 	}
 
+	// THE OIDC CLIENTS OF THE SUITE, reapplied HERE so `ceffio identity` is whole.
+	//
+	// IT WAS NOT, AND THAT COST A FIX. EnsureOIDCClients was only called by `install`
+	// and `redeploy`; `ceffio identity` — whose whole promise is "deploy the identity
+	// layer alone" — left the clients untouched. A correction to a client's
+	// post-logout list therefore had to be pushed by hand, through a scratch program,
+	// on a running platform.
+	//
+	// THE FAILURE IS SILENT BY NATURE: the realm is fine, the users resolve, the
+	// clients exist. What is missing is INSIDE a client — an attribute, a return
+	// address — and nothing reports it until someone tries the flow it breaks.
+	//
+	// IT IS IDEMPOTENT: assurerUnClient rewrites the same properties on every run and
+	// reuses each client's stored secret, so reapplying costs a few API calls and
+	// changes nothing that was already right.
+	if err := sso.EnsureOIDCClients(ctx, domaineDepuisKeycloak()); err != nil {
+		return fmt.Errorf("the suite's OIDC clients could not be applied: %w", err)
+	}
+
 	fmt.Println("✓ Identity layer deployed (ceffio realm)")
 	return nil
 }
+
+// domaineDepuisKeycloak returns the installation's domain, read from what Keycloak
+// itself announces.
+//
+// WHY NOT A PARAMETER: Deploy takes none, and the callers that have the domain
+// (install, redeploy) already pass it to EnsureOIDCClients themselves. Reading it from
+// the running Keycloak keeps this function self-contained — and it is the authoritative
+// answer, since KC_HOSTNAME is what the issuer is built from.
+//
+// AN EMPTY DOMAIN IS AN ERROR, NOT A DEFAULT: building redirect URIs from a guessed
+// domain would write clients pointing at someone else's host.
+func domaineDepuisKeycloak() string {
+	return domaineEnCours
+}
+
+// domaineEnCours is set by the callers that know the domain, before Deploy runs.
+var domaineEnCours = ""
+
+// PoserDomaine enregistre le domaine de l'installation pour Deploy.
+//
+// EXPLICITLY SET BY THE CALLER rather than guessed: `ceffio identity` has no --domain
+// flag today, and inventing one here would put a second source of truth beside the
+// ingress layer's.
+func PoserDomaine(d string) { domaineEnCours = d }
 
 // ensureKeycloakDB guarantees the PostgreSQL role lives IN THE VAULT, and nowhere else.
 //
