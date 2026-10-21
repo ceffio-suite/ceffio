@@ -1,3 +1,5 @@
+> **Historical working note, kept for context. Does not describe the current code.**
+
 # Ceffio — Migration to Nextcloud Talk + HPB
 
 **Replacing the Matrix/Element + Jitsi stack with Nextcloud Talk with
