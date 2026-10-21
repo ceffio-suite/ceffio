@@ -66,6 +66,24 @@ func clientsOIDC(domain string) []client {
 			app:       "nextcloud",
 			id:        "nextcloud",
 			redirects: fmt.Sprintf("https://cloud.%s/apps/user_oidc/code,http://localhost/*", domain),
+
+			// THE RETURN ADDRESS AFTER A SIGN-OUT, and its absence was a 400 in the
+			// user's face.
+			//
+			// KEYCLOAK 26 KEEPS THIS LIST SEPARATELY from the login redirects, under an
+			// attribute: filling one does not fill the other. The nextcloud client had
+			// none, so every sign-out from Nextcloud ended on
+			//
+			//	Nous sommes désolés... L'URI de redirection est invalide
+			//
+			// while the login worked perfectly — which is why it went unnoticed for so
+			// long.
+			//
+			// THE ENTRY IS THE HOST, NOT A PATH: Nextcloud asks to come back to its own
+			// root after leaving the session, and the trailing slash is what its client
+			// sends. The wildcard covers the login redirect on localhost, which has no
+			// business being a post-logout target.
+			postLogout: fmt.Sprintf("https://cloud.%s/", domain),
 		},
 		{
 			// THE VAULT HAS A CLIENT OF ITS OWN, and two return addresses: the one for
@@ -77,6 +95,15 @@ func clientsOIDC(domain string) []client {
 			redirects: fmt.Sprintf(
 				"https://bao.%s/ui/vault/auth/oidc/oidc/callback,https://bao.%s/vault/auth/oidc/oidc/callback,http://localhost:8250/oidc/callback",
 				domain, domain),
+
+			// THE SAME MISSING LIST AS NEXTCLOUD, and nobody had reported it yet:
+			// the vault's sign-out is rare, so a 400 there stays invisible. The test
+			// caught it because it asks the question of EVERY client rather than of
+			// the one that happened to break.
+			//
+			// THE COMMAND LINE HAS NO RETURN ADDRESS: it is not a browser and closes
+			// itself. Only the web interface comes back.
+			postLogout: fmt.Sprintf("https://bao.%s/ui/vault/auth", domain),
 		},
 		{
 			// THE MAIL WEB INTERFACE, and the client was simply missing.
