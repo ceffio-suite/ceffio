@@ -881,3 +881,25 @@ func (c *Client) Pods(ctx context.Context, ns, selecteur string) ([]Pod, error) 
 	}
 	return out, nil
 }
+
+// LireObjetDans is LireObjet for a NAMESPACED resource.
+//
+// WHY THE DISTINCTION MATTERS: the dynamic client's Get takes a bare name and looks in
+// the DEFAULT namespace when the resource is namespaced. An Ingress in ceffio-identity
+// is therefore invisible to LireObjet — the call returns NotFound, and the caller
+// concludes the object does not exist. That is a lie the API does not tell; it comes from
+// asking in the wrong place.
+func (c *Client) LireObjetDans(ctx context.Context, gvk schema.GroupVersionKind, ns, nom string) (*unstructured.Unstructured, bool, error) {
+	gvr, err := c.ressourceDe(gvk)
+	if err != nil {
+		return nil, false, err
+	}
+	obj, err := c.dyn.Resource(gvr).Namespace(ns).Get(ctx, nom, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return obj, true, nil
+}
