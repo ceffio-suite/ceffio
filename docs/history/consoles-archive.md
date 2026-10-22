@@ -1,3 +1,5 @@
+> **Historical working note, kept for context. Does not describe the current code.**
+
 # ceffio-console — archived
 
 **This repository no longer builds or publishes anything.** The publication of

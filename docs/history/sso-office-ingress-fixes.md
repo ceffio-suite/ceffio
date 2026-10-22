@@ -1,3 +1,5 @@
+> **Historical working note, kept for context. Does not describe the current code.**
+
 # SSO + ONLYOFFICE via ingress: fixes validated on a Proxmox VM
 
 Documentation of the fixes needed for a stack deployed by `ceffio install` to
