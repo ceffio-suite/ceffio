@@ -78,6 +78,17 @@ func printStatus(st *stack.State, showPods bool) {
 	if st.Domain != "" {
 		fmt.Printf("Domain    %s\n", st.Domain)
 	}
+	if st.PublicIP != "" {
+		src := st.PublicIPSource
+		if st.PublicIPSources != "" {
+			src += ", " + st.PublicIPSources + " sources"
+		}
+		age := st.PublicIPAge
+		if age != "" {
+			age = ", refreshed " + age + " ago"
+		}
+		fmt.Printf("Public IP %s (%s%s)\n", st.PublicIP, src, age)
+	}
 
 	// Layers
 	fmt.Println()

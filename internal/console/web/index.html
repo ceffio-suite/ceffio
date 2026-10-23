@@ -528,6 +528,12 @@
       { lbl: 'Pods', val: `${st.podsReady}/${st.podsTotal}`, sub: 'ready', cls: st.podsReady === st.podsTotal ? 'good' : 'bad' },
       { lbl: 'TLS certificates', val: `${st.certsOK}/${st.certsN}`, sub: certMin >= 0 ? `next expiry: ${certMin} d` : 'valid', cls: certAlert ? 'warn' : 'good' },
       { lbl: 'Domain', val: '✓', sub: esc(st.domain || ''), cls: 'good' },
+      // THE PUBLIC ADDRESS, with its AGE: "published" and "published 3 days
+      // ago" look identical otherwise, and only the second means the reporter
+      // is stuck while the media keep announcing an address that may be gone.
+      { lbl: 'Public address', val: (st.publicIP && st.publicIP.published) ? esc(st.publicIP.ipv4) : '—',
+        sub: (st.publicIP && st.publicIP.published) ? `${esc(st.publicIP.source)} · ${esc(st.publicIP.age || '')}` : 'not published',
+        cls: (st.publicIP && st.publicIP.published) ? 'good' : 'warn' },
     ];
     $('kpis').innerHTML = kpis.map(k => `<div class="kpi ${k.cls}"><div class="lbl">${k.lbl}</div><div class="val">${k.val}</div><div class="sub">${k.sub}</div></div>`).join('');
 

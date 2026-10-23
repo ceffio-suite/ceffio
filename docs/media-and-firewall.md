@@ -13,7 +13,7 @@ firewall mistakes that make a call connect with no audio.
 | 5349 | TCP | TURN over TLS | the host, **directly** |
 | 49152–49200 | UDP | coturn relay range — the ports relayed media actually uses | the host, **directly** |
 | 20000–20100 | UDP | Janus media (the SFU carries the video itself) | the host, **directly** |
-| 19302 | UDP | STUN, used once at start-up to discover the public address | the host |
+| 19302 | UDP | STUN, outbound only — learning the public address; no inbound rule needed | — |
 
 `talk.<domain>` is the name that resolves to the machine for TURN and STUN. It is **not**
 behind Traefik: browsers reach these ports directly, and coturn serves its own certificate.
@@ -84,20 +84,40 @@ A successful run prints the relay address it was given. A failure names the phas
 the difference between "the port is closed" and "the credential is wrong", and it is worth
 using instead of guessing from a browser console.
 
-## The one dependency on a third-party service
+## Where the public address comes from
 
-Ceffio discovers its public address at start-up by asking **`stun.l.google.com:19302`**
-(`internal/talk/talk.go`, `stunPublic`).
+Nothing has to be supplied at installation: a small reporter (module `public-ip`,
+`ceffio publicip serve`) discovers the machine's public IPv4 address and publishes it in
+the ConfigMap `ceffio-system/ceffio-public-ip`. Janus and coturn read that value when
+their pod starts; the console and `ceffio status` display it with its age.
 
-This is the only outbound call the platform makes to a service it does not own, and it is
-worth stating plainly: the README used to claim there was no dependency on a third-party
-service at all, which is not true.
+**Several sources, and they must agree.** The reporter queries a list of STUN servers
+over UDP — the same NAT path the media uses, which is why STUN comes first — and accepts
+an address only when at least two sources corroborate it. If the STUN path is filtered it
+falls back to HTTP echo services. A disagreement is reported rather than hidden: two NAT
+pools answering differently is a diagnosis, not a value.
 
-It is a **lookup**, not a tunnel: no user data crosses it, and a successful call does not
-use it afterwards. But it is a dependency, and a machine with no route to that address will
-fail to configure the relay.
+The default list (Settings → module `public-ip` → group `network`) is
+`stun.nextcloud.com:443`, `stun.cloudflare.com:3478` and `global.stun.twilio.com:3478`,
+with `ipv4.icanhazip.com`, `checkip.amazonaws.com` and `api.ipify.org` as HTTP fallback.
+Google's STUN server is **not** in the list: the suite claims sovereignty, and one vendor
+is one point of trust as much as one point of failure. It stays available as a setting,
+along with a static address for an air-gapped installation (discovery is then disabled
+and the value republished unchanged).
 
-Making the STUN server a setting is a known improvement, not done yet.
+**When the address changes**, the reporter republishes it and rolls the Deployments
+labelled `ceffio.io/consumes-public-ip=true`; their pods resolve the new value from the
+ConfigMap at start. There is no manual step and no stale candidate — a deployment whose
+pods read the address once, at start-up, and are never rolled would keep announcing an
+address that no longer exists.
+
+**To diagnose**, run `ceffio publicip check`: it tests every source separately and prints
+which one fails. This is deliberately not the consensus path — the consensus hides a dead
+source as long as two others agree, and the dead source is exactly what is being looked
+for.
+
+The coturn instance of the installation cannot serve as the reporter's STUN server: asked
+from inside the cluster, it sees the pod's private address. The lookup has to leave.
 
 ## See also
 

@@ -100,8 +100,11 @@ var janusImage = janusImageDuRegistre()
 // address the signaling hands to browsers), but none of them needs it to be
 // provided.
 //
-//   - Janus and coturn discover it themselves at startup, via STUN, with the
-//     client present in their respective images;
+//   - Janus and coturn read the address PUBLISHED by the public-ip module
+//     (ConfigMap ceffio-public-ip), exposed as an optional env. When nothing
+//     has been published yet — first boot, air-gap, reporter not ready — they
+//     fall back to their own STUN lookup, so the layer never depends on the
+//     reporter to start;
 //   - the signaling announces a public NAME (talk.<domain>), which survives
 //     an address change where a frozen value would stop working silently.
 //
@@ -115,6 +118,12 @@ func Deploy(ctx context.Context) error {
 		return err
 	}
 	if err := deployServiceAccount(ctx); err != nil {
+		return err
+	}
+	// The reporter needs to roll the consuming Deployments when the address
+	// changes. The right is granted by the namespace's OWNER (this layer), not
+	// by the reporter to itself.
+	if err := autoriserPropagation(ctx); err != nil {
 		return err
 	}
 	if err := deployNATS(ctx); err != nil {
@@ -282,9 +291,10 @@ func deployCoturn(ctx context.Context) error {
 	// move) and a deployment carrying it in hard stops working silently the
 	// day it changes. No infrastructure value enters the repository.
 	//
-	// coturn therefore discovers it itself at startup, with the STUN client
-	// present in its image, against the same server as the one given to
-	// Janus — a single source of truth for the whole platform.
+	// coturn therefore reads the address published by the public-ip module;
+	// its own STUN client only runs when nothing was published yet (first
+	// boot), so the platform keeps ONE value rather than two discoveries that
+	// can disagree.
 	//
 	// If the detection fails (filtered UDP), the option is simply omitted:
 	// the relay then only serves inside the network, which is better than an
@@ -293,12 +303,24 @@ func deployCoturn(ctx context.Context) error {
 	// interprets $(...) and ${...} in a container's arguments, which would
 	// damage the script. We only use simple variables and a redirection to a
 	// temporary file.
-	script := fmt.Sprintf(`turnutils_stunclient -p %[1]d %[2]s 2>&1 \
-    | sed -n 's/.*UDP reflexive addr: \([0-9.]*\):.*/\1/p' \
-    | head -1 > /tmp/public-address.txt || true
+	script := fmt.Sprintf(`# THE PUBLISHED ADDRESS WINS.
+#
+# The reporter (module public-ip) discovers the address once and publishes it
+# in the ConfigMap exposed here as CEFFIO_PUBLIC_IP. That is the value the rest
+# of the suite reads and the one the console displays; discovering it again
+# here could silently disagree with it.
+#
+# THE LOCAL LOOKUP IS KEPT AS A FIRST-BOOT FALLBACK, not as a second truth: it
+# only runs when nothing was published yet (reporter not ready, air-gap, or a
+# value deliberately cleared).
+ADDRESS="$CEFFIO_PUBLIC_IP"
 
-ADDRESS=""
-read ADDRESS < /tmp/public-address.txt || true
+if [ -z "$ADDRESS" ]; then
+    turnutils_stunclient -p %[1]d %[2]s 2>&1 \
+        | sed -n 's/.*UDP reflexive addr: \([0-9.]*\):.*/\1/p' \
+        | head -1 > /tmp/public-address.txt || true
+    read ADDRESS < /tmp/public-address.txt || true
+fi
 
 # THE LISTENING ADDRESS IS DISCOVERED, not assumed.
 #
@@ -393,7 +415,9 @@ kind: Deployment
 metadata:
   name: coturn
   namespace: %[1]s
-  labels: {app: coturn}
+  labels:
+    app: coturn
+    ceffio.io/consumes-public-ip: "true"
 spec:
   # Recreate: same reason as Janus — hostNetwork pod, hence the host's ports
   # are occupied. See the detailed comment on the Janus deployment.
@@ -436,6 +460,12 @@ spec:
         # hostNetwork is true, so this is also the address the host uses to
         # leave the network: the only one the NAT maps.
         - {name: LOCALE_IP, value: "%[7]s"}
+        # PUBLISHED ADDRESS, resolved at pod start. optional: true — a missing
+        # ConfigMap must not keep the relay from starting; the script falls
+        # back to its own lookup in that case.
+        - name: CEFFIO_PUBLIC_IP
+          valueFrom:
+            configMapKeyRef: {name: ceffio-public-ip, key: ipv4, optional: true}
         ports:
         - {name: turn, containerPort: %[4]d, protocol: UDP}
         - {name: turn-tcp, containerPort: %[4]d, protocol: TCP}
@@ -616,7 +646,9 @@ kind: Deployment
 metadata:
   name: janus
   namespace: %[1]s
-  labels: {app: janus}
+  labels:
+    app: janus
+    ceffio.io/consumes-public-ip: "true"
 spec:
   # Recreate, NOT RollingUpdate. The pod is on hostNetwork: it occupies the
   # VM's ports (media 20000-20100, API 8088, WS 8188). A progressive deploy
@@ -642,6 +674,13 @@ spec:
         image: %[2]s
         env:
         - {name: JANUS_RTP_PORT_RANGE, value: "%[4]d-%[5]d"}
+        # PUBLISHED ADDRESS: what Janus announces in its ICE candidates
+        # (nat_1_1_mapping), read at pod start. The entrypoint SKIPS its own
+        # STUN query when this is set — one source, not two.
+        - name: JANUS_PUBLIC_IP
+          valueFrom:
+            configMapKeyRef: {name: ceffio-public-ip, key: ipv4, optional: true}
+        # FALLBACK ONLY: used when no address was published yet.
         # PUBLIC STUN server: source of the public address announced to the
         # browsers. The entrypoint resolves it to IPv4 (a hostname resolved
         # to IPv6 would make it announce an IPv6 address, unreachable in
@@ -1166,4 +1205,44 @@ func janusImageDuRegistre() string {
 		panic("janus is missing from the version registry (internal/version)")
 	}
 	return c.Image
+}
+
+// autoriserPropagation grants the public-ip reporter the right to roll the
+// Deployments of this namespace that declared they consume the address.
+//
+// WHY HERE AND NOT IN THE public-ip LAYER: the namespace belongs to talk. A
+// component that writes a Role in a namespace it does not own reaches into
+// another layer's perimeter, and the Role would outlive its owner.
+func autoriserPropagation(ctx context.Context) error {
+	manifeste := fmt.Sprintf(`apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ceffio-public-ip-rollout
+  namespace: %[1]s
+rules:
+# The REPORTED VALUE must exist in THIS namespace for the pods to read it:
+# configMapKeyRef does not cross namespaces. The reporter copies it here first,
+# then rolls the deployments below.
+- apiGroups: [""]
+  resources: [configmaps]
+  verbs: [get, create, update]
+- apiGroups: [apps]
+  resources: [deployments]
+  verbs: [get, list, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ceffio-public-ip-rollout
+  namespace: %[1]s
+subjects:
+- kind: ServiceAccount
+  name: ceffio-public-ip
+  namespace: ceffio-system
+roleRef:
+  kind: Role
+  name: ceffio-public-ip-rollout
+  apiGroup: rbac.authorization.k8s.io
+`, ns)
+	return appliquer(ctx, manifeste)
 }

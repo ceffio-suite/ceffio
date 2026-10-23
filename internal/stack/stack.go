@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Layer of the stack: an application namespace and the pods it contains.
@@ -75,6 +76,18 @@ type State struct {
 	ReadyPods        int           `json:"ready_pods"`
 	CompletedPods    int           `json:"completed_pods"`
 	TotalRestarts    int           `json:"total_restarts"`
+
+	// PUBLIC ADDRESS, when the reporter has published one. Empty on an
+	// installation that predates it, or before the first discovery: an absent
+	// value is a normal state, not a failure.
+	PublicIP        string `json:"public_ip,omitempty"`
+	PublicIPSource  string `json:"public_ip_source,omitempty"`
+	PublicIPSources string `json:"public_ip_sources,omitempty"`
+	PublicIPAge     string `json:"public_ip_age,omitempty"`
+	// PublicIPFresh is false when the published value has not been refreshed
+	// for more than ten minutes: the reporter is stuck, and every component
+	// is announcing an address that may no longer exist.
+	PublicIPFresh bool `json:"public_ip_fresh,omitempty"`
 }
 
 type Node struct {
@@ -118,6 +131,26 @@ func Collect(ctx context.Context) *State {
 		return st
 	}
 	st.ClusterReachable = true
+
+	// The published public address. Read here rather than in cmd/ so that
+	// `--json` carries it too: a monitoring script should not have to call
+	// kubectl behind the command's back.
+	if brut, err := kubectlJSON(ctx, "get", "configmap", "ceffio-public-ip",
+		"-n", "ceffio-system", "-o", "json"); err == nil {
+		var cm struct {
+			Data map[string]string `json:"data"`
+		}
+		if json.Unmarshal(brut, &cm) == nil {
+			st.PublicIP = strings.TrimSpace(cm.Data["ipv4"])
+			st.PublicIPSource = strings.TrimSpace(cm.Data["source"])
+			st.PublicIPSources = strings.TrimSpace(cm.Data["sources"])
+			if t, err := time.Parse(time.RFC3339, cm.Data["updated-at"]); err == nil {
+				age := time.Since(t)
+				st.PublicIPAge = ageCourt(age)
+				st.PublicIPFresh = age <= 10*time.Minute
+			}
+		}
+	}
 
 	var nl struct {
 		Items []struct {
@@ -363,4 +396,17 @@ func Collect(ctx context.Context) *State {
 	}
 
 	return st
+}
+
+// ageCourt renders a duration the way an operator reads it: seconds under a
+// minute, then minutes, then hours.
+func ageCourt(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	}
 }
