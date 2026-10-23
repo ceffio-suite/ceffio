@@ -57,11 +57,13 @@ The product promise is that all of this is **self-supporting in one command**: S
 across every app from the start, credentials are generated and sealed in the vault — never
 asked for in a prompt, never left in a file.
 
-**One dependency is not self-hosted, and it is stated rather than hidden:** the public
-address is discovered through `stun.l.google.com` at start-up. It is a lookup, not a
-tunnel, and no user data crosses it — but it is a third-party service, and a machine with
-no route to it cannot configure the relay. Making it a setting is a known improvement. See
-[media-and-firewall.md](docs/media-and-firewall.md).
+**The public address is discovered, not asked for.** A small reporter (module
+`public-ip`) queries several STUN servers — the same NAT path as the media — and, when
+the STUN path is filtered, HTTP echo services. It publishes the address the sources agree
+on in a ConfigMap that Janus, coturn, the console and `ceffio status` read; when the
+address changes it republishes and rolls the pods that consume it. No user data crosses
+those lookups, and the source list is a setting: the suite does not depend on a single
+vendor for it. See [media-and-firewall.md](docs/media-and-firewall.md).
 
 ### Why Talk instead of Element + Jitsi
 
@@ -218,6 +220,7 @@ Prerequisites:
 | `ceffio users` | provision accounts (Keycloak + applications) |
 | `ceffio theme` | reapply the Ceffio theme to Nextcloud |
 | `ceffio dns` | check DNS configuration (A, AAAA, MX, SPF, DKIM, DMARC, PTR) |
+| `ceffio publicip` | the published public address, and a per-source check (`check`) |
 | `ceffio expose` | publish the suite behind the firewall |
 | `ceffio uninstall` | uninstall and destroy the cluster |
 
@@ -505,7 +508,8 @@ Open points, stated plainly:
   operator task (`ceffio dns` checks it).
 - **One node is not a cluster.** Longhorn replicates across disks; losing the machine loses
   the data. The monitoring page says so rather than implying redundancy.
-- **A third-party STUN lookup** is the only external dependency (see above).
+- **The public address lookup is the only external dependency** (several STUN servers,
+  HTTP fallback, all configurable — see above).
 - **`--profile` changes nothing.** It is accepted and displayed; the files in `profiles/`
   are sizing guidance the installer does not parse.
 - **No HA profile yet.** `enterprise-ha.yaml` describes the target shape; the installer does

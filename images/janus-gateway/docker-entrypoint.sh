@@ -73,7 +73,14 @@ fi
 #
 # Verified in the Janus 1.3.0 source code, then in real execution.
 # ---------------------------------------------------------------------------
-if [ -n "${JANUS_STUN_SERVER:-}" ]; then
+if [ -n "${JANUS_PUBLIC_IP:-}" ]; then
+    # THE PUBLISHED ADDRESS WINS. The public-ip reporter discovered it once and
+    # published it in a ConfigMap; nat_1_1_mapping was already applied in
+    # section 1. Querying STUN as well would give a SECOND source that could
+    # disagree with the one the rest of the suite uses — and nothing would say
+    # which one the browsers received.
+    echo "janus: public address provided (${JANUS_PUBLIC_IP}) — STUN detection skipped"
+elif [ -n "${JANUS_STUN_SERVER:-}" ]; then
     STUN_PORT="${JANUS_STUN_PORT:-3478}"
 
     # RESOLUTION TO IPv4 — ESSENTIAL.

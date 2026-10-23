@@ -14,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/ceffio-suite/ceffio/internal/module"
+	"github.com/ceffio-suite/ceffio/internal/publicip"
 	"github.com/ceffio-suite/ceffio/internal/version"
 )
 
@@ -258,6 +259,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, 200, map[string]any{
 		"domain":    s.Domain,
+		"publicIP":  s.publicIPInfo(ctx),
 		"stack":     stack,
 		"services":  services,
 		"ingress":   ing,
@@ -414,5 +416,33 @@ func (s *Server) listCerts(ctx context.Context) []CertInfo {
 		out = append(out, c)
 	}
 	sort.Slice(out, func(a, b int) bool { return out[a].Name < out[b].Name })
+	return out
+}
+
+// publicIPInfo is the address the whole suite announces, with its age.
+//
+// WHY THE AGE AND NOT ONLY THE ADDRESS: a value refreshed 90 seconds ago and
+// one refreshed three days ago look identical on a page, and only the second
+// one means the reporter is stuck while Janus keeps announcing an address
+// that may no longer exist.
+func (s *Server) publicIPInfo(ctx context.Context) map[string]any {
+	a, ok, err := publicip.Lire(ctx, s.kube)
+	if err != nil {
+		return map[string]any{"published": false, "error": err.Error()}
+	}
+	if !ok || a.Vide() {
+		return map[string]any{"published": false}
+	}
+	out := map[string]any{
+		"published": true,
+		"ipv4":      a.IPv4,
+		"source":    a.Source,
+		"sources":   a.Sources,
+		"total":     a.Total,
+		"age":       ageHumain(time.Since(a.UpdatedAt)),
+	}
+	if len(a.Divergence) > 0 {
+		out["divergence"] = a.Divergence
+	}
 	return out
 }

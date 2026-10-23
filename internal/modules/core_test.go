@@ -11,12 +11,12 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/module"
 )
 
-// idsSocle lists the ten core layers, now Core modules. The order follows
-// the one of the install sequence (cmd/ceffio/install.go), so that the
-// table below stays readable like the product itself.
+// idsSocle lists the core layers, now Core modules. The order follows the
+// one of the install sequence (cmd/ceffio/install.go), so that the table
+// below stays readable like the product itself.
 var idsSocle = []string{
 	"storage", "platform", "data", "vault", "identity", "files",
-	"office", "talk", "ingress", "mail", "console",
+	"office", "public-ip", "talk", "ingress", "mail", "console",
 }
 
 // entreeCatalogue is the REFERENCE COPY of a row of catalogueServices
