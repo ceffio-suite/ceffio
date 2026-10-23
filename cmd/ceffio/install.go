@@ -24,6 +24,7 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/module"
 	"github.com/ceffio-suite/ceffio/internal/office"
 	"github.com/ceffio-suite/ceffio/internal/platform"
+	"github.com/ceffio-suite/ceffio/internal/publicip"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"github.com/ceffio-suite/ceffio/internal/sso"
 	"github.com/ceffio-suite/ceffio/internal/stacks"
@@ -378,6 +379,23 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	// remnants on an existing cluster. Talk replaces BOTH chat and video.
 	if err := stacks.RetirerMatrixEtJitsi(ctx, o.domain); err != nil {
 		return err
+	}
+	// PUBLIC ADDRESS, BEFORE TALK. Janus and coturn read the published value
+	// at pod start; when nothing is published yet they fall back to their own
+	// STUN lookup, so this step is an improvement, never a prerequisite.
+	//
+	// THE WAIT IS BOUNDED AND NON-FATAL: a slow image pull must not fail an
+	// installation that would work anyway. Half a minute is enough for the
+	// first publication; beyond that, Talk deploys and will pick the value up
+	// at its next rollout.
+	if cs, err := kubeClient(); err != nil {
+		fmt.Printf("  ! public address reporter skipped: %v\n", err)
+	} else if err := publicip.Deploy(ctx, cs); err != nil {
+		fmt.Printf("  ! public address reporter: %v\n", err)
+	} else if a, ok := publicip.Attendre(ctx, cs, 30*time.Second); ok {
+		fmt.Printf("  ✓ public address %s (%d/%d sources)\n", a.IPv4, a.Sources, a.Total)
+	} else {
+		fmt.Println("  ∙ public address not published yet — Talk falls back to its own STUN lookup")
 	}
 	// Talk + High Performance Backend: messaging AND videoconferencing, inside
 	// Nextcloud. Deployed after the removal, to free up resources first.

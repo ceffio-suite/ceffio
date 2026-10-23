@@ -104,6 +104,27 @@ func diagnose(st *stack.State) []stack.Finding {
 		}
 	}
 
+	// Public address, published by the public-ip module.
+	//
+	// WHY IT IS A FINDING AND NOT A LINE OF OUTPUT: the failure it prevents is
+	// silent — Janus and coturn keep announcing whatever they read at start,
+	// the calls connect and carry no audio, and nothing in the cluster looks
+	// broken. A stale value deserves the same weight as a crashed pod.
+	switch {
+	case st.PublicIP == "":
+		f = append(f, stack.Finding{
+			Severity: "warning", Scope: "network", Title: "Public address not published",
+			Detail: "Janus and coturn fall back to their own STUN lookup.",
+			Action: "ceffio module status public-ip · ceffio publicip check",
+		})
+	case !st.PublicIPFresh:
+		f = append(f, stack.Finding{
+			Severity: "warning", Scope: "network", Title: "Public address not refreshed",
+			Detail: "Last refresh " + st.PublicIPAge + " ago: the reporter is stuck, and the media announce an address that may no longer exist.",
+			Action: "kubectl logs -n ceffio-system deploy/ceffio-public-ip · ceffio publicip check",
+		})
+	}
+
 	// Application layers
 	for _, l := range st.Layers {
 		switch {

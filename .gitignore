@@ -2,3 +2,8 @@
 *.test
 *.out
 .DS_Store
+
+# Local build caches used when the default Go cache is not writable
+.cachego/
+.gomodcache/
+.gotmp/

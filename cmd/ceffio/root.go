@@ -44,6 +44,7 @@ Stalwart) behind a unified install and management experience.`,
 		newDNSCmd(),
 		newExposeCmd(),
 		newVaultCmd(),
+		newPublicIPCmd(),
 		newThemeCmd(),
 	)
 
