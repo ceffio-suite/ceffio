@@ -77,3 +77,15 @@ func TestModelesConnus(t *testing.T) {
 		}
 	}
 }
+
+// TestNomDeploiement fixes the naming rule: HaRP replaces the underscores of
+// an app id, and a selector built from the raw id is rejected by the label
+// parser instead of answering "no pod".
+func TestNomDeploiement(t *testing.T) {
+	if got := nomDeploiement(); got != "nc-app-live-transcription" {
+		t.Errorf("nomDeploiement() = %q, expected nc-app-live-transcription", got)
+	}
+	if strings.Contains(nomDeploiement(), "_") {
+		t.Error("a Kubernetes label value cannot contain an underscore")
+	}
+}

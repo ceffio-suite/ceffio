@@ -570,6 +570,18 @@ func attendreDisparition(ctx context.Context, cli *k8sapi.Client, pod string) er
 	return fmt.Errorf("the ExApp is still listed after 120s — check the ExApp namespace %s", nsExapps)
 }
 
+// nomDeploiement is the name HaRP gives the ExApp's Deployment, its Service and
+// the label of its pods: nc-app-<id>, with UNDERSCORES REPLACED BY HYPHENS.
+//
+// WHY IT MATTERS: "live_transcription" is a valid AppAPI id but not a valid
+// Kubernetes LABEL VALUE, and HaRP sanitises it on the way in. Querying with
+// the raw id does not fail cleanly — the selector parser answers
+// `found '=', expected ','`, which reads as "no such pod" and sends the
+// diagnosis after a nonexistent deployment.
+func nomDeploiement() string {
+	return "nc-app-" + strings.ReplaceAll(appTranscription, "_", "-")
+}
+
 // exappsExec runs a shell command inside the ExApp pod, THROUGH THE KUBERNETES
 // API — same reasoning as occ below: the console's container is distroless and
 // has no kubectl to shell out to.
@@ -577,13 +589,20 @@ func attendreDisparition(ctx context.Context, cli *k8sapi.Client, pod string) er
 // The ExApp is the only place that holds the speech-model volume, so the shell
 // available is the one in ITS image (Debian here, with curl), not Nextcloud's.
 func exappsExec(ctx context.Context, cli *k8sapi.Client, script string) (string, error) {
-	pod, err := cli.PodDuDeploiement(ctx, nsExapps, "nc-app-"+appTranscription, "app="+appTranscription)
+	// The fourth argument is the LABEL VALUE, not a selector: PodDuDeploiement
+	// prefixes "app=" itself, and passing a selector here yields "app=app=…",
+	// which the label parser rejects.
+	pod, err := cli.PodDuDeploiement(ctx, nsExapps, nomDeploiement(), nomDeploiement())
 	if err != nil {
 		return "", fmt.Errorf("no %s pod in %s: the model cannot be placed before the ExApp runs: %w",
 			appTranscription, nsExapps, err)
 	}
-	// The container name is the app id, which is how HaRP names it.
-	return cli.Executer(ctx, nsExapps, pod, appTranscription, "sh", "-c", script)
+	// NO CONTAINER NAME: the API then targets the pod's only container, which
+	// is what this ExApp has. HaRP names it "app" — not the app id, which is
+	// what an earlier version assumed, and the failure ("container
+	// live_transcription is not valid for pod …") is reported only at exec
+	// time, long after the model was believed placed.
+	return cli.Executer(ctx, nsExapps, pod, "", "sh", "-c", script)
 }
 
 // occ runs an occ command inside the Nextcloud pod, THROUGH THE KUBERNETES API.
