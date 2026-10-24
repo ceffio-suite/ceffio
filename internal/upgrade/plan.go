@@ -58,7 +58,7 @@ func Preparer(ctx context.Context, cible []version.Composant) *Plan {
 	// 1. Does the cluster respond, and is it healthy? Upgrading a version on
 	//    a degraded cluster makes it impossible to tell the original outage
 	//    from the one we just introduced.
-	nodes, introuvables := imagesEnService(ctx)
+	nodes := imagesEnService(ctx)
 	p.NoeudsTotal, p.NoeudsPrets = noeuds(ctx)
 	if p.NoeudsTotal == 0 {
 		p.Blocages = append(p.Blocages, "Cluster unreachable: cannot prepare an upgrade.")
@@ -98,11 +98,10 @@ func Preparer(ctx context.Context, cible []version.Composant) *Plan {
 		// (that was the flaw of the first version, which reported "no
 		// drift" while a different image was running).
 		if e.Installee == "" {
-			raison := "not deployed on this installation"
-			if _, vu := introuvables[c.Nom]; vu {
-				raison = "image not identifiable on this installation"
-			}
-			p.Alertes = append(p.Alertes, fmt.Sprintf("%s : %s", c.Nom, raison))
+			// NOTHING WAS FOUND FOR THIS REPOSITORY: the layer is absent (an
+			// installation without Talk, for instance). Naming the repository
+			// says what was looked for, which a bare "not deployed" does not.
+			p.Alertes = append(p.Alertes, fmt.Sprintf("%s : no running image from %s", c.Nom, depotDe(c.Image)))
 		} else if e.Installee != e.Cible {
 			e.Ecart = true
 			p.Changements = append(p.Changements, e)
@@ -115,26 +114,26 @@ func Preparer(ctx context.Context, cible []version.Composant) *Plan {
 	return p
 }
 
-// imagesEnService reads, for each known component, the image actually used
-// by the running pods. We query the Kubernetes API rather than re-reading
-// the repository files: that is the only way to see drift between what the
-// code declares and what is running.
-// imagesEnService reads the REAL inventory of images in service.
+// imagesEnService reads, for each registry component, the image actually used
+// by the running pods.
 //
-// First version, and why it was wrong: for each component, it looked for a
-// pod whose image contained a predefined fragment ("redis:", "keycloak", …).
-// Two flaws: the fragment was guessed, and a missing match was silently
-// ignored — the comparison skipped the component and `upgrade` reported "no
-// drift" while a different image was running.
+// WHY BY REPOSITORY AND NOT BY SUBSTRING. The first version matched a
+// hand-written fragment against every running image ("nextcloud", "redis:").
+// On a real installation it associated the `nextcloud` component with
+// docker.io/nextcloud/aio-talk-recording:20261014_095932 — a different product
+// whose repository merely STARTS with the same word — and reported a drift
+// that did not exist. The same table covered six components out of twelve:
+// janus, coturn, nats, stalwart, openbao and the others were declared "not
+// deployed" while they were serving traffic.
 //
-// Now: we read ALL the images of the ceffio-* pods, and match them by name.
-// What is not found is reported as such, instead of passing as compliant.
-func imagesEnService(ctx context.Context) (map[string]versionImage, map[string]versionImage) {
-	trouvees := map[string]versionImage{}
-
+// The registry already carries the answer: every component pins a FULL image
+// reference. Two images belong to the same component when their REPOSITORY is
+// the same, whatever the tag — the tag is precisely what is being compared.
+func imagesEnService(ctx context.Context) map[string]versionImage {
+	var images []string
 	raw, err := kubectl(ctx, "get", "pods", "-A", "-o", "json")
 	if err != nil {
-		return trouvees, nil
+		return map[string]versionImage{}
 	}
 	var doc struct {
 		Items []struct {
@@ -143,66 +142,104 @@ func imagesEnService(ctx context.Context) (map[string]versionImage, map[string]v
 			} `json:"metadata"`
 			Spec struct {
 				Containers []struct {
-					Name  string `json:"name"`
 					Image string `json:"image"`
 				} `json:"containers"`
 			} `json:"spec"`
 		} `json:"items"`
 	}
 	if json.Unmarshal([]byte(raw), &doc) != nil {
-		return trouvees, nil
+		return map[string]versionImage{}
 	}
-
-	// We collect all the images from the ceffio-* namespaces (and the
-	// operators).
-	toutes := map[string]string{} // container name -> image
 	for _, p := range doc.Items {
 		ns := p.Metadata.Namespace
 		if !strings.HasPrefix(ns, "ceffio-") && ns != "cnpg-system" && ns != "cert-manager" {
 			continue
 		}
 		for _, c := range p.Spec.Containers {
-			toutes[c.Name] = c.Image
-			// We also index by image, for substring matching.
-			toutes["img:"+c.Image] = c.Image
+			if c.Image != "" {
+				images = append(images, c.Image)
+			}
+		}
+	}
+	return associer(images, version.Registry)
+}
+
+// depotsAlias lists, per component, the repositories a PREVIOUS version of the
+// product used. Without it, an installation still running the old image would
+// be reported "not deployed" instead of "to upgrade" — the very mistake this
+// file exists to avoid (Valkey replaced Redis on the licence migration).
+var depotsAlias = map[string][]string{
+	"valkey": {"docker.io/valkey/valkey", "docker.io/library/redis"},
+}
+
+// associer maps each component to a running image of the same repository.
+// It is pure, so the rule is testable without a cluster.
+func associer(images []string, composants []version.Composant) map[string]versionImage {
+	parDepot := map[string][]string{}
+	for _, img := range images {
+		if d := depotDe(img); d != "" {
+			parDepot[d] = append(parDepot[d], img)
 		}
 	}
 
-	// Component name -> acceptable image fragments.
-	// Several fragments per component: the container name varies with how
-	// the application is packaged.
-	regles := map[string][]string{
-		"keycloak":   {"keycloak"},
-		"nextcloud":  {"nextcloud"},
-		"onlyoffice": {"documentserver"},
-		// Valkey replaced Redis (license migration): the running pod carries the
-		// valkey image. Keep "redis:" too, so an installation still running the
-		// old image is FOUND and reported as drift, not as missing.
-		"valkey":         {"valkey/valkey:", "redis:"},
-		"cloudnative-pg": {"cloudnative-pg"},
-		"cert-manager":   {"cert-manager"},
+	trouvees := map[string]versionImage{}
+	for _, c := range composants {
+		candidats := append([]string(nil), parDepot[depotDe(c.Image)]...)
+		for _, d := range depotsAlias[c.Nom] {
+			candidats = append(candidats, parDepot[d]...)
+		}
+		if img := plusFrequent(candidats); img != "" {
+			trouvees[c.Nom] = img
+		}
 	}
+	return trouvees
+}
 
-	inconnues := map[string]versionImage{}
-	for composant, fragments := range regles {
-		trouve := false
-		for _, img := range toutes {
-			for _, f := range fragments {
-				if strings.Contains(img, f) {
-					trouvees[composant] = img
-					trouve = true
-					break
-				}
-			}
-			if trouve {
-				break
-			}
-		}
-		if !trouve {
-			inconnues[composant] = ""
+// plusFrequent picks the image carried by the most pods. During a rollout two
+// tags coexist: counting says which one the installation is actually running,
+// and the sort makes the answer deterministic when they are equally frequent.
+func plusFrequent(refs []string) string {
+	if len(refs) == 0 {
+		return ""
+	}
+	compte := map[string]int{}
+	for _, r := range refs {
+		compte[r]++
+	}
+	meilleur, n := "", 0
+	for r, c := range compte {
+		if c > n || (c == n && r < meilleur) {
+			meilleur, n = r, c
 		}
 	}
-	return trouvees, inconnues
+	return meilleur
+}
+
+// depotDe returns the repository of an image reference, without tag or digest,
+// with the short Docker form expanded: kubelet may report `nextcloud:34.0.3`
+// where the registry says `docker.io/library/nextcloud:34.0.3`, and the two
+// must compare equal.
+func depotDe(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if i := strings.Index(ref, "@"); i >= 0 {
+		ref = ref[:i]
+	}
+	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
+		ref = ref[:i]
+	}
+	if ref == "" {
+		return ""
+	}
+	premier := ref
+	if i := strings.Index(ref, "/"); i >= 0 {
+		premier = ref[:i]
+	} else {
+		return "docker.io/library/" + ref
+	}
+	if strings.ContainsAny(premier, ".:") || premier == "localhost" {
+		return ref
+	}
+	return "docker.io/" + ref
 }
 
 // versionImage is a string alias, for signature readability.
