@@ -6,7 +6,9 @@ package exapps
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -38,7 +40,11 @@ const (
 //
 // Hence: opt-in at install time (--live-transcription), and fully managed from
 // the administration console afterwards.
-func TranscriptionDeploye(ctx context.Context, domain string) error {
+//
+// langues are the speech models placed on disk — the module's `languages`
+// setting, already validated by LanguesDepuisListe. They are placed LAST, once
+// the ExApp pod exists, because that pod is what holds the volume.
+func TranscriptionDeploye(ctx context.Context, domain string, langues []string) error {
 	fmt.Println("\nDeploying live transcription (ExApp)...")
 
 	cli, err := k8sapi.Nouveau()
@@ -78,7 +84,35 @@ func TranscriptionDeploye(ctx context.Context, domain string) error {
 		return err
 	}
 
-	fmt.Printf("∙ registering %s (signaling: %s)\n", appTranscription, urlSignaling)
+	// WHICH SPEECH MODELS GET DOWNLOADED.
+	//
+	// The ExApp announces 27 languages but downloads three: it asks for the
+	// whole HuggingFace repository with no filter, and the repository's three
+	// largest models happen to be the ones that fit its default budget —
+	// en-us (2.9 GB), ar (700 MB) and br (311 MB), 3.6 GB in total. Every
+	// other language is offered in the interface and then fails at the first
+	// call with
+	//
+	//   Error in connection and start of the Vosk server.
+	//   Cannot continue further.
+	//
+	// because vosk_server.py loads a directory that was never downloaded, and
+	// the process dies on the missing model. Measured: a French call, French
+	// selected, `vosk-model-small-fr-0.22` absent, Vosk core dump.
+	//
+	// So we download the models ourselves, into the ExApp's volume, before it
+	// ever starts. The ExApp then finds the directory it expects and serves the
+	// language instead of dying on it.
+	//
+	// The alternative — letting the ExApp fetch and patching its image to filter
+	// — means forking an upstream image and rebuilding it on every release to
+	// carry a one-line change. Placing the files is the smaller, more honest
+	// intervention: it uses the same volume the ExApp reads, and it survives the
+	// ExApp being reinstalled or upgraded.
+	if len(langues) == 0 {
+		return errors.New("no speech language configured: the app would advertise transcription and serve no model")
+	}
+	fmt.Printf("∙ speech models: %s%s\n", strings.Join(langues, ", "), resumeModeles(langues))
 
 	// REGISTER WITHOUT --wait-finish, and this is not an oversight.
 	//
@@ -93,14 +127,31 @@ func TranscriptionDeploye(ctx context.Context, domain string) error {
 	// The order has to be register -> enable -> verify. We do not need
 	// --wait-finish anyway: the enable step below IS the confirmation, and it
 	// fails loudly if the ExApp did not come up.
-	sortie, err := occ(ctx, cli, pod,
-		"app_api:app:register", appTranscription,
-		"--env", "LT_HPB_URL="+urlSignaling,
-		"--env", "LT_INTERNAL_SECRET="+secretInterne)
+	//
+	// REGISTRATION IS CONDITIONAL, AND THIS IS WHAT MAKES A RE-RUN USEFUL.
+	// `app_api:app:register` refuses an appid it already knows, and AppAPI has
+	// no update command. Called unconditionally, a second installation would
+	// fail HERE — before the models, which are the reason to run it again. On
+	// an existing installation the app is therefore kept as it is, and the run
+	// proceeds to what is actually missing.
+	etat, err := etatAppAPI(ctx, cli, pod)
 	if err != nil {
-		return fmt.Errorf("registering %s: %w", appTranscription, err)
+		return err
 	}
-	fmt.Println("  ✓ " + derniereLigneUtile(sortie))
+	if etat != "" {
+		fmt.Printf("∙ %s already registered (%s) — models only\n", appTranscription, etat)
+	} else {
+		fmt.Printf("∙ registering %s (signaling: %s)\n", appTranscription, urlSignaling)
+		sortie, err := occ(ctx, cli, pod,
+			"app_api:app:register", appTranscription,
+			"--env", "LT_HPB_URL="+urlSignaling,
+			"--env", "LT_INTERNAL_SECRET="+secretInterne)
+		if err != nil {
+			return fmt.Errorf("registering %s: %w", appTranscription, err)
+		}
+		fmt.Println("  ✓ " + derniereLigneUtile(sortie))
+		etat = "disabled" // register only installs: see ENABLE below
+	}
 
 	// ENABLE. register only INSTALLS: the ExApp starts and reports
 	// "App is disabled on startup". Without this step the component is there,
@@ -109,9 +160,14 @@ func TranscriptionDeploye(ctx context.Context, domain string) error {
 	//
 	// "Install completely" means installed AND usable, so we do not stop at
 	// the deployment.
-	fmt.Println("∙ enabling the app...")
-	if _, err := occ(ctx, cli, pod, "app_api:app:enable", appTranscription); err != nil {
-		return fmt.Errorf("enabling %s (it is installed but inactive): %w", appTranscription, err)
+	//
+	// Skipped when AppAPI already reports it enabled: a second enable is a
+	// no-op at best, an error that hides the real state at worst.
+	if etat == "disabled" {
+		fmt.Println("∙ enabling the app...")
+		if _, err := occ(ctx, cli, pod, "app_api:app:enable", appTranscription); err != nil {
+			return fmt.Errorf("enabling %s (it is installed but inactive): %w", appTranscription, err)
+		}
 	}
 
 	// We do not trust the exit code: we read the state back, because the only
@@ -122,8 +178,266 @@ func TranscriptionDeploye(ctx context.Context, domain string) error {
 	}
 
 	fmt.Println("✓ Live transcription deployed and enabled")
-	fmt.Println("  The speech models are downloaded on first use (~6 GB).")
+
+	// The models go in AFTER the app runs, not before: the ExApp pod is what
+	// holds the volume, and it does not exist until AppAPI has deployed it. The
+	// ExApp downloads its own three models during `init`; this adds the ones its
+	// list did not cover, which is why it happens last and why the download
+	// skips whatever is already on disk.
+	fmt.Println("∙ placing the speech models...")
+	if err := telechargerModeles(ctx, cli, langues); err != nil {
+		// Not fatal: recording and the rest of Talk work without the models, and
+		// the module's settings place them on save — which is the supported way
+		// to add a language, not a reinstall.
+		fmt.Printf("  ⚠ %v\n", err)
+		fmt.Println("  Transcription is installed; add the language from the module settings, which places its model.")
+		return nil
+	}
+
+	fmt.Printf("  Speech models in place: %s%s instead of 6.3 GB for the whole repository.\n",
+		strings.Join(langues, ", "), resumeModeles(langues))
 	return nil
+}
+
+// LanguesParDefaut is the model set placed on an installation that never chose
+// one.
+//
+// WHY FRENCH: 68 MB against 6.3 GB for the whole repository, and a language
+// nobody speaks costs disk on a machine that may not have it. The value is
+// the module's default; changing it there changes what a new installation
+// places, and an installation that already stores a list keeps it.
+var LanguesParDefaut = []string{"fr"}
+
+// LanguesDepuisListe turns the stored setting — "fr,ar" — into the model codes
+// to place, refusing anything the ExApp could not serve.
+//
+// WHY VALIDATE HERE AND NOT IN THE FORM: the setting is also written by the
+// CLI and by the installer, which do not draw a form. A code that does not
+// exist in modelesVosk would download 404 pages and leave vosk_server.py with
+// a directory it cannot open — the exact failure this work removes. The error
+// names the accepted codes, because that is the whole list an operator needs.
+func LanguesDepuisListe(liste string) ([]string, error) {
+	champs := strings.FieldsFunc(liste, func(r rune) bool {
+		return r == ',' || r == ' ' || r == ';' || r == '\t' || r == '\n'
+	})
+	if len(champs) == 0 {
+		return nil, errors.New("no language given")
+	}
+
+	vus := make(map[string]bool, len(champs))
+	langues := make([]string, 0, len(champs))
+	inconnues := make([]string, 0)
+	for _, c := range champs {
+		c = strings.ToLower(strings.TrimSpace(c))
+		if c == "" || vus[c] {
+			continue
+		}
+		if _, ok := modelesVosk[c]; !ok {
+			inconnues = append(inconnues, c)
+			continue
+		}
+		vus[c] = true
+		langues = append(langues, c)
+	}
+	if len(inconnues) > 0 {
+		return nil, fmt.Errorf("no speech model for %s (known: %s)",
+			strings.Join(inconnues, ", "), strings.Join(ModelesConnus(), ", "))
+	}
+	return langues, nil
+}
+
+// ModelesConnus returns the language codes the ExApp can serve, sorted for a
+// stable message.
+func ModelesConnus() []string {
+	codes := make([]string, 0, len(modelesVosk))
+	for code := range modelesVosk {
+		codes = append(codes, code)
+	}
+	sort.Strings(codes)
+	return codes
+}
+
+// PlacerModeles downloads the models of the given languages into the ExApp's
+// volume, then reads back what is actually on disk.
+//
+// It is exported for the module's settings: adding a language in the console
+// has to download it at that moment, not at some hypothetical reinstall.
+func PlacerModeles(ctx context.Context, langues []string) error {
+	cli, err := k8sapi.Nouveau()
+	if err != nil {
+		return fmt.Errorf("Kubernetes client: %w", err)
+	}
+	return telechargerModeles(ctx, cli, langues)
+}
+
+// ModelesAbsents returns the languages whose model is not on disk yet.
+//
+// Read from the pod, not from a local map: the volume is the only truth, and a
+// download interrupted halfway leaves a directory that looks present. The
+// acoustic model file is the witness — every other file is useless without it.
+func ModelesAbsents(ctx context.Context, langues []string) ([]string, error) {
+	cli, err := k8sapi.Nouveau()
+	if err != nil {
+		return nil, fmt.Errorf("Kubernetes client: %w", err)
+	}
+	return modelesAbsents(ctx, cli, langues)
+}
+
+// telechargerModeles places the speech models for the given languages into the
+// ExApp's volume.
+//
+// It runs INSIDE the ExApp pod, which is the only place that has both the
+// volume mounted and a shell to fetch with. The deployment process has neither:
+// it talks to the cluster through the API, and the ExApp's image is the one
+// holding the volume.
+//
+// IDEMPOTENT: a language whose directory already holds its model is left
+// alone. Re-running `install` therefore does not re-download 68 MB, and adding
+// a language later downloads only the difference — which is what makes the
+// list safe to grow.
+func telechargerModeles(ctx context.Context, cli *k8sapi.Client, langues []string) error {
+	const depot = "https://huggingface.co/Nextcloud-AI/vosk-models/resolve/main"
+
+	for _, l := range langues {
+		dossier, ok := modelesVosk[l]
+		if !ok {
+			return fmt.Errorf("no model known for language %q: the ExApp would serve a directory that does not exist", l)
+		}
+
+		// The model is complete when its acoustic model is there: every other
+		// file is useless without it, and its presence means an interrupted
+		// download did not leave a half-copied directory behind.
+		script := fmt.Sprintf(`
+set -e
+D="%s"
+T="%s/$D"
+if [ -f "$T/am/final.mdl" ]; then
+  echo "  %s already present"
+  exit 0
+fi
+mkdir -p "$T"
+for f in README am/final.mdl conf/mfcc.conf conf/model.conf \
+         graph/Gr.fst graph/HCLr.fst graph/disambig_tid.int \
+         graph/phones/word_boundary.int ivector/final.dubm ivector/final.ie \
+         ivector/final.mat ivector/global_cmvn.stats \
+         ivector/online_cmvn.conf ivector/splice.conf; do
+  mkdir -p "$T/$(dirname "$f")"
+  curl -sfL --retry 3 --max-time 300 "%s/$D/$f" -o "$T/$f"
+done
+echo "  %s downloaded"
+`, dossier, modeleRepertoire, l, depot, l)
+
+		if _, err := exappsExec(ctx, cli, script); err != nil {
+			return fmt.Errorf("downloading the %s model: %w", l, err)
+		}
+	}
+
+	// READ BACK, DO NOT TRUST THE DOWNLOAD. A curl that exits 0 after writing a
+	// truncated file leaves a directory that looks complete; the acoustic model
+	// is the file vosk_server.py opens first, so its presence is the witness
+	// that matters. This is also what the settings page reports.
+	manquants, err := modelesAbsents(ctx, cli, langues)
+	if err != nil {
+		return fmt.Errorf("checking the speech models: %w", err)
+	}
+	if len(manquants) > 0 {
+		return fmt.Errorf("model incomplete for %s: the ExApp would fail these languages on the first call",
+			strings.Join(manquants, ", "))
+	}
+	return nil
+}
+
+// modelesAbsents returns the languages whose model the volume does not hold.
+//
+// ONE exec for the whole list: a call per language would be one round trip per
+// language for a question a shell loop answers at once.
+func modelesAbsents(ctx context.Context, cli *k8sapi.Client, langues []string) ([]string, error) {
+	if len(langues) == 0 {
+		return nil, nil
+	}
+
+	var pairs []string
+	for _, l := range langues {
+		dossier, ok := modelesVosk[l]
+		if !ok {
+			return nil, fmt.Errorf("no model known for language %q", l)
+		}
+		pairs = append(pairs, l+":"+dossier)
+	}
+
+	script := fmt.Sprintf(`for P in %s; do
+  code="${P%%%%:*}"
+  D="${P#*:}"
+  if [ -f "%s/$D/am/final.mdl" ]; then echo "ok $code"; else echo "missing $code"; fi
+done
+`, strings.Join(pairs, " "), modeleRepertoire)
+
+	sortie, err := exappsExec(ctx, cli, script)
+	if err != nil {
+		return nil, err
+	}
+	var absents []string
+	for _, ligne := range strings.Split(sortie, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(ligne), "missing ") {
+			absents = append(absents, strings.TrimPrefix(strings.TrimSpace(ligne), "missing "))
+		}
+	}
+	return absents, nil
+}
+
+// modeleRepertoire is the ExApp's persistent volume, where vosk_server.py looks
+// for its models. It is read from the ExApp rather than assumed: that path is
+// the contract between the two, and a wrong one downloads 68 MB nobody reads.
+const modeleRepertoire = "/nc_app_live_transcription_data"
+
+// tailleModeles returns the disk footprint of the given languages, in
+// megabytes, and whether EVERY one of them is accounted for. Indicative —
+// measured from the repository's file listing — and used only to show the
+// order of magnitude, never to decide anything.
+//
+// WHY THE SECOND RESULT: the table covers the languages this platform
+// realistically meets, not all 27. Summing the known ones and printing the
+// total would announce 68 MB for a list whose other half is unknown, which is
+// worse than saying nothing.
+func tailleModeles(langs []string) (float64, bool) {
+	// Sizes per language, from the HuggingFace file listing.
+	tailles := map[string]float64{
+		"fr": 68.5, "en": 2866, "de": 95.6, "es": 60.3, "it": 91.3,
+		"nl": 68.7, "pt": 53.6, "ar": 698.2, "br": 310.9,
+	}
+	var total float64
+	for _, l := range langs {
+		t, ok := tailles[l]
+		if !ok {
+			return total, false
+		}
+		total += t
+	}
+	return total, true
+}
+
+// resumeModeles renders " (68 MB)", or nothing when a size is unknown.
+func resumeModeles(langues []string) string {
+	if mo, ok := tailleModeles(langues); ok {
+		return fmt.Sprintf(" (%.0f MB)", mo)
+	}
+	return ""
+}
+
+// modelesVosk maps a language code to its directory in the HuggingFace
+// repository, mirroring the ExApp's own models.py. The names are the contract
+// between the two: vosk_server.py joins persistent_storage() with exactly this
+// directory name, so a typo downloads a model that is never found.
+var modelesVosk = map[string]string{
+	"fr": "vosk-model-small-fr-0.22",
+	"en": "vosk-model-en-us-0.22",
+	"de": "vosk-model-small-de-0.15",
+	"es": "vosk-model-small-es-0.42",
+	"it": "vosk-model-small-it-0.22",
+	"nl": "vosk-model-small-nl-0.22",
+	"pt": "vosk-model-small-pt-0.3",
+	"ar": "vosk-model-ar-mgb2-0.4",
+	"br": "vosk-model-br-0.8",
 }
 
 // secretSignaling reads the internal secret of the signaling FROM NEXTCLOUD.
@@ -256,6 +570,22 @@ func attendreDisparition(ctx context.Context, cli *k8sapi.Client, pod string) er
 	return fmt.Errorf("the ExApp is still listed after 120s — check the ExApp namespace %s", nsExapps)
 }
 
+// exappsExec runs a shell command inside the ExApp pod, THROUGH THE KUBERNETES
+// API — same reasoning as occ below: the console's container is distroless and
+// has no kubectl to shell out to.
+//
+// The ExApp is the only place that holds the speech-model volume, so the shell
+// available is the one in ITS image (Debian here, with curl), not Nextcloud's.
+func exappsExec(ctx context.Context, cli *k8sapi.Client, script string) (string, error) {
+	pod, err := cli.PodDuDeploiement(ctx, nsExapps, "nc-app-"+appTranscription, "app="+appTranscription)
+	if err != nil {
+		return "", fmt.Errorf("no %s pod in %s: the model cannot be placed before the ExApp runs: %w",
+			appTranscription, nsExapps, err)
+	}
+	// The container name is the app id, which is how HaRP names it.
+	return cli.Executer(ctx, nsExapps, pod, appTranscription, "sh", "-c", script)
+}
+
 // occ runs an occ command inside the Nextcloud pod, THROUGH THE KUBERNETES API.
 //
 // WHY NOT kubectl: the administration console runs in a distroless container
@@ -267,6 +597,33 @@ func attendreDisparition(ctx context.Context, cli *k8sapi.Client, pod string) er
 // which is exactly what happened in production. The API does the same thing
 // over HTTP and works in both contexts, so there is one code path, not two
 // that drift apart.
+// etatAppAPI returns the AppAPI status of the app — "enabled", "disabled" — or
+// "" when the app is not registered at all.
+//
+// It reads `app_api:app:list` instead of trusting a previous call: the state
+// that matters is the one AppAPI currently reports, and a re-run has to answer
+// the same question as a first installation.
+func etatAppAPI(ctx context.Context, cli *k8sapi.Client, pod string) (string, error) {
+	sortie, err := occ(ctx, cli, pod, "app_api:app:list")
+	if err != nil {
+		return "", fmt.Errorf("reading the ExApp list: %w", err)
+	}
+	for _, ligne := range strings.Split(sortie, "\n") {
+		ligne = strings.TrimSpace(ligne)
+		if !strings.HasPrefix(ligne, appTranscription+" (") {
+			continue
+		}
+		switch {
+		case strings.Contains(ligne, "[enabled]"):
+			return "enabled", nil
+		case strings.Contains(ligne, "[disabled]"):
+			return "disabled", nil
+		}
+		return "unknown", nil
+	}
+	return "", nil
+}
+
 func occ(ctx context.Context, cli *k8sapi.Client, pod string, args ...string) (string, error) {
 	complet := append([]string{"php", "occ"}, args...)
 	return cli.Executer(ctx, nsNextcloud, pod, "nextcloud", complet...)

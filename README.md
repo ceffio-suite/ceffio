@@ -181,6 +181,11 @@ Declared dependencies are expanded by the registry: asking for `live-transcripti
 `exapps-daemon` first, and `ceffio module remove exapps-daemon` is refused while an
 installed module requires it.
 
+`live-transcription` places the speech models of the languages you choose — the module
+setting `languages`, French by default — and verifies them on disk. A language left out is
+downloaded by the app the first time it is used, which needs internet and makes that call
+wait; the settings page places a language the moment it is saved.
+
 **Every optional module can be installed from the CLI or from the console** — neither path
 is privileged. `recording`, although optional, ships **with the installer** by default.
 The README used to suggest otherwise; it is not the case.
