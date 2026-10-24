@@ -14,6 +14,8 @@ package transcription
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -59,7 +61,7 @@ func (m *transcriptionModule) Info() module.Info {
 		Namespaces: []string{nsExapps},
 
 		Resources: "~9 GB disk, ~16 GB RAM",
-		Warning:   "Its settings cannot be changed once installed — the app has to be removed and installed again.",
+		Warning:   "Its signaling settings are fixed at installation: changing them means removing and reinstalling the app. The speech languages, themselves, can be changed at any time.",
 
 		// Permissions: the app lives in ceffio-exapps (workload, Service,
 		// PVC created by HaRP — the console lists them for state and
@@ -106,7 +108,148 @@ func (m *transcriptionModule) Info() module.Info {
 // Install delegates to exapps.TranscriptionDeploye, unchanged: registration
 // WITHOUT --wait-finish, activation, then a re-read of the state.
 func (m *transcriptionModule) Install(ctx context.Context, env module.Env) error {
-	return exapps.TranscriptionDeploye(ctx, env.Domain)
+	langues, err := languesConfigurees(ctx, env)
+	if err != nil {
+		return err
+	}
+	return exapps.TranscriptionDeploye(ctx, env.Domain, langues)
+}
+
+// languesConfigurees returns the languages stored by the operator, or the
+// default when the setting was never touched.
+//
+// IT GOES THROUGH Current (and not straight to the ConfigMap) so that the
+// default exists in ONE place: a module that duplicated it here would drift
+// from the one the console shows.
+func languesConfigurees(ctx context.Context, env module.Env) ([]string, error) {
+	v, err := (&transcriptionModule{}).Current(ctx, env, groupeLangues)
+	if err != nil {
+		return nil, err
+	}
+	return exapps.LanguesDepuisListe(v["codes"])
+}
+
+// groupeLangues is the settings group holding the speech languages.
+const groupeLangues = "languages"
+
+// cleReglages is the shared ConfigMap key, under the module's own prefix.
+const cleReglages = "transcription.languages"
+
+// Settings declares the only thing an operator has to choose: which languages
+// this installation must be able to transcribe.
+//
+// WHY IT IS A SETTING AND NOT A CONSTANT: the ExApp downloads its models on
+// first use, over the internet, taking minutes and failing outright on a
+// machine that has none. What is placed at installation is what works out of
+// the box, so the list is the operator's decision — a French-only platform and
+// an Arabic-and-French one do not need the same 6 GB.
+func (m *transcriptionModule) Settings() []module.Group {
+	return []module.Group{{
+		ID:    groupeLangues,
+		Title: "Speech languages",
+		Description: "The speech models placed on disk. They are what works on the first call: " +
+			"a language left out is downloaded by the app when it is first used, which needs " +
+			"internet and makes that call wait.",
+		Fields: []module.Field{{
+			Key:      "codes",
+			Label:    "Languages",
+			Type:     module.Text,
+			Default:  strings.Join(exapps.LanguesParDefaut, ","),
+			Required: true,
+			Help: "Comma-separated Vosk codes, for example fr,ar. Known codes: " +
+				strings.Join(exapps.ModelesConnus(), ", ") +
+				". French costs 68 MB, English 2.9 GB, Arabic 700 MB.",
+		}},
+	}}
+}
+
+// Current returns the stored list, or the default.
+func (m *transcriptionModule) Current(ctx context.Context, env module.Env, group string) (module.Values, error) {
+	if group != groupeLangues {
+		return nil, module.ErrUnknownGroup
+	}
+	if env.Settings != nil {
+		brut, err := env.Settings.Lire(ctx, "ceffio-system", "ceffio-settings", cleReglages)
+		if err != nil {
+			return nil, err
+		}
+		if brut != "" {
+			var stoc struct {
+				Codes string `json:"codes"`
+			}
+			if err := json.Unmarshal([]byte(brut), &stoc); err != nil {
+				return nil, fmt.Errorf("transcription: settings entry is not valid JSON: %w", err)
+			}
+			if codes := strings.TrimSpace(stoc.Codes); codes != "" {
+				return module.Values{"codes": codes}, nil
+			}
+		}
+	}
+	return module.Values{"codes": strings.Join(exapps.LanguesParDefaut, ",")}, nil
+}
+
+// Apply validates the list, stores it normalised, then PLACES THE MODELS.
+//
+// The last step is the point: an operator who adds Arabic expects Arabic to
+// work when they close the page, not at a hypothetical reinstall. The download
+// is idempotent, so re-saving the same list costs nothing.
+func (m *transcriptionModule) Apply(ctx context.Context, env module.Env, group string, v module.Values) error {
+	if group != groupeLangues {
+		return module.ErrUnknownGroup
+	}
+
+	langues, err := exapps.LanguesDepuisListe(v["codes"])
+	if err != nil {
+		return fmt.Errorf("%w: languages: %v", module.ErrInvalidSettings, err)
+	}
+	normalise := strings.Join(langues, ",")
+
+	if env.Settings == nil {
+		return fmt.Errorf("transcription: no settings store to write to")
+	}
+	donnees, err := json.Marshal(map[string]string{"codes": normalise})
+	if err != nil {
+		return err
+	}
+	if err := env.Settings.Ecrire(ctx, "ceffio-system", "ceffio-settings",
+		map[string]string{cleReglages: string(donnees)}); err != nil {
+		return fmt.Errorf("storing the language list: %w", err)
+	}
+
+	if env.Out != nil {
+		fmt.Fprintf(env.Out, "∙ placing the speech models: %s\n", normalise)
+	}
+	if err := exapps.PlacerModeles(ctx, langues); err != nil {
+		return fmt.Errorf("placing the models for %s: %w", normalise, err)
+	}
+	if env.Out != nil {
+		fmt.Fprintf(env.Out, "  ✓ speech models in place: %s\n", normalise)
+	}
+	return nil
+}
+
+// Test answers the only question worth answering about this setting: are the
+// models the list promises actually on disk?
+//
+// It is what turns "transcription is installed" into "transcription can
+// transcribe": the app is enabled and reachable long before its models exist.
+func (m *transcriptionModule) Test(ctx context.Context, env module.Env, group string, v module.Values) module.TestResult {
+	if group != groupeLangues {
+		return module.TestResult{Detail: "unknown settings group"}
+	}
+	langues, err := exapps.LanguesDepuisListe(v["codes"])
+	if err != nil {
+		return module.TestResult{Detail: err.Error()}
+	}
+	absents, err := exapps.ModelesAbsents(ctx, langues)
+	if err != nil {
+		return module.TestResult{Detail: "cannot read the ExApp volume: " + err.Error()}
+	}
+	if len(absents) > 0 {
+		return module.TestResult{Detail: "no model on disk for " + strings.Join(absents, ", ") +
+			": the app downloads it on the first call, which needs internet and fails without it."}
+	}
+	return module.TestResult{OK: true, Detail: "every configured language has its model on disk."}
 }
 
 // State is the logic of repondreEtatTranscription
