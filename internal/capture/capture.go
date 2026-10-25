@@ -143,7 +143,10 @@ rules:
     verbs: ["get", "list"]
   - apiGroups: [""]
     resources: ["pods/exec"]
-    verbs: ["create"]
+    # GET as well as CREATE: the exec handshake is authorised by a get on the
+    # subresource before the websocket upgrade, and create alone answers 403
+    # ("cannot get resource pods/exec") — observed on the first live run.
+    verbs: ["get", "create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -170,7 +173,10 @@ rules:
     verbs: ["get", "list"]
   - apiGroups: [""]
     resources: ["pods/exec"]
-    verbs: ["create"]
+    # GET as well as CREATE: the exec handshake is authorised by a get on the
+    # subresource before the websocket upgrade, and create alone answers 403
+    # ("cannot get resource pods/exec") — observed on the first live run.
+    verbs: ["get", "create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
