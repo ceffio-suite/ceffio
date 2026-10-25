@@ -278,8 +278,11 @@ spec:
               cpu: "4"
               memory: 4Gi
           volumeMounts:
+            # /models-extra, PAS /models : le modèle small est dans l'image
+            # (/models) ; monter un volume vide par-dessus l'effacerait et
+            # rendrait la première transcription dépendante d'un téléchargement.
             - name: modeles
-              mountPath: /models
+              mountPath: /models-extra
       volumes:
         - name: modeles
           persistentVolumeClaim:

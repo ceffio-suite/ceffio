@@ -1,212 +1,145 @@
-# Plan de faisabilité — capture par participant et transcription des enregistrements
+# Feasibility plan — per-participant capture and recording transcription
 
-Statut : phase 1 livrée — le module `capture` et son déploiement existent
-(`internal/capture`, `internal/modules/capture`), et l'image est publiée par son
-propre dépôt ([ceffio-suite/ceffio-capture](https://github.com/ceffio-suite/ceffio-capture)),
-versionnée indépendamment (`ghcr.io/ceffio-suite/ceffio-capture:v0.1.0`, épinglée
-dans `internal/version`).
+Status: phase 1 delivered. The `capture` module and its deployment exist
+(`internal/capture`, `internal/modules/capture`); the image is published by its
+own repository,
+[ceffio-suite/ceffio-capture](https://github.com/ceffio-suite/ceffio-capture),
+versioned independently and pinned in `internal/version`.
 
-## 1. Objectif
+## 1. Goal
 
-Quand un participant lance un enregistrement dans un appel Talk :
+When a participant starts a recording in a Talk call:
 
-1. une **piste audio par participant** est captée dès le démarrage ;
-2. à l'arrêt, une transcription **nommée** (qui parle) est produite ;
-3. le `.srt` et les pistes `.opus` sont déposés **à côté du `.webm`**, dans les
-   fichiers de celui qui a lancé l'enregistrement ;
-4. les sous-titres sont **incrustés dans le `.webm`**, pour que « Partager dans
-   la conversation » partage l'enregistrement avec sa transcription.
+1. one **audio track per participant** is captured from the first second;
+2. when the recording stops, a **named** transcript is produced (who spoke);
+3. the `.srt` and the per-participant `.opus` files are written **next to the
+   `.webm`**, in the files of the person who started the recording;
+4. the subtitles are **muxed into the `.webm`**, so that "Share to chat" shares
+   the recording together with its transcript.
 
-Hors périmètre v1 : transcription en direct (c'est `live-transcription`, déjà
-en place), résumé automatique, traduction.
+Out of scope for v1: live transcription (that is `live-transcription`, already
+running), summaries, translation.
 
-## 2. Acquis (prototype validé)
+## 2. What the prototype proved
 
-| Élément | État |
+| Element | State |
 |---|---|
-| Client signaling + WebRTC, une piste par participant | validé (2 pistes réelles, 29 s et 49 s) |
-| Démarrage sur l'état d'enregistrement Talk (`call_recording`) | validé |
-| Langue : sélecteur de la salle + détection par piste | validé (`fr` détecté à 0,93 et 0,97) |
-| Transcription CPU | faster-whisper int8, **×7–11 temps réel** mesuré |
-| Noms des participants | reconstruits depuis le journal du signaling |
-| Recalage des sous-titres sur le `.webm` | mesure par corrélation (6,4 s et 11,2 s selon la piste) |
-| Pistes Opus 32 kbit/s | ×11 à ×19 plus léger que le WAV |
-| Sous-titres incrustés | piste WebVTT, copie de flux, +683 octets |
+| Signaling + WebRTC client, one track per participant | proven (two real tracks, 29 s and 49 s) |
+| Start on Talk's recording state (`call_recording`) | proven |
+| Language: room selector + per-track detection | proven (`fr` detected at 0.93 and 0.97) |
+| CPU transcription | faster-whisper int8, **×7–11 real time** measured |
+| Participant names | roster + `oc_talk_sessions` |
+| Subtitle re-alignment | measured by correlation (6.4 s and 11.2 s per track) |
+| Opus tracks at 32 kbit/s | ×11 to ×19 smaller than WAV |
+| Muxed subtitles | WebVTT track, stream copy, +683 bytes |
 
-Ce qui n'existe pas encore : tout est dans des `/tmp` (pod et hôte), aucun
-script n'est dans le dépôt, rien n'est versionné ni testé.
+## 3. Architecture
 
-## 3. Architecture : trois options
+The image is built and published by **its own repository**. It carries a Python
+stack (WebRTC, whisper) and its own release cadence; bundling it into the main
+image would tie a 1.5 GB dependency to every Ceffio release, including
+installations that never record.
 
-### Option A — image dédiée + nouveau module `capture` (recommandée)
+The Ceffio repository keeps only the **module**: it pins the image version in
+`internal/version` (the same rule as janus) and deploys it with `recording` as a
+declared dependency.
 
-Une image `ghcr.io/ceffio-suite/ceffio-capture`, **publiée par son propre dépôt**
-(sa pile Python et son cycle de publication sont indépendants du binaire
-Ceffio), déployée par un module `capture` qui déclare `Requires: ["recording"]`.
-La version d'image est épinglée dans `internal/version`, comme janus.
+Rejected alternatives: a Go rewrite of the signaling client (1 450 proven lines,
+undocumented protocol, cgo for whisper) and a new ExApp (no natural access to
+user files, extra AppAPI dependency).
 
-- **Pour** : réutilise le client aiortc et faster-whisper déjà éprouvés ; le
-  module reste facultatif et indépendant du binaire Go ; on peut livrer d'abord
-  sans toucher au cœur.
-- **Contre** : une deuxième image (Python) à maintenir, ~1,2 Go avec les modèles.
+## 4. Objects deployed by the module
 
-### Option B — tout en Go dans l'image existante
+Namespace `ceffio-video`, next to the recorder.
 
-Le client WebRTC en Go (pion), whisper via whisper.cpp (cgo), muxage avec
-ffmpeg embarqué.
-
-- **Pour** : une seule image, binaire statique, pas de Python.
-- **Contre** : réécriture complète du client signaling (1 450 lignes éprouvées
-  en Python, protocole non documenté), cgo dans une image `FROM scratch`,
-  deux à trois mois de travail pour un résultat moins sûr.
-
-### Option C — nouvel ExApp (HaRP + AppAPI)
-
-Comme `live-transcription`, enregistré dans Nextcloud.
-
-- **Pour** : bénéficie de l'infrastructure ExApp (déploiement, secrets, mise à
-  jour), et l'app peut exposer des réglages dans Nextcloud.
-- **Contre** : un ExApp n'a pas d'accès naturel aux fichiers des utilisateurs,
-  et il faudrait un second client AppAPI pour écrire les `.srt` ; ça ajoute une
-  dépendance (AppAPI) pour un service qui n'a rien à faire dans Nextcloud.
-
-**Décision proposée : A**, avec le client Python actuel. Le jour où Go devient
-nécessaire, le module n'a pas à changer : seule l'image change.
-
-## 4. Composants déployés par le module
-
-Namespace `ceffio-video` (à côté du recorder, qui y vit déjà).
-
-| Objet | Rôle |
+| Object | Role |
 |---|---|
-| `Deployment ceffio-capture` (1 réplique) | le service : veille, capture, finalisation |
-| `Service ceffio-capture` (port 8080, `/healthz`, `/metrics`) | supervision |
-| `ServiceAccount ceffio-capture` + `Role`/`RoleBinding` | droits stricts (voir ci-dessous) |
-| `PersistentVolumeClaim ceffio-capture-models` (2 Gi) | modèles Vosk + whisper, téléchargés à l'installation |
-| `ConfigMap ceffio-capture` | salons suivis, modèle, options |
-| Réglages du module (contrat `module.Configurable`) | visibles dans la console |
+| `Deployment ceffio-capture` (1 replica) | watch, capture, finalise |
+| `Service ceffio-capture` (`/healthz`) | supervision |
+| `ServiceAccount` + `Role`/`RoleBinding` | two exec rights, nothing else |
+| `PersistentVolumeClaim` (2 Gi, mounted `/models-extra`) | additional models (`medium`), optional |
+| Native `Secret` | signaling internal secret, read from the vault, never regenerated |
+| Module settings | visible in the console |
 
-Droits nécessaires, et rien de plus :
+Rights, and nothing more:
 
-- `ceffio-files` : `pods/exec` sur le pod Nextcloud (dépôt des fichiers +
-  `occ files:scan`) ;
-- `ceffio-data` : lecture des tables Talk (`oc_talk_rooms` pour l'état
-  d'enregistrement et la langue) ;
-- `ceffio-video` : `pods/log` sur le signaling, pour la correspondance
-  session → utilisateur (à remplacer par le roster, cf. §6.2) ;
-- pas d'accès au volume Nextcloud : on écrit par `exec`, pas par montage.
+- `ceffio-files`: `pods/exec` on the Nextcloud pod (deposit + `occ files:scan`);
+- `ceffio-data`: `pods/exec` to read the recording state and the room language
+  (the application database user cannot reach the Nextcloud database — verified:
+  `permission denied for database "nextcloud"`).
 
-## 5. Flux
+## 5. Flow
 
 ```
 Talk                          ceffio-capture                    Nextcloud
  │                                  │                               │
- │ modérateur lance l'enregistrement│                               │
- │──── call_recording = 3 ─────────▶│ (veille, 1 s)                 │
- │                                  │── rejoint l'appel (client ────│
- │                                  │   interne, aiortc)            │
- │   une piste par participant ◀────│                               │
+ │ moderator starts the recording   │                               │
+ │──── call_recording = 3 ─────────▶│ (watch, 1 s)                  │
+ │                                  │── joins the call (internal ───│
+ │                                  │   client, aiortc)             │
+ │   one track per participant ◀────│                               │
  │                                  │                               │
- │   arrêt (call_recording = 0) ───▶│                               │
+ │   stop (call_recording = 0) ────▶│                               │
  │                                  │── whisper int8 (CPU) ────┐    │
- │                                  │── Opus 32k par piste ────┤    │
- │                                  │── .srt nommé, recalé ────┘    │
- │                                  │── incrustation WebVTT ────────│
- │                                  │──── dépôt + files:scan ──────▶│
+ │                                  │── Opus 32k per track ────┤    │
+ │                                  │── named, re-aligned .srt ┘    │
+ │                                  │── WebVTT muxed in the .webm ──│
+ │                                  │──── deposit + files:scan ────▶│
 ```
 
-Détection de l'état : lecture de `oc_talk_rooms.call_recording`
-(0 aucun, 1 vidéo, 2 audio, 3/4 démarrage, 5 échec). Un enregistrement qui
-redémarre (entrée/sortie d'un participant) crée un nouveau `.webm` : la
-transcription doit être découpée aux frontières de chaque fichier, en
-s'appuyant sur son nom (heure de démarrage) et sa durée.
+## 6. Hard points and answers
 
-## 6. Points durs et solutions
+**Track offsets.** Each WebRTC subscription arrives at a different moment
+(measured: 6.4 s and 11.2 s after the `.webm` start). Each track is timestamped
+when it opens, and every subtitle is computed in absolute time before being
+mapped back to the recording timeline.
 
-### 6.1 Décalage des pistes
+**Participant names.** The room roster maps the HPB session to the Nextcloud
+session; `oc_talk_sessions` joined to `oc_talk_attendees` gives the display
+name. No dependency on signaling logs.
 
-Chaque abonnement WebRTC arrive à un instant différent (mesuré : 6,4 s et
-11,2 s après le début du `.webm`). **Solution retenue** : horodater l'ouverture
-de chaque piste (epoch) et calculer chaque sous-titre en temps absolu, puis le
-ramener au temps du `.webm`. C'est déjà implémenté et validé.
+**Writing into the launcher's files.** Through `pods/exec` in the Nextcloud pod
+(write, `chown www-data`, `occ files:scan`) — the same path Ceffio already uses
+for `occ`. WebDAV is the fallback if that right is ever refused.
 
-### 6.2 Noms des participants
+**Models.** The `small` whisper model is **baked into the image**: an
+installation works with no download at all, which is the point of a
+self-hosted appliance. Larger models (`medium`) can be fetched into the
+`/models-extra` volume, and ffmpeg is in the image rather than in a `/tmp` that
+disappears on the next restart.
 
-Trois sources possibles :
+**CPU.** whisper `small` int8 at ×7–11 real time on 8 threads; one hour of
+meeting with three participants is ~20–30 minutes of computation **after** the
+call. Container limits keep it from starving the signaling the next call
+depends on.
 
-1. **journal du signaling** (`Register user X … <session>`) — utilisé par le
-   prototype, mais fragile (niveau de log, rotation) ;
-2. **roster du signaling** : le client reçoit les participants avec
-   `nextcloudSessionId` et `sessionId` — à condition de vérifier que le
-   descripteur porte bien l'identité (patch à finir) ;
-3. **base Talk** : `oc_talk_sessions` joint à `oc_talk_attendees` donne le nom
-   d'affichage à partir de la session Nextcloud.
+**Several `.webm` per meeting.** Talk restarts the recording when the
+composition changes; the transcript must be split at each file boundary (start
+from the file name, duration from the metadata).
 
-**Décision proposée** : 2 pour la correspondance session HPB → session
-Nextcloud, 3 pour le nom. Aucune dépendance aux journaux.
+## 7. Phases
 
-### 6.3 Écriture dans les fichiers du lanceur
-
-Le `.webm` est écrit par Talk dans `/var/www/html/data/<lanceur>/files/…`. Le
-capture n'a pas à monter ce volume : le dépôt se fait par `kubectl exec` dans le
-pod Nextcloud (écriture + `chown www-data` + `occ files:scan`), comme le
-prototype. Alternative à étudier : WebDAV avec un mot de passe d'application
-tiré du coffre, mais l'écriture dans l'espace d'un autre utilisateur n'est pas
-triviale.
-
-### 6.4 Modèles et image
-
-- **Vosk** (darija, français) : déjà sur le PVC de l'ExApp ; le module les
-  télécharge dans son propre PVC au premier démarrage (idempotent, vérifié
-  fichier par fichier).
-- **whisper** : modèle `small` int8 (~250 Mo) téléchargé dans le PVC ; `medium`
-  (~750 Mo) en option.
-- **ffmpeg** : binaire statique **dans l'image** (77 Mo), pas dans un `/tmp`.
-
-### 6.5 CPU et ressources
-
-Mesuré : whisper `small` int8 ≈ ×7–11 temps réel sur 8 threads. Pour une
-réunion d'une heure à trois participants : ~20–30 min de calcul après l'appel.
-Demandes par défaut : `cpu: 500m`/`4`, `memory: 1Gi`/`4Gi` ; `nice`-like via
-`cpu_threads` configurable pour ne pas étouffer le signaling pendant un appel.
-
-### 6.6 Plusieurs `.webm` par réunion
-
-Talk redémarre l'enregistrement quand la composition change. Le transcript doit
-être découpé par fichier : on connaît l'heure de départ (nom du fichier) et la
-durée (métadonnées), donc chaque segment tombe dans un et un seul `.webm`.
-
-## 7. Découpage et estimation
-
-| Phase | Contenu | Durée |
+| Phase | Content | Duration |
 |---|---|---|
-| 1 | Image `build/capture/Dockerfile`, module `capture` (Install/State/Uninstall), RBAC, Deployment, PVC, détection de l'état | 5–7 j |
-| 2 | Capture + finalisation dans l'image (client aiortc, whisper, ffmpeg embarqué), réglages console (modèle, sous-titres, salons) | 5–7 j |
-| 3 | Dépôt Nextcloud, incrustation, découpage multi-`.webm`, noms par roster + base | 4–6 j |
-| 4 | CI multi-arch + publication, docs, tests de charge (3–5 participants), migration du prototype | 3–5 j |
+| 1 | Image (own repository), module, deployment, RBAC, state detection | 5–7 d — **done** |
+| 2 | Client extraction, capture and finalisation in the image, console settings | 5–7 d — **done in the image, to validate on ceffio.org** |
+| 3 | Nextcloud deposit, muxing, multi-`.webm` split, names | 4–6 d |
+| 4 | CI multi-arch, docs, load tests (3–5 participants), prototype migration | 3–5 d |
 
-**Total : 3 à 4 semaines** pour un développeur, dont la moitié est déjà
-prototypée.
+## 8. Risks
 
-## 8. Risques
-
-| Risque | Impact | Parade |
+| Risk | Impact | Answer |
 |---|---|---|
-| Protocole signaling non documenté | élevé | le client Python est éprouvé ; on le fige et on le teste à chaque montée de version de Talk |
-| Modèle whisper lourd sur CPU | moyen | int8 + threads bornés + `small` par défaut ; `medium` en option ; la transcription tourne après l'appel |
-| Dépendance à `exec` dans le pod Nextcloud | moyen | chemin déjà utilisé par `occ` ailleurs dans Ceffio ; à défaut, WebDAV |
-| Silence en cas d'échec | élevé | `/healthz`, métriques, et un état dans la console (« dernier enregistrement : transcrit / échec ») |
-| Dialectes (darija) | moyen | détection par piste + modèle `medium` en option ; documenter la limite |
+| Undocumented signaling protocol | high | the Python client is proven; pinned and tested on each Talk upgrade |
+| whisper on CPU | medium | int8, bounded threads, `small` baked in, `medium` on request |
+| Dependency on `exec` in the Nextcloud pod | medium | already used for `occ`; WebDAV fallback |
+| Silent failure | high | `/healthz`, and a state in the console (last recording: transcribed / failed) |
+| Dialects (Darija) | medium | per-track detection + `medium` option; documented limit |
 
-## 9. Décisions à prendre
+## 9. Decisions taken
 
-1. **Module séparé `capture`** (recommandé) ou extension du module `recording`
-   existant ?
-2. Modèle par défaut : `small` (rapide, français correct) ou `medium` (meilleur
-   en arabe/darija, ~3× plus lent) ?
-3. Les pistes `.opus` sont-elles conservées indéfiniment, ou supprimées au bout
-   de N jours ?
-4. Transcription des enregistrements déjà présents (rétroactif) ou seulement
-   des nouveaux ?
-5. Faut-il exposer la transcription dans Nextcloud (application dédiée) ou
-   seulement en fichiers à côté du `.webm` ?
+1. Separate `capture` module (not an extension of `recording`).
+2. `small` model baked into the image; `medium` as an option.
+3. Opus tracks kept next to the recording (no automatic purge in v1).
+4. New recordings only; retroactive transcription is a later action.
+5. Transcript as files next to the `.webm`; no Nextcloud application in v1.
