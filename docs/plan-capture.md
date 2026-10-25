@@ -12,8 +12,10 @@ When a participant starts a recording in a Talk call:
 
 1. one **audio track per participant** is captured from the first second;
 2. when the recording stops, a **named** transcript is produced (who spoke);
-3. the `.srt` and the per-participant `.opus` files are written **next to the
-   `.webm`**, in the files of the person who started the recording;
+3. the **`.srt` alone** is written next to the `.webm`, in the files of the
+   person who started the recording — no audio copy is delivered: the tracks
+   are the capture format, decoded in memory for the transcript, and dropped
+   once it exists;
 4. the subtitles are **muxed into the `.webm`**, so that "Share to chat" shares
    the recording together with its transcript.
 
@@ -30,7 +32,7 @@ running), summaries, translation.
 | CPU transcription | faster-whisper int8, **×7–11 real time** measured |
 | Participant names | roster + `oc_talk_sessions` |
 | Subtitle re-alignment | measured by correlation (6.4 s and 11.2 s per track) |
-| Opus tracks at 32 kbit/s | ×11 to ×19 smaller than WAV |
+| Direct Opus capture | no WAV on disk at all (×10 less space) |
 | Muxed subtitles | WebVTT track, stream copy, +683 bytes |
 
 ## 3. Architecture
@@ -140,6 +142,7 @@ from the file name, duration from the metadata).
 
 1. Separate `capture` module (not an extension of `recording`).
 2. `small` model baked into the image; `medium` as an option.
-3. Opus tracks kept next to the recording (no automatic purge in v1).
+3. No audio is delivered: only the `.srt`. The Opus tracks are the capture
+   format, decoded in memory and discarded after the transcript.
 4. New recordings only; retroactive transcription is a later action.
 5. Transcript as files next to the `.webm`; no Nextcloud application in v1.
