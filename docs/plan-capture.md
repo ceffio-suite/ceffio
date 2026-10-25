@@ -1,8 +1,10 @@
 # Plan de faisabilité — capture par participant et transcription des enregistrements
 
-Statut : phase 1 engagée — le module `capture` et son déploiement existent
-(`internal/capture`, `internal/modules/capture`). Reste l'image, dont le client
-est encore celui de l'app de transcription (dépendance `nc_py_api` à extraire).
+Statut : phase 1 livrée — le module `capture` et son déploiement existent
+(`internal/capture`, `internal/modules/capture`), et l'image est publiée par son
+propre dépôt ([ceffio-suite/ceffio-capture](https://github.com/ceffio-suite/ceffio-capture)),
+versionnée indépendamment (`ghcr.io/ceffio-suite/ceffio-capture:v0.1.0`, épinglée
+dans `internal/version`).
 
 ## 1. Objectif
 
@@ -38,9 +40,10 @@ script n'est dans le dépôt, rien n'est versionné ni testé.
 
 ### Option A — image dédiée + nouveau module `capture` (recommandée)
 
-Une image `ghcr.io/ceffio-suite/ceffio-capture`, construite par la même CI avec
-le même tag que le binaire, déployée par un module `capture` qui déclare
-`Requires: ["recording"]`.
+Une image `ghcr.io/ceffio-suite/ceffio-capture`, **publiée par son propre dépôt**
+(sa pile Python et son cycle de publication sont indépendants du binaire
+Ceffio), déployée par un module `capture` qui déclare `Requires: ["recording"]`.
+La version d'image est épinglée dans `internal/version`, comme janus.
 
 - **Pour** : réutilise le client aiortc et faster-whisper déjà éprouvés ; le
   module reste facultatif et indépendant du binaire Go ; on peut livrer d'abord

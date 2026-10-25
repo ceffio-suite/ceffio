@@ -17,6 +17,7 @@ package capture
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -37,8 +38,25 @@ const (
 )
 
 // L'image suit la version du binaire qui la déploie : elle est construite par
-// la même CI, au même tag. Pas de `latest` — un tag figé répondeur.
-var image = "ghcr.io/ceffio-suite/ceffio-capture:" + version.ImageTag()
+// la même CI, au même tag. Pas de `latest` — un tag figé.
+//
+// CEFFIO_CAPTURE_IMAGE existe pour le DÉVELOPPEMENT : sans elle, tester une
+// image non publiée obligerait à reconstruire le binaire sur le serveur pour
+// retrouver le même tag. Elle n'a d'effet que sur une installation de test.
+var image = imageDuService()
+
+func imageDuService() string {
+	// Surcharge de DÉVELOPPEMENT : tester une image non publiée sans
+	// reconstruire le binaire pour retrouver le même tag.
+	if surcharge := os.Getenv("CEFFIO_CAPTURE_IMAGE"); surcharge != "" {
+		return surcharge
+	}
+	composant, ok := version.ParNom("ceffio-capture")
+	if !ok || composant.Image == "" {
+		panic("ceffio-capture manque au registre des versions (internal/version)")
+	}
+	return composant.Image
+}
 
 // Deploy installe le service, idempotemment.
 func Deploy(ctx context.Context, domain string) error {
