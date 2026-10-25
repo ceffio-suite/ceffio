@@ -85,13 +85,12 @@ func Deploy(ctx context.Context, domain string) error {
 	return nil
 }
 
-// ensureEnvironnement forme le Secret natif du service.
+// ensureEnvironnement writes the shared secret where the pod will read it.
 //
-// POURQUOI PAS L'INJECTEUR DU COFFRE : le service n'a besoin que de deux
-// valeurs, dont une (le secret interne du signaling) appartient au module
-// talk. Une entrée de coffre dédiée demanderait une politique OpenBao de plus
-// pour recopier un secret existant ; le Secret natif dit exactement ce qu'il
-// contient, et le module le régénère à chaque installation.
+// RULE: secrets live in OpenBao, nowhere else — no workload reads a Kubernetes
+// Secret. The value is copied into an entry of its own (ceffio/capture) so the
+// pod's vault policy grants read on that entry only, and the deployment gets
+// the injector's annotations; the manifest itself never carries the value.
 func ensureEnvironnement(ctx context.Context, domain string) error {
 	coffre := secrets.DepuisEnvironnement()
 	talk, err := secrets.LireEntreeCoffre(ctx, coffre, "talk", "signaling")
@@ -102,19 +101,7 @@ func ensureEnvironnement(ctx context.Context, domain string) error {
 	if partage == "" {
 		return fmt.Errorf("talk/signaling has no \"partage\" secret: the capture service could not join a call")
 	}
-
-	manifeste := fmt.Sprintf(`apiVersion: v1
-kind: Secret
-metadata:
-  name: %[1]s
-  namespace: %[2]s
-  labels:
-    app: %[3]s
-type: Opaque
-stringData:
-  CEFFIO_INTERNAL_SECRET: %[4]s
-`, secretName, ns, nom, partage)
-	return appliquer(ctx, manifeste)
+	return secrets.EcrireDansCoffre(ctx, coffre, "capture", "server", map[string]string{"internal-secret": partage})
 }
 
 // deployCompteEtDroits crée l'identité et ses droits, réduits au strict.

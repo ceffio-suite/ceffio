@@ -122,7 +122,7 @@ from the file name, duration from the metadata).
 | Phase | Content | Duration |
 |---|---|---|
 | 1 | Image (own repository), module, deployment, RBAC, state detection | 5–7 d — **done** |
-| 2 | Client extraction, capture and finalisation in the image, console settings | 5–7 d — **done in the image, to validate on ceffio.org** |
+| 2 | Client extraction, capture and finalisation in the image, console settings | 5–7 d — **done in the image, to validate on a live installation** |
 | 3 | Nextcloud deposit, muxing, multi-`.webm` split, names | 4–6 d |
 | 4 | CI multi-arch, docs, load tests (3–5 participants), prototype migration | 3–5 d |
 
