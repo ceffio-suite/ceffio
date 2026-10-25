@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright © MANDEM
 
-// Package capture expose le service de capture par participant comme module
-// du registre.
+// Package capture exposes the per-participant capture service as a registry
+// module.
 //
-// POURQUOI UN MODULE SÉPARÉ ET PAS UN AJOUT AU MODULE RECORDING : enregistrer
-// une réunion et la transcrire sont deux besoins distincts. Une installation
-// peut vouloir l'enregistrement seul (le .webm) sans payer 1,5 Go d'image et
-// 4 Gi de RAM ; et la transcription seule, sans le recorder, n'a pas de sens
-// ici — d'où la dépendance déclarée, pas la fusion.
+// WHY A SEPARATE MODULE AND NOT AN ADDITION TO recording: recording a meeting
+// and transcribing it are two needs. An installation may want the recording
+// alone (the .webm) without paying a 1.5 GB image and 4 GiB of RAM; and
+// transcription alone, without the recorder, has nothing to transcribe here —
+// hence a declared dependency rather than a merge.
 package capture
 
 import (
@@ -25,7 +25,6 @@ const (
 	nsVideo = "ceffio-video"
 	nsFiles = "ceffio-files"
 	nsData  = "ceffio-data"
-	nomWork = "ceffio-capture"
 )
 
 type captureModule struct{}
@@ -40,25 +39,25 @@ func (m *captureModule) Info() module.Info {
 		Kind:        module.Optional,
 		Default:     false,
 
-		// Un enregistrement sans recorder n'aurait rien à transcrire, et la
-		// capture rejoint l'appel par le même signaling que la transcription
-		// en direct : exapps-daemon doit être là.
+		// A recording without the recorder has nothing to transcribe, and the
+		// capture joins the call through the same signaling as live
+		// transcription: exapps-daemon must be there.
 		Requires:   []string{"recording", "exapps-daemon"},
 		Namespaces: []string{nsVideo},
 
-		Resources: "~1,5 GB image, 4 GB RAM during transcription",
-		Warning:   "Transcription happens after the call, on the CPU of this server; it can take a third of the meeting length.",
+		Resources: "~1.5 GB image (model included), 4 GB RAM during transcription",
+		Warning:   "Transcription happens after the call, on this server's CPU; it can take a third of the meeting length.",
 
-		// Droits : le déploiement lui-même dans ceffio-video, et les deux
-		// execs décrits dans internal/capture (dépôt des fichiers, lecture de
-		// l'état d'enregistrement).
+		// Rights: the deployment itself in ceffio-video, and the two execs
+		// described in internal/capture (deposit files, read the recording
+		// state).
 		Permissions: []module.Permission{
 			{
 				Namespace: nsVideo,
 				Rules: []rbacv1.PolicyRule{
 					{
 						APIGroups: []string{""},
-						Resources: []string{"pods", "services", "serviceaccounts", "persistentvolumeclaims", "secrets"},
+						Resources: []string{"pods", "services", "serviceaccounts", "persistentvolumeclaims"},
 						Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
 					},
 					{
@@ -91,15 +90,15 @@ func (m *captureModule) Info() module.Info {
 	}
 }
 
-// Install délègue à capture.Deploy.
+// Install delegates to capture.Deploy.
 func (m *captureModule) Install(ctx context.Context, env module.Env) error {
 	return capture.Deploy(ctx, env.Domain)
 }
 
-// State lit le cluster : le Deployment est-il prêt ?
+// State reads the cluster: is the Deployment ready?
 func (m *captureModule) State(ctx context.Context, env module.Env) module.State {
 	if _, err := k8sapi.Nouveau(); err != nil {
-		return module.State{Status: module.Unknown, Detail: "Kubernetes injoignable : " + err.Error()}
+		return module.State{Status: module.Unknown, Detail: "Kubernetes unreachable: " + err.Error()}
 	}
 	if capture.Etat(ctx) {
 		return module.State{Status: module.Installed}
@@ -107,7 +106,7 @@ func (m *captureModule) State(ctx context.Context, env module.Env) module.State 
 	return module.State{Status: module.Absent}
 }
 
-// Uninstall délègue à capture.Supprime.
+// Uninstall delegates to capture.Supprime.
 func (m *captureModule) Uninstall(ctx context.Context, env module.Env) error {
 	return capture.Supprime(ctx)
 }
