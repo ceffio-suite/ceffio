@@ -121,6 +121,14 @@ var Registry = []Composant{
 		Module: "internal/talk", Role: "Talk: SFU, media transport",
 	},
 	{
+		// L'image de capture a SON dépôt (ceffio-suite/ceffio-capture) : elle
+		// porte sa propre pile Python (WebRTC, whisper) et son propre cycle de
+		// publication, indépendant des versions du binaire. On épingle donc une
+		// version d'IMAGE, pas le tag du binaire — même règle que janus.
+		Nom: "ceffio-capture", Image: "ghcr.io/ceffio-suite/ceffio-capture:v0.7.3",
+		Module: "internal/capture", Role: "per-participant audio capture and CPU transcription",
+	},
+	{
 		// The recording server is published ONLY with date tags upstream
 		// (20261014_095932), never a version number: the project ships it as
 		// part of Nextcloud AIO. We pin an exact date rather than "latest" —

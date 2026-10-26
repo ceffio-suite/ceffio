@@ -36,6 +36,7 @@ Kept for context. **They do not describe the current code.**
 | Document | What it was |
 |---|---|
 | [history/plan-talk-hpb.md](history/plan-talk-hpb.md) | The working note for moving from Matrix/Element to Talk + HPB |
+| [plan-capture.md](plan-capture.md) | Feasibility plan: per-participant capture, the `ceffio-capture` image, and its deployment alongside `recording` |
 | [history/sso-office-ingress-fixes.md](history/sso-office-ingress-fixes.md) | The note written while fixing the office SSO behind the ingress |
 | [history/consoles-archive.md](history/consoles-archive.md) | Why the console image moved out of its own repository |
 
