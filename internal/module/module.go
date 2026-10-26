@@ -73,6 +73,10 @@ type Info struct {
 	Default    bool
 	Requires   []string // module IDs that must be installed first
 	Namespaces []string // where its pods live: status, doctor, uninstall
+	// Vault declares what this module's workloads may read in OpenBao. The
+	// vault layer builds the policy and the Kubernetes role from it, so a new
+	// module never edits internal/vault — which is the point of the registry.
+	Vault []VaultAccess
 
 	Services  []Service // public exposures, for the status page
 	Resources string    // "~9 GB disk, ~16 GB RAM", empty when negligible
@@ -85,6 +89,18 @@ type Info struct {
 //
 // WHY declarative: the status page and the doctor must list the public
 // access points without knowing the internal manifests of each module.
+// VaultAccess is what a module's workload may READ in OpenBao.
+//
+// READ ONLY, and only under the module's own prefix: a module cannot grant
+// itself write access, nor read another module's secrets. PolitiqueModule
+// enforces the prefix, so a typo fails at provisioning instead of granting
+// something nobody asked for.
+type VaultAccess struct {
+	ServiceAccount string   // the Kubernetes identity that authenticates
+	Namespace      string   // where that identity lives
+	Paths          []string // e.g. "kv/data/ceffio/capture/*"
+}
+
 type Service struct {
 	Sub, Name, Role string // "cloud", "Nextcloud", "Files, sharing and collaboration"
 

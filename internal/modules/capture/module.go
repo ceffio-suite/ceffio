@@ -53,6 +53,15 @@ func (m *captureModule) Info() module.Info {
 		Requires:   []string{"recording"},
 		Namespaces: []string{nsVideo},
 
+		// The service reads its own vault entry, and nothing else: the
+		// signaling's shared secret is copied into capture/server by
+		// internal/capture, so it never holds a right on talk/*.
+		Vault: []module.VaultAccess{{
+			ServiceAccount: "ceffio-capture",
+			Namespace:      nsVideo,
+			Paths:          []string{"kv/data/ceffio/capture/*"},
+		}},
+
 		Resources: "~1.5 GB image (model included), 4 GB RAM during transcription",
 		Warning:   "Transcription happens after the call, on this server's CPU; it can take a third of the meeting length.",
 

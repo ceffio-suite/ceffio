@@ -77,6 +77,7 @@ import (
 	"time"
 
 	"github.com/ceffio-suite/ceffio/internal/k8sapi"
+	"github.com/ceffio-suite/ceffio/internal/module"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"github.com/ceffio-suite/ceffio/internal/sso"
 )
@@ -795,6 +796,34 @@ func jetonAdministration(ctx context.Context, cli *k8sapi.Client) (string, error
 // service cannot mount an engine, nor broaden its own policy, nor manufacture
 // a token. That is what "least privilege" means, and a single token could not
 // achieve it.
+// PolitiqueModule builds the read-only policy of a module, or refuses it.
+//
+// THE REFUSAL IS THE POINT: a module may only read under its own prefix. A typo,
+// or a path aimed at another component's secrets, would otherwise grant exactly
+// what the module contract forbids — and stay invisible until an audit.
+func PolitiqueModule(id string, chemins []string) (string, error) {
+	if len(chemins) == 0 {
+		return "", fmt.Errorf("module %q declares a vault access with no path", id)
+	}
+	prefixe := "kv/data/ceffio/" + id + "/"
+	var b strings.Builder
+	for _, chemin := range chemins {
+		// A prefix check alone is not enough: "capture/../talk" starts with the
+		// prefix and escapes it. The traversal is refused explicitly.
+		if strings.Contains(chemin, "..") {
+			return "", fmt.Errorf("module %q declares %q: a path may not contain \"..\"", id, chemin)
+		}
+		if !strings.HasPrefix(chemin, prefixe) {
+			return "", fmt.Errorf("module %q declares %q: it may only read under %q", id, chemin, prefixe)
+		}
+		fmt.Fprintf(&b, "path %q { capabilities = [\"read\",\"list\"] }\n", chemin)
+		fmt.Fprintf(&b, "path %q { capabilities = [\"read\",\"list\"] }\n",
+			strings.Replace(chemin, "kv/data/", "kv/metadata/", 1))
+	}
+	b.WriteString("path \"sys/internal/ui/mounts/*\" { capabilities = [\"read\"] }")
+	return b.String(), nil
+}
+
 func poserPolitiquesEtJetons(ctx context.Context, cli *k8sapi.Client) (string, error) {
 	// REUSE THE INSTALLATION TOKEN IF IT STILL WORKS. The vault has certainly
 	// already been set up: without that, the root token would be needed, which
@@ -891,13 +920,6 @@ path "sys/internal/ui/mounts/*" { capabilities = ["read"] }`},
 		{"ceffio-recording", `path "kv/data/ceffio/recording/*" { capabilities = ["read","list"] }
 path "kv/metadata/ceffio/recording/*" { capabilities = ["read","list"] }
 path "sys/internal/ui/mounts/*" { capabilities = ["read"] }`},
-		// The capture service reads ITS OWN entry, and nothing else. The
-		// signaling's shared secret is copied into capture/server by
-		// internal/capture at deployment time, so this service never holds a
-		// right on talk/* — the same reasoning as the recorder.
-		{"ceffio-capture", `path "kv/data/ceffio/capture/*" { capabilities = ["read","list"] }
-path "kv/metadata/ceffio/capture/*" { capabilities = ["read","list"] }
-path "sys/internal/ui/mounts/*" { capabilities = ["read"] }`},
 		// HaRP reads its own shared key, and nothing else. It is the deploy
 		// daemon for the ExApps, not a consumer of any other component's
 		// secrets: giving it a wider policy would hand a component that
@@ -984,6 +1006,19 @@ path "sys/health" { capabilities = ["read"] }`},
 	// The subsequent policies are retried too, because the first may have
 	// succeeded and the third fail if the salt was recreated in between.
 	attendreEcritureVault(ctx, cli, pod, inst)
+
+	// MODULES DECLARE THEIR OWN ACCESS, built from the registry: a new module
+	// never edits this file again.
+	for _, m := range module.All() {
+		for _, acces := range m.Info().Vault {
+			regle, err := PolitiqueModule(m.Info().ID, acces.Paths)
+			if err != nil {
+				return "", err
+			}
+			politiques = append(politiques, struct{ nom, regle string }{
+				nom: "ceffio-" + m.Info().ID, regle: regle})
+		}
+	}
 
 	for _, p := range politiques {
 		script := fmt.Sprintf("cat > /tmp/p.hcl <<'FIN_POLITIQUE'\n%s\nFIN_POLITIQUE\n", p.regle)
@@ -1120,7 +1155,6 @@ func configurerAuthKubernetes(ctx context.Context, cli *k8sapi.Client) error {
 		// vault for a role that does not exist, and the failure is silent on the
 		// application side — the recorder simply runs without credentials.
 		{nom: "recording", sa: "talk-recording", ns: "ceffio-video", politique: "ceffio-recording"},
-		{nom: "capture", sa: "ceffio-capture", ns: "ceffio-video", politique: "ceffio-capture"},
 		// HaRP. The ServiceAccount name and namespace MUST match what
 		// internal/exapps creates and what its RoleBinding names — a mismatch
 		// makes every vault request answer 403, and the pod starts anyway.
@@ -1131,6 +1165,16 @@ func configurerAuthKubernetes(ctx context.Context, cli *k8sapi.Client) error {
 		// deployment keeps authenticating while the new one comes up.
 		{nom: "exapps-harp", sa: "appapi-harp", ns: "ceffio-exapps,ceffio-system", politique: "ceffio-exapps-harp"},
 	}
+	// The Kubernetes roles follow the same rule: the module names its service
+	// account and namespace, the vault builds the binding.
+	for _, m := range module.All() {
+		for _, acces := range m.Info().Vault {
+			roles = append(roles, struct{ nom, sa, ns, politique string }{
+				nom: m.Info().ID, sa: acces.ServiceAccount, ns: acces.Namespace,
+				politique: "ceffio-" + m.Info().ID})
+		}
+	}
+
 	for _, r := range roles {
 		if _, err := baoAvecJeton(ctx, cli, adm,
 			"write", "auth/kubernetes/role/"+r.nom,
