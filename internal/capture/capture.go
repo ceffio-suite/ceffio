@@ -17,6 +17,7 @@ package capture
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -328,13 +329,48 @@ func attendrePret(ctx context.Context) error {
 	return fmt.Errorf("the capture service did not become ready in time: kubectl -n %s logs deploy/%s", ns, nom)
 }
 
-// Etat reads the cluster: is the Deployment ready?
-func Etat(ctx context.Context) bool {
+// Etat is what the service says about itself.
+//
+// WHY A STRUCT AND NOT A BOOLEAN: "the Deployment is ready" and "the last
+// recording was transcribed" are two different facts. A pod that runs and
+// fails every transcription looked exactly like one that never tried — the
+// silent failure the plan lists as a high risk. The module decides what to
+// present from both.
+type Situation struct {
+	Ready  bool
+	Reason string         // why it is not ready, when it is not
+	Last   map[string]any // GET /status, empty when the service does not answer
+}
+
+// LireEtat reads the Deployment, then asks the service for its last job.
+func LireEtat(ctx context.Context) Situation {
 	cli, err := k8sapi.Nouveau()
 	if err != nil {
-		return false
+		return Situation{Reason: "Kubernetes unreachable: " + err.Error()}
 	}
-	return cli.DeploiementPret(ctx, ns, nom)
+	if !cli.DeploiementPret(ctx, ns, nom) {
+		return Situation{Reason: "the Deployment is not ready"}
+	}
+	etat := Situation{Ready: true}
+	// THE STATUS ENDPOINT IS READ THROUGH THE POD, not through the Service:
+	// the console runs in-cluster and could resolve the Service, but the CLI
+	// runs on the host and could not. One path for both, and it keeps working
+	// when the Service is being recreated.
+	pod, err := cli.PodDuDeploiement(ctx, ns, nom, nom)
+	if err != nil {
+		etat.Reason = "no running pod: " + err.Error()
+		return etat
+	}
+	sortie, err := cli.Executer(ctx, ns, pod, "", "python3", "-c",
+		"import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8080/status').read().decode())")
+	if err != nil {
+		return etat
+	}
+	dernier := map[string]any{}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(sortie)), &dernier); err == nil {
+		etat.Last = dernier
+	}
+	return etat
 }
 
 // Supprime removes what Deploy created, volumes included — the registry's

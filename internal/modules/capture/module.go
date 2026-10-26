@@ -98,15 +98,47 @@ func (m *captureModule) Install(ctx context.Context, env module.Env) error {
 	return capture.Deploy(ctx, env.Domain)
 }
 
-// State reads the cluster: is the Deployment ready?
+// State reads the cluster AND the service, because they answer different
+// questions: the Deployment says whether the pod runs, /status says what the
+// last recording became. A pod that runs and fails every transcription is not
+// "installed" in any useful sense — the plan calls that a silent failure, and
+// this is where it stops being silent.
 func (m *captureModule) State(ctx context.Context, env module.Env) module.State {
-	if _, err := k8sapi.Nouveau(); err != nil {
+	cli, err := k8sapi.Nouveau()
+	if err != nil {
 		return module.State{Status: module.Unknown, Detail: "Kubernetes unreachable: " + err.Error()}
 	}
-	if capture.Etat(ctx) {
-		return module.State{Status: module.Installed}
+	// ABSENT MEANS NEVER INSTALLED. A crash-looping pod is degraded: telling an
+	// operator it is absent sends them looking for an installation that exists.
+	if !cli.DeploiementExiste(ctx, nsVideo, "ceffio-capture") {
+		return module.State{Status: module.Absent}
 	}
-	return module.State{Status: module.Absent}
+	etat := capture.LireEtat(ctx)
+	if !etat.Ready {
+		return module.State{Status: module.Degraded, Detail: etat.Reason}
+	}
+	detail := resumeDernierTravail(etat.Last)
+	if etat.Last["result"] == "failed" {
+		return module.State{Status: module.Degraded, Detail: detail}
+	}
+	return module.State{Status: module.Installed, Detail: detail}
+}
+
+// resumeDernierTravail turns /status into one line an operator can read.
+func resumeDernierTravail(dernier map[string]any) string {
+	switch dernier["result"] {
+	case "transcribed":
+		return "last recording transcribed"
+	case "running":
+		return "transcribing a recording now"
+	case "failed":
+		if erreur, ok := dernier["error"].(string); ok && erreur != "" {
+			return "last recording failed: " + erreur
+		}
+		return "last recording failed"
+	default:
+		return "no recording since the service started"
+	}
 }
 
 // Uninstall delegates to capture.Supprime.

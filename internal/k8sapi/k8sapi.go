@@ -669,6 +669,17 @@ func (c *Client) PodDuDeploiement(ctx context.Context, ns, nom, etiquette string
 // It reads the status rather than trusting the object's existence: a Deployment
 // with zero ready replicas exists, and answering "present" for it would claim a
 // service that is not serving.
+// DeploiementExiste reports whether the Deployment object exists at all.
+//
+// WHY IT IS NOT DeploiementPret: a module must be able to say "absent" (never
+// installed) and "degraded" (installed, but broken) as two different things. A
+// pod that crash-loops is not an absent module, and telling an operator it is
+// absent sends them looking for an installation that is in fact there.
+func (c *Client) DeploiementExiste(ctx context.Context, ns, nom string) bool {
+	_, err := c.cs.AppsV1().Deployments(ns).Get(ctx, nom, metav1.GetOptions{})
+	return err == nil
+}
+
 func (c *Client) DeploiementPret(ctx context.Context, ns, nom string) bool {
 	d, err := c.cs.AppsV1().Deployments(ns).Get(ctx, nom, metav1.GetOptions{})
 	if err != nil {
