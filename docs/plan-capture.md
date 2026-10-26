@@ -31,7 +31,7 @@ running), summaries, translation.
 | Language: room selector + per-track detection | proven (`fr` detected at 0.93 and 0.97) |
 | CPU transcription | faster-whisper int8, **×7–11 real time** measured |
 | Participant names | roster + `oc_talk_sessions` |
-| Subtitle re-alignment | measured by correlation (6.4 s and 11.2 s per track) |
+| Subtitle re-alignment | track dated at its first received sample; shifts match the call join times |
 | Direct Opus capture | no WAV on disk at all (×10 less space) |
 | Muxed subtitles | WebVTT track, stream copy, +683 bytes |
 
@@ -91,24 +91,29 @@ Talk                          ceffio-capture                    Nextcloud
 
 ## 6. Hard points and answers
 
-**Track offsets.** Each WebRTC subscription arrives at a different moment, and
-the capture joins at the "starting" state — up to a dozen seconds before the
-recorder writes its first sample. Timestamps therefore could not be trusted: on
-a live recording the `.srt` placed speech at 0 s where the `.webm` was silent
-for 12 s. The mix is fetched and each track is aligned by **correlating its RMS
-envelope with the mix** (±30 s); the measured offset replaces the timestamp
-reference when the correlation is at least 0.4, and the log says which was
-used.
+**Track offsets.** The capture joins the call when the call starts, and each
+track is dated **at its first received sample**, not when the track object was
+created: ICE and DTLS complete seconds later, and a different number of seconds
+per participant. On a live recording the two shifts were -2.8 s and -8.4 s, and
+they matched the participants' call join times exactly.
+
+Two attempts were made and removed, both on evidence: correlating the track
+envelope against the mix answered -16.8 s with a confidence of 0.51 and pushed
+one participant's whole transcript before zero; and transcribing per speech
+chunk (to handle bilingual calls) made whisper invent text on short regions
+("Merci d'avoir regardé" four times). Whole-track transcription in the room
+language reproduces the reference transcription of the mix, and the timestamp
+shift reproduces the real delay. Residual error: 1-4 s.
 
 **Participant names.** The roster the capture writes carries `userId` next to
 both session ids: names come from it directly. A database query keyed by the
 signaling id returned nothing — the first transcript said "participant C88GIU".
 
-**Language.** A call in Algeria is not monolingual. Detection runs **per speech
-chunk** (VAD), not per track: one decision per track forced a French speaker who
-closed with one Arabic sentence through the Arabic model, and the entire
-transcript came back as Arabic nonsense. The room language is the tie-breaker
-below 0.6 confidence.
+**Language.** The room language is the reference: the moderator declares it,
+and Talk's own selector writes it. When the room has none, whisper detects it
+once per track. A bilingual call (French, then one Arabic sentence) renders the
+Arabic phonetically — accepted by the operator, and better than a per-chunk
+detection that hallucinated.
 
 **Writing into the launcher's files.** Through `pods/exec` in the Nextcloud pod
 (write, `chown www-data`, `occ files:scan`) — the same path Ceffio already uses
