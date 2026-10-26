@@ -28,7 +28,7 @@ import (
 // already ships in the cluster and in the local registry. A relay image would
 // add a second thing to publish, pin and import offline.
 func newRecordingRelayCmd() *cobra.Command {
-	var ecoute, amont, notifier string
+	var ecoute, amont, notifier, fichierSecret string
 
 	c := &cobra.Command{
 		Use:   "recording-relay",
@@ -45,15 +45,41 @@ It is started by the recorder's own pod; this command is not part of the
 operator's daily work, which is why it is hidden.`,
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// THE SECRET COMES FROM THE ENVIRONMENT, because that is how the
-			// recorder's pod already receives it: the OpenBao injector writes
-			// /secrets/env, and the container sources it. A flag would put the
-			// secret on a command line, readable in /proc/<pid>/cmdline.
+			// THE SECRET COMES FROM A FILE, NOT FROM THE ENVIRONMENT, and the
+			// reason is the image this process runs in: the Ceffio image is
+			// built FROM scratch, so it has no shell to source the injector's
+			// /secrets/env — the file of shell assignments the recorder's
+			// container reads. The injector therefore renders a SECOND file for
+			// this container, holding the value and nothing else, and it is read
+			// here.
+			//
+			// A FILE RATHER THAN A FLAG, too: a secret on a command line is
+			// readable in /proc/<pid>/cmdline.
+			//
+			// THE ENVIRONMENT STAYS SUPPORTED: that is how a human runs the
+			// command against a test recorder, and dropping it would make the
+			// binary harder to try by hand for no gain.
 			secret := os.Getenv("RECORDING_SECRET")
+			if fichierSecret != "" {
+				brut, err := os.ReadFile(fichierSecret)
+				if err != nil {
+					return fmt.Errorf("recording-relay: reading %s: %w", fichierSecret, err)
+				}
+				if len(brut) == 0 {
+					return fmt.Errorf("recording-relay: %s is empty — the relay cannot "+
+						"verify Talk's signature, and an unchecked relay would forward "+
+						"anything to the recorder", fichierSecret)
+				}
+				// THE BYTES ARE THE SECRET, TRIMMED OF NOTHING: the template that
+				// renders this file ends with `-}}` precisely so no newline
+				// reaches it (vault.GabaritValeur). Trimming here would hide a
+				// template that started appending one.
+				secret = string(brut)
+			}
 			if secret == "" {
-				return fmt.Errorf("recording-relay: RECORDING_SECRET is empty — the relay " +
-					"cannot verify Talk's signature, and an unchecked relay would forward " +
-					"anything to the recorder")
+				return fmt.Errorf("recording-relay: no secret — set RECORDING_SECRET or " +
+					"pass --secret-file; without it the relay cannot verify a signature " +
+					"and would forward anything to the recorder")
 			}
 
 			logf := func(format string, a ...any) {
@@ -108,5 +134,8 @@ operator's daily work, which is why it is hidden.`,
 		"the recorder, in the same pod")
 	c.Flags().StringVar(&notifier, "notify", "http://ceffio-capture.ceffio-video.svc:8080/v1/recording",
 		"the capture's endpoint; empty disables the notification")
+	c.Flags().StringVar(&fichierSecret, "secret-file", "",
+		"file holding the recording secret (the pod's injected file); "+
+			"RECORDING_SECRET is used when this is empty")
 	return c
 }

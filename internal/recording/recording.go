@@ -162,24 +162,67 @@ metadata:
 func deployRecorder(ctx context.Context, domain string) error {
 	// Secrets arrive through the OpenBao injector, like every other workload —
 	// this function never reads them, it only wires the annotations.
-	annotations := annotationsRecorder()
+	annotations, err := annotationsRecorder()
+	if err != nil {
+		return err
+	}
 	manifeste := manifesteRecorder(domain, annotations)
 
 	return appliquer(ctx, manifeste)
 }
 
-// annotationsRecorder declares the two values the recorder gets from the vault.
+// annotationsRecorder declares what the recorder's pod reads from the vault:
+// ONE file of shell assignments for the recorder, and ONE raw value for the
+// relay.
 //
 // ONLY recording/server IS READ — never talk/signaling. The shared internal
 // secret is copied into the recorder's own entry by ensureSecrets, precisely so
 // that this component never holds a right on the signaling's secrets. The
 // matching policy (ceffio-recording) grants read on recording/* and nothing else.
-func annotationsRecorder() string {
-	return vault.AnnotationsAgent(8, "recording", "kv/data/ceffio/recording/server",
-		vault.GabaritExports("kv/data/ceffio/recording/server",
-			[2]string{"RECORDING_SECRET", vault.ChampCoffre("recording-secret")},
-			[2]string{"INTERNAL_SECRET", vault.ChampCoffre("internal-secret")},
-		))
+//
+// WHY TWO FILES, AND WHY THE SECOND ONE EXISTS AT ALL: the recorder sources
+// /secrets/env, which it can do because its image has a shell. The relay runs in
+// the CEFFIO image, which is built FROM scratch — no shell, no /bin/sh — so it
+// cannot source anything. It gets the one value it needs as a file of its own,
+// rendered without a trailing newline (vault.GabaritValeur), which it reads
+// directly. Writing a shell into the image to reuse the first file would add a
+// shell to every console pod for the benefit of one container.
+//
+// THE AGENT RUNS AS THE RELAY'S USER, and that is what makes 0400 useful: the
+// agent creates the files, so a file it writes as UID 100 would be unreadable by
+// the relay (65532). The env file stays 0644 — the recorder runs as root and
+// every other component of the suite reads its file that way.
+func annotationsRecorder() (string, error) {
+	const chemin = "kv/data/ceffio/recording/server"
+	fichiers, err := vault.AnnotationsAgentFichiers(8, "recording", []vault.FichierInjecte{
+		{
+			Nom:    "env",
+			Chemin: chemin,
+			Gabarit: vault.GabaritExports(chemin,
+				[2]string{"RECORDING_SECRET", vault.ChampCoffre("recording-secret")},
+				[2]string{"INTERNAL_SECRET", vault.ChampCoffre("internal-secret")},
+			),
+			Perms: "0644",
+		},
+		{
+			// THE SAME VALUE, AS A RAW FILE: the relay verifies Talk's signature
+			// with it, so it must be the secret and nothing else — an export
+			// line would be read as part of the key.
+			Nom:     "relay-secret",
+			Chemin:  chemin,
+			Gabarit: vault.GabaritValeur(chemin, "recording-secret"),
+			Perms:   "0400",
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("recording: the pod's vault annotations: %w", err)
+	}
+	return fmt.Sprintf(`        # THE AGENT AND THE RELAY SHARE A USER, so the 0400 file is readable by
+        # the process that needs it and by no other: a file owned by the agent's
+        # own UID would leave the relay with "permission denied" in Init.
+        vault.hashicorp.com/agent-run-as-user: "65532"
+        vault.hashicorp.com/agent-run-as-group: "65532"
+%s`, fichiers), nil
 }
 
 // manifesteRecorder builds the Deployment + Service document.
@@ -187,6 +230,10 @@ func annotationsRecorder() string {
 // Separated from the apply so the YAML can be rendered and validated without
 // touching a cluster — a malformed manifest would otherwise only be discovered
 // mid-deployment, after the earlier phases have already run.
+//
+// annotations arrives ALREADY INDENTED for the pod template (eight spaces): the
+// generator knows the shape of its own block, and indenting it again here is how
+// the block ended up at sixteen for no reason.
 func manifesteRecorder(domain, annotations string) string {
 	return fmt.Sprintf(`apiVersion: apps/v1
 kind: Deployment
@@ -279,6 +326,61 @@ spec:
           tcpSocket: {port: %[6]d}
           initialDelaySeconds: 10
           periodSeconds: 10
+      # THE RELAY, IN FRONT OF THE RECORDER.
+      #
+      # WHY A SECOND CONTAINER AND NOT ITS OWN POD: it has to reach the recorder
+      # on 127.0.0.1. A separate pod would put a Service, a DNS name and a second
+      # network hop between Talk and the recorder, and the recorder's port would
+      # then have to be exposed somewhere — which is exactly what this container
+      # exists to avoid.
+      #
+      # WHY IT IS NOT THE CAPTURE MODULE'S BUSINESS: two modules must not fight
+      # over one Deployment. The relay is always present; without the capture it
+      # only forwards, and installing or removing the capture never touches this
+      # pod.
+      #
+      # THE IMAGE IS THE CEFFIO ONE, already in the cluster and already imported
+      # for offline installations: the relay is a subcommand of the binary, not a
+      # new image to publish, pin and import.
+      - name: relay
+        image: %[7]s
+        imagePullPolicy: IfNotPresent
+        args:
+          - recording-relay
+          - --listen=:1235
+          - --upstream=http://127.0.0.1:%[6]d
+          - --notify=http://ceffio-capture.ceffio-video.svc:8080/v1/recording
+          # THE SECRET ARRIVES AS A FILE, not from the environment: this image
+          # has no shell to source /secrets/env (see annotationsRecorder).
+          - --secret-file=/secrets/relay-secret
+        ports:
+          - {name: relay, containerPort: 1235}
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 65532
+          runAsGroup: 65532
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities: {drop: ["ALL"]}
+        # THE LIMITS ARE THE POINT: this container copies a few hundred bytes,
+        # a few times a day. Anything above 64 MiB would mean it is not the
+        # relay that is running.
+        resources:
+          requests: {memory: 32Mi, cpu: 10m}
+          limits: {memory: 64Mi, cpu: 100m}
+        # THE PROBES ANSWER FOR THE RELAY ITSELF: /healthz is never forwarded to
+        # the recorder, so a recorder restart cannot make a healthy relay look
+        # dead — and a dead relay does make the pod unready, which is the truth
+        # Talk needs to see.
+        readinessProbe:
+          httpGet: {path: /healthz, port: relay}
+          periodSeconds: 10
+          failureThreshold: 3
+        livenessProbe:
+          httpGet: {path: /healthz, port: relay}
+          initialDelaySeconds: 5
+          periodSeconds: 20
+          failureThreshold: 3
       volumes:
       - name: tmp
         emptyDir: {}
@@ -296,8 +398,12 @@ spec:
   selector:
     app: %[1]s
   ports:
-  - {name: http, port: %[6]d, targetPort: %[6]d}
-`, nom, deployNS, indentYaml(annotations, 8), image, domain, portHTTP)
+  # THE PORT TALK KNOWS DOES NOT MOVE: 1234. Only the target changes, to the
+  # relay's named port. Talk's recording_servers setting keeps pointing here, so
+  # neither the relay's arrival nor the capture module changes anything
+  # Nextcloud has to be told.
+  - {name: http, port: %[6]d, targetPort: relay}
+`, nom, deployNS, annotations, image, domain, portHTTP, imageRelais())
 }
 
 // attendrePret blocks until the recorder answers, so a deployment never claims
@@ -473,6 +579,17 @@ func indentYaml(s string, n int) string {
 // It PANICS on a missing entry, deliberately: an empty image string would
 // produce a Deployment that fails later, inside the cluster, with a message
 // far less clear than this one.
+// imageRelais is the image the relay container runs: the Ceffio binary's own
+// image, not a new one.
+//
+// WHY THE SAME REFERENCE AS THE CONSOLE: it is the image the installation has
+// already pulled (or imported from disk on an offline machine), so the relay
+// adds no download, no registry entry and no version to keep in step. The
+// binary inside it carries the `recording-relay` subcommand.
+func imageRelais() string {
+	return "ghcr.io/ceffio-suite/ceffio:" + version.ImageTag()
+}
+
 func imageDuRegistre() string {
 	c, ok := version.ParNom("talk-recording")
 	if !ok || c.Image == "" {
