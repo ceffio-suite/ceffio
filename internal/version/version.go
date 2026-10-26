@@ -125,7 +125,7 @@ var Registry = []Composant{
 		// porte sa propre pile Python (WebRTC, whisper) et son propre cycle de
 		// publication, indépendant des versions du binaire. On épingle donc une
 		// version d'IMAGE, pas le tag du binaire — même règle que janus.
-		Nom: "ceffio-capture", Image: "ghcr.io/ceffio-suite/ceffio-capture:v0.3.0",
+		Nom: "ceffio-capture", Image: "ghcr.io/ceffio-suite/ceffio-capture:v0.5.0",
 		Module: "internal/capture", Role: "per-participant audio capture and CPU transcription",
 	},
 	{

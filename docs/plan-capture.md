@@ -91,14 +91,24 @@ Talk                          ceffio-capture                    Nextcloud
 
 ## 6. Hard points and answers
 
-**Track offsets.** Each WebRTC subscription arrives at a different moment
-(measured: 6.4 s and 11.2 s after the `.webm` start). Each track is timestamped
-when it opens, and every subtitle is computed in absolute time before being
-mapped back to the recording timeline.
+**Track offsets.** Each WebRTC subscription arrives at a different moment, and
+the capture joins at the "starting" state — up to a dozen seconds before the
+recorder writes its first sample. Timestamps therefore could not be trusted: on
+a live recording the `.srt` placed speech at 0 s where the `.webm` was silent
+for 12 s. The mix is fetched and each track is aligned by **correlating its RMS
+envelope with the mix** (±30 s); the measured offset replaces the timestamp
+reference when the correlation is at least 0.4, and the log says which was
+used.
 
-**Participant names.** The room roster maps the HPB session to the Nextcloud
-session; `oc_talk_sessions` joined to `oc_talk_attendees` gives the display
-name. No dependency on signaling logs.
+**Participant names.** The roster the capture writes carries `userId` next to
+both session ids: names come from it directly. A database query keyed by the
+signaling id returned nothing — the first transcript said "participant C88GIU".
+
+**Language.** A call in Algeria is not monolingual. Detection runs **per speech
+chunk** (VAD), not per track: one decision per track forced a French speaker who
+closed with one Arabic sentence through the Arabic model, and the entire
+transcript came back as Arabic nonsense. The room language is the tie-breaker
+below 0.6 confidence.
 
 **Writing into the launcher's files.** Through `pods/exec` in the Nextcloud pod
 (write, `chown www-data`, `occ files:scan`) — the same path Ceffio already uses
