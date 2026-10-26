@@ -11,8 +11,8 @@ import (
 )
 
 // TestInfoValide vérifie le contrat d'affichage et, surtout, les dépendances :
-// une capture sans recorder n'a rien à transcrire, et sans exapps-daemon elle
-// ne peut pas rejoindre l'appel par le signaling.
+// a capture without the recorder has nothing to transcribe — and that is the
+// only one: it joins the call through the signaling, not through HaRP.
 func TestInfoValide(t *testing.T) {
 	m := &captureModule{}
 	info := m.Info()
@@ -32,10 +32,14 @@ func TestInfoValide(t *testing.T) {
 	for _, d := range info.Requires {
 		exigences[d] = true
 	}
-	for _, attendu := range []string{"recording", "exapps-daemon"} {
-		if !exigences[attendu] {
-			t.Errorf("Info.Requires ne contient pas %q (%v)", attendu, info.Requires)
-		}
+	if !exigences["recording"] {
+		t.Errorf("Info.Requires ne contient pas recording (%v)", info.Requires)
+	}
+	// THE DEPENDENCY ON HaRP IS GONE, and it must not come back: it would
+	// force exapps-daemon — and therefore the right for Nextcloud to start
+	// containers — on an installation that only wants to record and transcribe.
+	if exigences["exapps-daemon"] {
+		t.Errorf("Info.Requires contient encore exapps-daemon (%v)", info.Requires)
 	}
 
 	// Les droits doivent couvrir les deux execs, sans quoi le service démarre

@@ -39,10 +39,13 @@ func (m *captureModule) Info() module.Info {
 		Kind:        module.Optional,
 		Default:     false,
 
-		// A recording without the recorder has nothing to transcribe, and the
-		// capture joins the call through the same signaling as live
-		// transcription: exapps-daemon must be there.
-		Requires:   []string{"recording", "exapps-daemon"},
+		// A recording without the recorder has nothing to transcribe. And that
+		// is the ONLY dependency: the capture connects to the signaling with
+		// the internal secret, exactly as the recorder does — it needs neither
+		// HaRP nor AppAPI. Requiring exapps-daemon would impose, on every
+		// installation that records and transcribes, a component that lets
+		// Nextcloud start containers, for no reason.
+		Requires:   []string{"recording"},
 		Namespaces: []string{nsVideo},
 
 		Resources: "~1.5 GB image (model included), 4 GB RAM during transcription",
