@@ -891,6 +891,13 @@ path "sys/internal/ui/mounts/*" { capabilities = ["read"] }`},
 		{"ceffio-recording", `path "kv/data/ceffio/recording/*" { capabilities = ["read","list"] }
 path "kv/metadata/ceffio/recording/*" { capabilities = ["read","list"] }
 path "sys/internal/ui/mounts/*" { capabilities = ["read"] }`},
+		// The capture service reads ITS OWN entry, and nothing else. The
+		// signaling's shared secret is copied into capture/server by
+		// internal/capture at deployment time, so this service never holds a
+		// right on talk/* — the same reasoning as the recorder.
+		{"ceffio-capture", `path "kv/data/ceffio/capture/*" { capabilities = ["read","list"] }
+path "kv/metadata/ceffio/capture/*" { capabilities = ["read","list"] }
+path "sys/internal/ui/mounts/*" { capabilities = ["read"] }`},
 		// HaRP reads its own shared key, and nothing else. It is the deploy
 		// daemon for the ExApps, not a consumer of any other component's
 		// secrets: giving it a wider policy would hand a component that
@@ -1113,6 +1120,7 @@ func configurerAuthKubernetes(ctx context.Context, cli *k8sapi.Client) error {
 		// vault for a role that does not exist, and the failure is silent on the
 		// application side — the recorder simply runs without credentials.
 		{nom: "recording", sa: "talk-recording", ns: "ceffio-video", politique: "ceffio-recording"},
+		{nom: "capture", sa: "ceffio-capture", ns: "ceffio-video", politique: "ceffio-capture"},
 		// HaRP. The ServiceAccount name and namespace MUST match what
 		// internal/exapps creates and what its RoleBinding names — a mismatch
 		// makes every vault request answer 403, and the pod starts anyway.

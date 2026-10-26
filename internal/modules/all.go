@@ -17,6 +17,7 @@
 package modules
 
 import (
+	_ "github.com/ceffio-suite/ceffio/internal/modules/capture"
 	_ "github.com/ceffio-suite/ceffio/internal/modules/console"
 	_ "github.com/ceffio-suite/ceffio/internal/modules/data"
 	_ "github.com/ceffio-suite/ceffio/internal/modules/exappsdaemon"

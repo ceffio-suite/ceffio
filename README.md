@@ -170,6 +170,7 @@ afterwards (`ceffio module install <id>`, or the console's Modules page):
 | `recording` | Records Talk calls: a hidden participant joins the room, renders it and uploads the result to Nextcloud | — (workload limited to 2 GiB RAM, no model download) | — | **yes** (`--without recording` to skip) |
 | `exapps-daemon` | HaRP runs the containers Nextcloud asks for, speaking the Kubernetes API directly — prerequisite of every external application | — | — | no |
 | `live-transcription` | Transcribes speech live during a Talk call, on this server, with open source speech models; nothing is sent to a third party | ~9 GB disk, ~16 GB RAM | `exapps-daemon` (installed automatically with it) | no |
+| `capture` | Captures one audio track per participant during a Talk recording, transcribes each track on the CPU and writes the named transcript next to the recording | ~1,5 GB image, 4 GB RAM during transcription | `recording`, `exapps-daemon` | no |
 | `longhorn-ui` | The storage interface at `longhorn.<domain>`, **behind the single sign-on** | negligible (one proxy pod) | `storage`, `identity`, `ingress` | no |
 
 > **`longhorn-ui` can delete volumes, and therefore data.** It installs nothing without
@@ -180,6 +181,11 @@ afterwards (`ceffio module install <id>`, or the console's Modules page):
 Declared dependencies are expanded by the registry: asking for `live-transcription` installs
 `exapps-daemon` first, and `ceffio module remove exapps-daemon` is refused while an
 installed module requires it.
+
+`live-transcription` places the speech models of the languages you choose — the module
+setting `languages`, French by default — and verifies them on disk. A language left out is
+downloaded by the app the first time it is used, which needs internet and makes that call
+wait; the settings page places a language the moment it is saved.
 
 **Every optional module can be installed from the CLI or from the console** — neither path
 is privileged. `recording`, although optional, ships **with the installer** by default.
