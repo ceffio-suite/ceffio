@@ -86,13 +86,18 @@ func Deploy(ctx context.Context, domain string) error {
 	return nil
 }
 
-// ensureEnvironnement writes the shared secret where the pod will read it.
+// ensureEnvironnement writes the two secrets where the pod will read them.
 //
 // RULE: secrets live in OpenBao, nowhere else — no workload reads a Kubernetes
-// Secret, and no value is ever printed. The signaling's shared secret is
-// COPIED into the capture's own entry (capture/server) so that this service
-// never holds a right on talk/signaling: its policy grants read on capture/*
-// and nothing else. Same reasoning and same shape as the recorder.
+// Secret, and no value is ever printed. Both values are COPIED into the
+// capture's own entry (capture/server) so that this service never holds a right
+// on talk/signaling — nor on recording/server: its policy grants read on
+// capture/* and nothing else. Same reasoning and same shape as the recorder.
+//
+// THE RELAY'S SECRET IS THE SECOND ONE, and it is what makes the endpoint
+// trustworthy: the capture refuses any notification whose signature does not
+// check with it (see app/notification.py). Without the copy the endpoint would
+// have to accept unsigned requests, so the copy is not a convenience.
 func ensureEnvironnement(ctx context.Context) error {
 	coffre := secrets.DepuisEnvironnement()
 	talk, err := secrets.LireEntreeCoffre(ctx, coffre, "talk", "signaling")
@@ -103,17 +108,30 @@ func ensureEnvironnement(ctx context.Context) error {
 	if partage == "" {
 		return fmt.Errorf("talk/signaling has no shared secret: the capture service could not join a call")
 	}
-	// ALWAYS overwritten with the signaling's current value: if the shared
-	// secret is ever rotated, this is what keeps the pair aligned.
+
+	reco, err := secrets.LireEntreeCoffre(ctx, coffre, "recording", "server")
+	if err != nil {
+		return fmt.Errorf("reading recording/server (the recording server must be deployed "+
+			"first: the relay signs the notifications with its secret): %w", err)
+	}
+	notification := reco["recording-secret"]
+	if notification == "" {
+		return fmt.Errorf("recording/server has no recording-secret: the capture could not " +
+			"verify the relay's notifications")
+	}
+
+	// ALWAYS overwritten with the current values: if either secret is rotated,
+	// this is what keeps the pairs aligned.
 	return secrets.EcrireDansCoffre(ctx, coffre, "capture", "server",
-		map[string]string{"internal-secret": partage})
+		map[string]string{"internal-secret": partage, "notification-secret": notification})
 }
 
-// annotationsCapture declares the one value the pod gets from the vault.
+// annotationsCapture declares the two values the pod gets from the vault.
 func annotationsCapture() string {
 	return vault.AnnotationsAgent(8, "capture", "kv/data/ceffio/capture/server",
 		vault.GabaritExports("kv/data/ceffio/capture/server",
 			[2]string{"CEFFIO_INTERNAL_SECRET", vault.ChampCoffre("internal-secret")},
+			[2]string{"CEFFIO_RELAY_SECRET", vault.ChampCoffre("notification-secret")},
 		))
 }
 
