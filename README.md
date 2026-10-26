@@ -255,14 +255,13 @@ and the administration console reads and rotates through the same vault. Human l
 through OIDC (Keycloak); services authenticate to the vault through Kubernetes auth — two
 doors, never a shared token in a file.
 
-**OpenBao is the only _source_ of secrets. It is not the only _place_ they appear.** Four
+**OpenBao is the only _source_ of secrets. It is not the only _place_ they appear.** Three
 Kubernetes Secrets are written **from the vault**, because the software that reads them
 cannot be reached by the injector:
 
 | Secret | Why |
 |---|---|
 | `cert-manager/ceffio-acme-dns` | cert-manager resolves the ClusterIssuer's `secretRef` itself and cannot reach OpenBao |
-| `ceffio-system/longhorn-oauth2-proxy-vault` | oauth2-proxy reads its secrets as environment variables |
 | `ceffio-video/ghcr-pull` | a `dockerconfigjson`, read by the kubelet from the API |
 | `ceffio-mail/*` | Stalwart's administration needs a credential when no pod is available to inject into |
 

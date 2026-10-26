@@ -61,6 +61,19 @@ func (m *longhornUIModule) Info() module.Info {
 
 		Namespaces: []string{nsSysteme},
 
+		// THE MODULE DECLARES WHAT ITS POD READS, and the vault layer builds both
+		// the policy and the Kubernetes auth role from this declaration — role
+		// name = module ID, bound to this ServiceAccount in this namespace.
+		//
+		// READ ONLY, AND UNDER ITS OWN PREFIX: vault.PolitiqueModule refuses
+		// anything outside kv/data/ceffio/longhorn-ui/, so this line cannot be
+		// widened by a typo without failing the provisioning.
+		Vault: []module.VaultAccess{{
+			ServiceAccount: nomServiceAccount,
+			Namespace:      nsSysteme,
+			Paths:          []string{cheminCoffre},
+		}},
+
 		Services: []module.Service{
 			{
 				Sub:         sousDomaine,

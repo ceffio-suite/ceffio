@@ -5,6 +5,7 @@ package vault
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -111,6 +112,126 @@ func GabaritMulti(sources []Source) string {
 // example, because Stalwart expects "user:password" in ONE SINGLE string.
 func GabaritExports(chemin string, paires ...[2]string) string {
 	return GabaritMulti([]Source{{Chemin: chemin, Paires: paires}})
+}
+
+// FichierInjecte designates ONE file the injector renders under
+// secret-volume-path.
+//
+// Nom is both the file's name (`/secrets/<Nom>`) and the suffix of the
+// annotations that produce it: the injector pairs `agent-inject-secret-<Nom>`
+// with `agent-inject-template-<Nom>` and `agent-inject-perms-<Nom>`. The three
+// must carry the SAME name, and a mismatch leaves a file rendered by the
+// default template, or with the wrong mode — silently.
+type FichierInjecte struct {
+	Nom     string // file name under the volume, e.g. "client-secret"
+	Chemin  string // the vault entry this file is read from
+	Gabarit string // the Go template producing the file's EXACT content
+	Perms   string // octal mode, e.g. "0400"
+}
+
+// AnnotationsAgentFichiers renders the annotations for a workload that needs
+// SEVERAL files, one per value.
+//
+// WHY NOT AnnotationsAgent: it renders ONE file, `/secrets/env`, of shell
+// assignments, for a container whose startup command sources it. A program that
+// reads a path it was given on its command line — oauth2-proxy with
+// `--client-secret-file` — needs one file PER VALUE, and shell syntax would give
+// it `export OAUTH2_PROXY_CLIENT_SECRET='…'` where it expects the raw secret.
+//
+// THE MODE IS PER FILE, AND 0400 IS THE POINT. The injector creates the volume
+// writable by the agent's user, not by the application's: a file in 0400 is only
+// readable by the pod's user if the agent RAN AS that user. That is what
+// `vault.hashicorp.com/agent-run-as-user` / `-group` set, and the caller must
+// declare them — this function cannot guess the application's UID, and a
+// mismatch shows up as "permission denied" in the init container, not as a
+// configuration error.
+//
+// The returned text is a YAML block: annotations first, then a literal block for
+// each template (a template contains newlines, and quoting it would render the
+// escapes as text).
+func AnnotationsAgentFichiers(indent int, role string, fichiers []FichierInjecte) (string, error) {
+	if len(fichiers) == 0 {
+		return "", fmt.Errorf("no injected file declared")
+	}
+	vus := make(map[string]bool, len(fichiers))
+	for _, f := range fichiers {
+		switch {
+		case f.Nom == "" || strings.ContainsAny(f.Nom, "/ \\\t\n"):
+			return "", fmt.Errorf("injected file %q: the name must be a file name, not a path", f.Nom)
+		case f.Chemin == "":
+			return "", fmt.Errorf("injected file %q: no vault path", f.Nom)
+		case f.Gabarit == "":
+			return "", fmt.Errorf("injected file %q: empty template, the file would be blank", f.Nom)
+		}
+		// THE MODE MUST BE READ BACK AS OCTAL. "400" without the leading zero
+		// would be decimal 400 in some readers' minds, and the injector expects
+		// the octal form it prints back in `ls`.
+		if len(f.Perms) != 4 || f.Perms[0] != '0' {
+			return "", fmt.Errorf("injected file %q: mode %q is not a four-digit octal like 0400", f.Nom, f.Perms)
+		}
+		if _, err := strconv.ParseUint(f.Perms, 8, 32); err != nil {
+			return "", fmt.Errorf("injected file %q: mode %q is not octal", f.Nom, f.Perms)
+		}
+		if vus[f.Nom] {
+			return "", fmt.Errorf("injected file %q declared twice: the second annotation "+
+				"would overwrite the first, and only one secret would reach the pod", f.Nom)
+		}
+		vus[f.Nom] = true
+	}
+
+	marge := strings.Repeat(" ", indent)
+	interne := strings.Repeat(" ", indent+2)
+
+	var b strings.Builder
+	for _, l := range [][2]string{
+		{"vault.hashicorp.com/agent-inject", "true"},
+		{"vault.hashicorp.com/role", role},
+		// INIT-CONTAINER MODE ONLY, as in the one-file variant: the agent
+		// renders, then stops. These programs read their credentials once.
+		{"vault.hashicorp.com/agent-pre-populate-only", "true"},
+		{"vault.hashicorp.com/secret-volume-path", "/secrets"},
+	} {
+		fmt.Fprintf(&b, "%s%s: %q\n", marge, l[0], l[1])
+	}
+
+	for _, f := range fichiers {
+		fmt.Fprintf(&b, "%svault.hashicorp.com/agent-inject-secret-%s: %q\n", marge, f.Nom, f.Chemin)
+		fmt.Fprintf(&b, "%svault.hashicorp.com/agent-inject-perms-%s: %q\n", marge, f.Nom, f.Perms)
+		// LOUD FAILURE, as in the one-file variant: a missing key must stop the
+		// pod, not produce a file the program reads as an empty credential.
+		fmt.Fprintf(&b, "%svault.hashicorp.com/error-on-missing-key-%s: \"true\"\n", marge, f.Nom)
+
+		fmt.Fprintf(&b, "%svault.hashicorp.com/agent-inject-template-%s: |\n", marge, f.Nom)
+		// THE TRAILING NEWLINE IS KEPT HERE, AND IT IS NOT A DETAIL: a YAML
+		// block scalar always yields one, and the template's final `-}}` is what
+		// removes it from the rendered file. Trimming it here instead would leave
+		// the template ending in `{{- end -}}` with nothing to trim — which works
+		// by accident, and stops working the day a template does not end with an
+		// action.
+		for _, l := range strings.Split(strings.TrimRight(f.Gabarit, "\n"), "\n") {
+			fmt.Fprintf(&b, "%s%s\n", interne, l)
+		}
+	}
+	return b.String(), nil
+}
+
+// GabaritValeur renders a file holding ONE value and nothing else — not even a
+// final newline.
+//
+// THE FINAL NEWLINE IS THE TRAP, and it is why this function exists rather than
+// each caller writing the trims by hand. oauth2-proxy reads
+// `--client-secret-file` and `--cookie-secret-file` with os.ReadFile and uses
+// the bytes AS THEY ARE: no TrimSpace, no TrimSuffix. A file ending in "\n"
+// therefore holds a secret one byte longer than the one Keycloak issued, and the
+// only symptom is a failed sign-in. Verified in v7.15.5:
+// pkg/apis/options/cookie.go (Cookie.GetSecret) and
+// providers/provider_data.go (ProviderData.GetClientSecret).
+//
+// SO THE TRIM IS EXPLICIT AND SYMMETRIC: `{{- with … -}}` removes the whitespace
+// before and after the value — including the newline the YAML block scalar
+// unavoidably leaves at the end — and `{{- end -}}` closes it.
+func GabaritValeur(chemin, champ string) string {
+	return `{{- with secret "` + chemin + `" -}}` + ChampCoffre(champ) + `{{- end -}}`
 }
 
 // AnnotationsAgentSecret renders the annotations for a workload that needs the
