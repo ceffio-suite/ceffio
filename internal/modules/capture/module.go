@@ -13,6 +13,8 @@ package capture
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 
 	rbacv1 "k8s.io/api/rbac/v1"
 
@@ -22,6 +24,9 @@ import (
 )
 
 const (
+	groupeTranscription = "transcription"
+	cleReglages         = "capture.transcription"
+
 	nsVideo = "ceffio-video"
 	nsFiles = "ceffio-files"
 	nsData  = "ceffio-data"
@@ -64,6 +69,14 @@ func (m *captureModule) Info() module.Info {
 						Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
 					},
 					{
+						// Reading /status goes through services/proxy: `get` on the
+						// subresource alone, instead of a right to run commands in
+						// the pod.
+						APIGroups: []string{""},
+						Resources: []string{"services/proxy"},
+						Verbs:     []string{"get"},
+					},
+					{
 						APIGroups: []string{"apps"},
 						Resources: []string{"deployments"},
 						Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
@@ -91,6 +104,117 @@ func (m *captureModule) Info() module.Info {
 			},
 		},
 	}
+}
+
+// Settings declares the two things an operator may want to change. Both land
+// in the Deployment's environment, so saving restarts the service — the model
+// is loaded once at startup, and the thread count decides how much CPU a
+// transcription takes from the calls still running.
+func (m *captureModule) Settings() []module.Group {
+	return []module.Group{{
+		ID:    groupeTranscription,
+		Title: "Transcription",
+		Description: "The model used after the call, and how much CPU it may take. " +
+			"Transcription runs once the recording stops; a larger model is more accurate " +
+			"and proportionally slower.",
+		Fields: []module.Field{
+			{
+				Key: "model", Label: "Model", Type: module.Choice, Default: "small",
+				Help: "small is part of the image and needs nothing else. medium is fetched " +
+					"on first use: without outbound access it must be placed on the /models-extra " +
+					"volume, and its absence shows as a failed transcription.",
+				Options: []module.Option{
+					{Value: "small", Label: "small (included, fast)"},
+					{Value: "medium", Label: "medium (more accurate, ~3x slower)"},
+				},
+			},
+			{
+				Key: "threads", Label: "CPU threads", Type: module.Number, Default: "4",
+				Pattern: "^(?:[1-9]|1[0-6])$",
+				Help: "Taken from the same CPU as the calls in progress: raise it only if " +
+					"transcription feels too slow and no call is running.",
+			},
+		},
+	}}
+}
+
+// Current answers the stored values, or the defaults.
+func (m *captureModule) Current(ctx context.Context, env module.Env, group string) (module.Values, error) {
+	if group != groupeTranscription {
+		return nil, module.ErrUnknownGroup
+	}
+	stockes := module.Values{"model": "small", "threads": "4"}
+	if env.Settings != nil {
+		brut, err := env.Settings.Lire(ctx, "ceffio-system", "ceffio-settings", cleReglages)
+		if err != nil {
+			return nil, err
+		}
+		if brut != "" {
+			if err := json.Unmarshal([]byte(brut), &stockes); err != nil {
+				return nil, fmt.Errorf("capture: settings entry is not valid JSON: %w", err)
+			}
+		}
+	}
+	return stockes, nil
+}
+
+// Apply validates, stores, then pushes the values into the Deployment.
+//
+// THE CHECK ON medium IS AT RUN TIME, NOT HERE, and that is a deviation from
+// the plan worth stating: deciding "is this model available offline" from the
+// installer means probing the pod's volume and the machine's egress, and a
+// wrong answer blocks a legitimate choice. The service reports a missing model
+// as a failed transcription instead — visible in the module state, and
+// testable — rather than refusing a setting that may well work.
+func (m *captureModule) Apply(ctx context.Context, env module.Env, group string, v module.Values) error {
+	if group != groupeTranscription {
+		return module.ErrUnknownGroup
+	}
+	valeurs := module.Values{"model": v["model"], "threads": v["threads"]}
+	if valeurs["model"] == "" {
+		valeurs["model"] = "small"
+	}
+	if valeurs["threads"] == "" {
+		valeurs["threads"] = "4"
+	}
+	if err := module.Validate(groupeDe(m), valeurs); err != nil {
+		return err
+	}
+
+	if env.Settings == nil {
+		return fmt.Errorf("capture: no settings store to write to")
+	}
+	donnees, err := json.Marshal(map[string]string{"model": valeurs["model"], "threads": valeurs["threads"]})
+	if err != nil {
+		return err
+	}
+	if err := env.Settings.Ecrire(ctx, "ceffio-system", "ceffio-settings",
+		map[string]string{cleReglages: string(donnees)}); err != nil {
+		return fmt.Errorf("storing the transcription settings: %w", err)
+	}
+
+	cli, err := k8sapi.Nouveau()
+	if err != nil {
+		return fmt.Errorf("Kubernetes client: %w", err)
+	}
+	if err := cli.MettreAJourEnv(ctx, nsVideo, "ceffio-capture", "capture", map[string]string{
+		"CEFFIO_MODEL":   valeurs["model"],
+		"CEFFIO_THREADS": valeurs["threads"],
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
+// groupeDe is a tiny helper for module.Validate, which works from the
+// declaration, not from the module.
+func groupeDe(m *captureModule) module.Group {
+	for _, g := range m.Settings() {
+		if g.ID == groupeTranscription {
+			return g
+		}
+	}
+	return module.Group{}
 }
 
 // Install delegates to capture.Deploy.

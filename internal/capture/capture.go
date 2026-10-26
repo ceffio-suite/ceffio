@@ -16,6 +16,7 @@
 package capture
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -352,22 +353,17 @@ func LireEtat(ctx context.Context) Situation {
 		return Situation{Reason: "the Deployment is not ready"}
 	}
 	etat := Situation{Ready: true}
-	// THE STATUS ENDPOINT IS READ THROUGH THE POD, not through the Service:
-	// the console runs in-cluster and could resolve the Service, but the CLI
-	// runs on the host and could not. One path for both, and it keeps working
-	// when the Service is being recreated.
-	pod, err := cli.PodDuDeploiement(ctx, ns, nom, nom)
+	// READ THROUGH THE API'S SERVICE PROXY. An exec inside the pod would need a
+	// shell and a client in the image, and would grant a right to run commands
+	// in a workload for what is only a GET; `services/proxy` needs `get` on
+	// services/proxy alone, and behaves the same from the console and the CLI.
+	brut, err := cli.LireService(ctx, ns, nom, "http", "status")
 	if err != nil {
-		etat.Reason = "no running pod: " + err.Error()
-		return etat
-	}
-	sortie, err := cli.Executer(ctx, ns, pod, "", "python3", "-c",
-		"import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8080/status').read().decode())")
-	if err != nil {
+		etat.Reason = err.Error()
 		return etat
 	}
 	dernier := map[string]any{}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(sortie)), &dernier); err == nil {
+	if err := json.Unmarshal(bytes.TrimSpace(brut), &dernier); err == nil {
 		etat.Last = dernier
 	}
 	return etat
