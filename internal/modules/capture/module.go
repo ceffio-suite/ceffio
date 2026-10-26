@@ -241,6 +241,16 @@ func (m *captureModule) State(ctx context.Context, env module.Env) module.State 
 	if !etat.Ready {
 		return module.State{Status: module.Degraded, Detail: etat.Reason}
 	}
+	// THE MODEL IS CHECKED BEFORE ANY MEETING. A chosen model that cannot load
+	// makes every transcription fail after the fact; saying so while the
+	// service is idle is the only moment the operator can still act.
+	if pret, ok := etat.Last["model_ready"].(bool); ok && !pret {
+		erreur, _ := etat.Last["model_error"].(string)
+		if erreur == "" {
+			erreur = "the configured model cannot be loaded"
+		}
+		return module.State{Status: module.Degraded, Detail: "model unusable: " + erreur}
+	}
 	detail := resumeDernierTravail(etat.Last)
 	if etat.Last["result"] == "failed" {
 		return module.State{Status: module.Degraded, Detail: detail}
