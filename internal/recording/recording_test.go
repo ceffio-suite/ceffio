@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"sigs.k8s.io/yaml"
 )
 
 // The manifest is a multi-YAML document. Like the other tests in the project,
@@ -55,7 +57,10 @@ func TestConteneurSourceLesSecretsEtPasseLesArguments(t *testing.T) {
 // referenced directly: the recorder must hold no right on talk/*.
 // This test verifies that the manifest reads ONLY its own vault path.
 func TestLeRecorderNeLitQueSaPropreEntree(t *testing.T) {
-	ann := annotationsRecorder()
+	ann, err := annotationsRecorder()
+	if err != nil {
+		t.Fatalf("annotations refusées : %v", err)
+	}
 	if strings.Contains(ann, "ceffio/talk/") {
 		t.Error("le recorder reference talk/* : il ne doit lire que recording/*, la valeur partagee y est recopiee au deploiement")
 	}
@@ -108,5 +113,154 @@ func TestReglageRecordingServersEstUnObjetAvecServerEtSecret(t *testing.T) {
 	}
 	if _, ok := premier["url"]; ok {
 		t.Errorf("l'entree porte \"url\" : Talk lit $server['server'] ; recu %v", premier)
+	}
+}
+
+// Le pod du recorder porte DEUX conteneurs depuis B2 : l'enregistreur, et le
+// relais placé devant lui. Ce test vérifie ce qui, s'il manquait, rendrait le
+// montage silencieusement inutile — l'image, les arguments, les limites, les
+// sondes — et surtout que le port que Talk connaît n'a pas bougé.
+func TestLeRelaisEstDansLePodDuRecorder(t *testing.T) {
+	ann, err := annotationsRecorder()
+	if err != nil {
+		t.Fatalf("annotations refusées : %v", err)
+	}
+	brut := manifesteRecorder("exemple.org", ann)
+
+	var depl, svc map[string]any
+	for _, doc := range strings.Split(brut, "\n---\n") {
+		var o map[string]any
+		if err := yaml.Unmarshal([]byte(doc), &o); err != nil {
+			t.Fatalf("YAML illisible : %v", err)
+		}
+		switch o["kind"] {
+		case "Deployment":
+			depl = o
+		case "Service":
+			svc = o
+		}
+	}
+	if depl == nil || svc == nil {
+		t.Fatal("Deployment et Service doivent être présents")
+	}
+
+	pod := depl["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	conteneurs := map[string]map[string]any{}
+	for _, c := range pod["containers"].([]any) {
+		m := c.(map[string]any)
+		conteneurs[m["name"].(string)] = m
+	}
+	for _, nom := range []string{"recording", "relay"} {
+		if _, ok := conteneurs[nom]; !ok {
+			t.Fatalf("conteneur %q absent : le pod doit porter les deux", nom)
+		}
+	}
+
+	relais := conteneurs["relay"]
+
+	// THE IMAGE IS THE ONE THE INSTALLATION ALREADY HAS: a new image would have
+	// to be published, pinned and imported offline for a few hundred bytes of
+	// forwarding.
+	if got := relais["image"]; got != imageRelais() {
+		t.Errorf("image du relais = %v, attendu %v (l'image du binaire, déjà présente)", got, imageRelais())
+	}
+	if !strings.HasPrefix(imageRelais(), "ghcr.io/ceffio-suite/ceffio:") {
+		t.Errorf("imageRelais() = %q : ce n'est pas l'image du binaire", imageRelais())
+	}
+
+	var args []string
+	for _, a := range relais["args"].([]any) {
+		args = append(args, a.(string))
+	}
+	joints := strings.Join(args, " ")
+	for _, attendu := range []string{
+		"recording-relay",
+		"--listen=:1235",
+		"--upstream=http://127.0.0.1:1234",
+		"--notify=http://ceffio-capture.ceffio-video.svc:8080/v1/recording",
+		"--secret-file=/secrets/relay-secret",
+	} {
+		if !strings.Contains(joints, attendu) {
+			t.Errorf("arguments du relais = %q, %q manquant", joints, attendu)
+		}
+	}
+
+	// THE LISTENING PORT AND THE DECLARED ONE MUST AGREE: a mismatch makes the
+	// Service point at a port nothing listens on, and Talk's recordings stop
+	// with no message that names the port.
+	ports := relais["ports"].([]any)
+	p := ports[0].(map[string]any)
+	if p["name"] != "relay" || p["containerPort"].(float64) != 1235 {
+		t.Errorf("port du relais = %v", p)
+	}
+	if !strings.Contains(joints, "--listen=:1235") {
+		t.Error("--listen et containerPort ne disent pas le même port")
+	}
+
+	sc := relais["securityContext"].(map[string]any)
+	if nr, _ := sc["runAsNonRoot"].(bool); !nr {
+		t.Error("le relais n'est pas non-root")
+	}
+	if ro, _ := sc["readOnlyRootFilesystem"].(bool); !ro {
+		t.Error("le relais n'a pas de système de fichiers en lecture seule")
+	}
+
+	// THE LIMITS ARE THE POINT: a relay that needs 500 MiB is not a relay.
+	res := relais["resources"].(map[string]any)
+	if got := res["requests"].(map[string]any)["memory"]; got != "32Mi" {
+		t.Errorf("requests.memory = %v, attendu 32Mi", got)
+	}
+	if got := res["limits"].(map[string]any)["memory"]; got != "64Mi" {
+		t.Errorf("limits.memory = %v, attendu 64Mi", got)
+	}
+
+	for _, sonde := range []string{"readinessProbe", "livenessProbe"} {
+		s, _ := relais[sonde].(map[string]any)
+		g, _ := s["httpGet"].(map[string]any)
+		if g == nil || g["path"] != "/healthz" || g["port"] != "relay" {
+			t.Errorf("%s = %v, attendu /healthz sur le port relay", sonde, s)
+		}
+	}
+
+	// THE RECORDER KEEPS ITS OWN PORT, reachable inside the pod only.
+	rec := conteneurs["recording"]["ports"].([]any)[0].(map[string]any)
+	if rec["containerPort"].(float64) != 1234 {
+		t.Errorf("port de l'enregistreur = %v, attendu 1234", rec["containerPort"])
+	}
+
+	// THE SERVICE: the port Talk knows does not move; only its target does.
+	sp := svc["spec"].(map[string]any)["ports"].([]any)[0].(map[string]any)
+	if sp["port"].(float64) != 1234 {
+		t.Errorf("service.port = %v, attendu 1234 : reconfigurer Talk ferait partie du lot", sp["port"])
+	}
+	if sp["targetPort"] != "relay" {
+		t.Errorf("service.targetPort = %v, attendu le port nommé « relay »", sp["targetPort"])
+	}
+}
+
+// Les deux fichiers du coffre, avec le mode qui va bien : l'env lisible par
+// l'enregistreur (root), le secret brut en 0400 pour le relais (65532).
+func TestLesFichiersInjectesDuRecorder(t *testing.T) {
+	ann, err := annotationsRecorder()
+	if err != nil {
+		t.Fatalf("annotations refusées : %v", err)
+	}
+	for _, attendu := range []struct{ annotation, valeur string }{
+		{"vault.hashicorp.com/agent-inject-secret-env", "kv/data/ceffio/recording/server"},
+		{"vault.hashicorp.com/agent-inject-perms-env", "0644"},
+		{"vault.hashicorp.com/agent-inject-secret-relay-secret", "kv/data/ceffio/recording/server"},
+		{"vault.hashicorp.com/agent-inject-perms-relay-secret", "0400"},
+		{"vault.hashicorp.com/agent-run-as-user", "65532"},
+	} {
+		if !strings.Contains(ann, attendu.annotation+": \""+attendu.valeur+"\"") {
+			t.Errorf("annotation %s: %q absente ou différente\n%s", attendu.annotation, attendu.valeur, ann)
+		}
+	}
+	// THE TEMPLATE OF THE RAW SECRET ENDS WITH A TRIM: without it the file
+	// carries the block scalar's newline, and the relay signs with one byte too
+	// many — each notification then fails at the capture with a 403 nobody
+	// explains.
+	if !strings.Contains(ann, `{{- end -}}`) {
+		t.Error("le modèle du secret relais n'a pas de trim final : le fichier finirait par un saut de ligne")
 	}
 }

@@ -170,7 +170,7 @@ afterwards (`ceffio module install <id>`, or the console's Modules page):
 | `recording` | Records Talk calls: a hidden participant joins the room, renders it and uploads the result to Nextcloud | — (workload limited to 2 GiB RAM, no model download) | — | **yes** (`--without recording` to skip) |
 | `exapps-daemon` | HaRP runs the containers Nextcloud asks for, speaking the Kubernetes API directly — prerequisite of every external application | — | — | no |
 | `live-transcription` | Transcribes speech live during a Talk call, on this server, with open source speech models; nothing is sent to a third party | ~9 GB disk, ~16 GB RAM | `exapps-daemon` (installed automatically with it) | no |
-| `capture` | Captures one audio track per participant during a Talk recording, transcribes each track on the CPU and writes the named transcript next to the recording | ~1,5 GB image, 4 GB RAM during transcription | `recording`, `exapps-daemon` | no |
+| `capture` | Captures one audio track per participant during a Talk recording, transcribes each track on the CPU and writes the named transcript next to the recording | ~1,5 GB image, 4 GB RAM during transcription | `recording` | no |
 | `longhorn-ui` | The storage interface at `longhorn.<domain>`, **behind the single sign-on** | negligible (one proxy pod) | `storage`, `identity`, `ingress` | no |
 
 > **`longhorn-ui` can delete volumes, and therefore data.** It installs nothing without
@@ -255,14 +255,13 @@ and the administration console reads and rotates through the same vault. Human l
 through OIDC (Keycloak); services authenticate to the vault through Kubernetes auth — two
 doors, never a shared token in a file.
 
-**OpenBao is the only _source_ of secrets. It is not the only _place_ they appear.** Four
+**OpenBao is the only _source_ of secrets. It is not the only _place_ they appear.** Three
 Kubernetes Secrets are written **from the vault**, because the software that reads them
 cannot be reached by the injector:
 
 | Secret | Why |
 |---|---|
 | `cert-manager/ceffio-acme-dns` | cert-manager resolves the ClusterIssuer's `secretRef` itself and cannot reach OpenBao |
-| `ceffio-system/longhorn-oauth2-proxy-vault` | oauth2-proxy reads its secrets as environment variables |
 | `ceffio-video/ghcr-pull` | a `dockerconfigjson`, read by the kubelet from the API |
 | `ceffio-mail/*` | Stalwart's administration needs a credential when no pod is available to inject into |
 

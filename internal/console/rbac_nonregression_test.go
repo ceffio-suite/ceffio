@@ -144,11 +144,17 @@ func legacyReference(t *testing.T) map[ruleTuple]bool {
 			ref[k] = true
 		}
 	}
+	// DECIDED ADDITION (module capture, lot A3): the module reads its own
+	// /status through the API's services/proxy instead of exec'ing into the
+	// pod. One tuple, for a GET, in ceffio-video only — and it is what lets
+	// B5 remove pods/exec from the capture later.
+	ref[ruleTuple{"ceffio-video", "", "services/proxy", "get"}] = true
+
 	// A reference of zero tuples would make the comparison vacuous (and an
 	// empty grant would "pass"). The count is the hand-computed product of
 	// the frozen lists above: 10 namespaces × 109 tuples per namespace.
-	if len(ref) != 1090 {
-		t.Fatalf("legacy reference holds %d tuples, expected 1090 (10 namespaces × 109) — the frozen lists above were edited; fix them or fix the count", len(ref))
+	if len(ref) != 1091 {
+		t.Fatalf("legacy reference holds %d tuples, expected 1091 (10 namespaces × 109 + 1 decided addition) — the frozen lists above were edited; fix them or fix the count", len(ref))
 	}
 	return ref
 }

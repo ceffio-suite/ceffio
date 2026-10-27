@@ -121,11 +121,11 @@ var Registry = []Composant{
 		Module: "internal/talk", Role: "Talk: SFU, media transport",
 	},
 	{
-		// L'image de capture a SON dépôt (ceffio-suite/ceffio-capture) : elle
-		// porte sa propre pile Python (WebRTC, whisper) et son propre cycle de
-		// publication, indépendant des versions du binaire. On épingle donc une
-		// version d'IMAGE, pas le tag du binaire — même règle que janus.
-		Nom: "ceffio-capture", Image: "ghcr.io/ceffio-suite/ceffio-capture:v0.7.3",
+		// THE CAPTURE IMAGE HAS ITS OWN REPOSITORY (ceffio-suite/ceffio-capture):
+		// it carries its own Python stack (WebRTC, whisper) and its own release
+		// cycle, independent of the binary's versions. So what is pinned here is
+		// an IMAGE version, not the binary's tag — the same rule as janus.
+		Nom: "ceffio-capture", Image: "ghcr.io/ceffio-suite/ceffio-capture:v0.8.2",
 		Module: "internal/capture", Role: "per-participant audio capture and CPU transcription",
 	},
 	{
