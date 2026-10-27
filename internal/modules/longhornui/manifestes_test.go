@@ -4,22 +4,47 @@
 package longhornui
 
 import (
+	"bytes"
 	"strings"
 	"testing"
+	"text/template"
 
 	"github.com/ceffio-suite/ceffio/internal/module"
+	"github.com/ceffio-suite/ceffio/internal/vault"
 	"sigs.k8s.io/yaml"
 )
 
 // proxyDe rend le manifeste du proxy, parsé.
 func proxyDe(t *testing.T) map[string]any {
 	t.Helper()
-	brut := manifesteProxy("exemple.org", "abc123")
+	ann, err := annotationsProxy("abc123")
+	if err != nil {
+		t.Fatalf("les annotations du pod sont refusées : %v", err)
+	}
+	brut := manifesteProxy("exemple.org", ann)
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(brut), &doc); err != nil {
 		t.Fatalf("le manifeste du proxy n'est pas du YAML valide : %v", err)
 	}
 	return doc
+}
+
+// podSpec rend le spec du pod du proxy.
+func podSpec(t *testing.T) map[string]any {
+	t.Helper()
+	return proxyDe(t)["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+}
+
+// annotationsPod rend les annotations du pod du proxy.
+func annotationsPod(t *testing.T) map[string]string {
+	t.Helper()
+	tpl := proxyDe(t)["spec"].(map[string]any)["template"].(map[string]any)
+	brut, _ := yaml.Marshal(tpl["metadata"].(map[string]any)["annotations"])
+	var m map[string]string
+	if err := yaml.Unmarshal(brut, &m); err != nil {
+		t.Fatalf("les annotations ne sont pas une carte de chaînes : %v", err)
+	}
+	return m
 }
 
 // conteneurProxy rend le conteneur oauth2-proxy.
@@ -308,5 +333,175 @@ func TestLeServiceAccountDoitExister(t *testing.T) {
 	if spec["serviceAccountName"] != md["name"] {
 		t.Errorf("le pod tourne comme %v alors que le compte créé est %v : le pod ne "+
 			"serait jamais créé", spec["serviceAccountName"], md["name"])
+	}
+}
+
+// TestLesSecretsSontDesFichiersInjectes covers the shape of the A4 migration: the
+// two credentials reach the process as FILES the injector renders, and nothing in
+// the pod reads a Kubernetes Secret any more.
+//
+// THE ENVIRONMENT VARIABLES ARE THE TRAP. oauth2-proxy returns the variable when
+// it is set and NEVER OPENS THE FILE (ProviderData.GetClientSecret, v7.15.5), so
+// leaving OAUTH2_PROXY_CLIENT_SECRET in the manifest would make the injected file
+// decorative: everything would look migrated, and a rotation in the vault would
+// change nothing.
+func TestLesSecretsSontDesFichiersInjectes(t *testing.T) {
+	ann := annotationsPod(t)
+
+	// THE ROLE IS THE MODULE'S ID — that is the name the vault layer gives the
+	// Kubernetes auth role built from the registry. Any other value asks for a
+	// role nobody created and the pod hangs in Init.
+	if ann["vault.hashicorp.com/role"] != idModule {
+		t.Errorf("role = %q, attendu %q (le nom que la couche coffre crée)",
+			ann["vault.hashicorp.com/role"], idModule)
+	}
+	if ann["vault.hashicorp.com/agent-inject"] != "true" {
+		t.Error("le pod ne demande pas l'injection : il démarrerait sans secrets")
+	}
+	if ann["vault.hashicorp.com/secret-volume-path"] != "/secrets" {
+		t.Errorf("secret-volume-path = %q", ann["vault.hashicorp.com/secret-volume-path"])
+	}
+	// THE AGENT MUST RUN AS THE POD'S USER: a file in 0400 is readable only by
+	// its owner, and the agent is what creates it.
+	if ann["vault.hashicorp.com/agent-run-as-user"] != "65532" {
+		t.Errorf("agent-run-as-user = %q : le fichier appartiendrait à l'agent, et le "+
+			"proxy (65532) ne pourrait pas le lire", ann["vault.hashicorp.com/agent-run-as-user"])
+	}
+
+	for _, nom := range []string{"client-secret", "cookie-secret"} {
+		if got := ann["vault.hashicorp.com/agent-inject-secret-"+nom]; got != cheminCoffre {
+			t.Errorf("agent-inject-secret-%s = %q, attendu %q", nom, got, cheminCoffre)
+		}
+		if got := ann["vault.hashicorp.com/agent-inject-perms-"+nom]; got != "0400" {
+			t.Errorf("agent-inject-perms-%s = %q, attendu 0400", nom, got)
+		}
+		if got := ann["vault.hashicorp.com/error-on-missing-key-"+nom]; got != "true" {
+			t.Errorf("error-on-missing-key-%s = %q : une clé absente doit arrêter le pod", nom, got)
+		}
+	}
+
+	_, args := conteneurProxy(t)
+	var client, cookie bool
+	for _, a := range args {
+		switch a {
+		case "--client-secret-file=" + cheminSecretClient:
+			client = true
+		case "--cookie-secret-file=" + cheminSecretCookie:
+			cookie = true
+		case "--client-secret-file=", "--cookie-secret-file=":
+			t.Errorf("argument vide : %q", a)
+		}
+	}
+	if !client || !cookie {
+		t.Errorf("args = %v : les deux fichiers doivent être nommés (client %v, cookie %v)",
+			args, client, cookie)
+	}
+
+	c, _ := conteneurProxy(t)
+	if envs, ok := c["env"].([]any); ok {
+		for _, e := range envs {
+			m := e.(map[string]any)
+			if n, _ := m["name"].(string); strings.HasPrefix(n, "OAUTH2_PROXY_") {
+				t.Errorf("variable d'environnement %q : elle l'emporterait sur le fichier "+
+					"injecté, qui ne serait alors jamais lu", n)
+			}
+		}
+	}
+
+	// NO VOLUME FROM A KUBERNETES SECRET: the pod must read what the agent
+	// renders, and nothing else.
+	for _, v := range podSpec(t)["volumes"].([]any) {
+		m := v.(map[string]any)
+		if _, ok := m["secret"]; ok {
+			t.Errorf("le pod monte un Secret Kubernetes (%v) : les valeurs sont rendues "+
+				"par l'injecteur, un Secret serait une seconde copie", m)
+		}
+	}
+}
+
+// TestLesFichiersRendusNeFinissentPasParUnSautDeLigne executes the templates the
+// pod actually receives, with a fake `secret` function, and compares the bytes.
+//
+// THIS IS THE TEST THAT PROTECTS THE SIGN-IN. oauth2-proxy reads both files with
+// os.ReadFile and uses the bytes as they are: a trailing newline makes the secret
+// differ from the one Keycloak issued, and the only symptom is a refused login.
+func TestLesFichiersRendusNeFinissentPasParUnSautDeLigne(t *testing.T) {
+	ann := annotationsPod(t)
+
+	donnees := map[string]any{"Data": map[string]any{"data": map[string]any{
+		"client-secret": "cs-valeur",
+		"cookie_secret": "ck-valeur",
+	}}}
+	attendu := map[string]string{
+		"client-secret": "cs-valeur",
+		"cookie-secret": "ck-valeur",
+	}
+
+	for _, nom := range []string{"client-secret", "cookie-secret"} {
+		gabarit := ann["vault.hashicorp.com/agent-inject-template-"+nom]
+		if gabarit == "" {
+			t.Fatalf("%s : aucun modèle d'injection", nom)
+		}
+		// THE BLOCK SCALAR'S NEWLINE IS PART OF WHAT THE AGENT RECEIVES; without
+		// it the template would never meet the case this test is about.
+		if !strings.HasSuffix(gabarit, "\n") {
+			t.Fatalf("%s : le modèle décodé ne finit pas par le saut de ligne du bloc YAML", nom)
+		}
+
+		tpl, err := template.New(nom).Funcs(template.FuncMap{
+			"secret": func(p string) map[string]any {
+				if p != cheminCoffre {
+					t.Fatalf("%s : le modèle lit %q, attendu %q", nom, p, cheminCoffre)
+				}
+				return donnees
+			},
+		}).Parse(gabarit)
+		if err != nil {
+			t.Fatalf("%s : modèle illisible : %v", nom, err)
+		}
+		var b bytes.Buffer
+		if err := tpl.Execute(&b, nil); err != nil {
+			t.Fatalf("%s : le modèle ne s'exécute pas : %v", nom, err)
+		}
+
+		rendu := b.String()
+		if rendu != attendu[nom] {
+			t.Errorf("%s : le fichier contiendrait %q, attendu %q (un saut de ligne final "+
+				"rend le secret plus long que celui que Keycloak a émis)", nom, rendu, attendu[nom])
+		}
+	}
+}
+
+// TestLAccesAuCoffreEstDeclare : the module declares its own vault access, and the
+// declaration is what the policy is built from.
+func TestLAccesAuCoffreEstDeclare(t *testing.T) {
+	info := (&longhornUIModule{}).Info()
+	if len(info.Vault) != 1 {
+		t.Fatalf("Vault = %+v, attendu une déclaration", info.Vault)
+	}
+	a := info.Vault[0]
+	if a.ServiceAccount != nomServiceAccount {
+		t.Errorf("ServiceAccount = %q, attendu %q : c'est le compte que le pod porte",
+			a.ServiceAccount, nomServiceAccount)
+	}
+	if a.Namespace != nsSysteme {
+		t.Errorf("Namespace = %q, attendu %q", a.Namespace, nsSysteme)
+	}
+	if len(a.Paths) != 1 || a.Paths[0] != cheminCoffre {
+		t.Errorf("Paths = %v, attendu [%q]", a.Paths, cheminCoffre)
+	}
+
+	// THE PREFIX RULE IS ENFORCED BY THE VAULT LAYER: the declaration must pass
+	// it, which also proves the component name and the module ID agree.
+	if _, err := vault.PolitiqueModule(idModule, a.Paths); err != nil {
+		t.Errorf("la déclaration serait refusée au provisionnement : %v", err)
+	}
+
+	// THE INJECTOR READS A ROLE NAMED AFTER THE MODULE, so the component name in
+	// the vault path must be the module ID: otherwise the entry would live under
+	// another module's prefix, which the policy refuses.
+	if coffreComposant != idModule {
+		t.Errorf("composant du coffre = %q, attendu %q (le préfixe de la politique)",
+			coffreComposant, idModule)
 	}
 }

@@ -14,6 +14,10 @@ process that needs it through one of two paths:
 1. **The injector writes a file** inside the pod (`/secrets/env`), which the container's
    startup command sources. This is the normal case: Keycloak, Nextcloud, Stalwart,
    PostgreSQL.
+   A program that reads a **path given on its command line** gets one file per value
+   instead: oauth2-proxy accepts `--client-secret-file` and `--cookie-secret-file`, so the
+   injector renders `/secrets/client-secret` and `/secrets/cookie-secret`. Each file holds
+   the value and nothing else — not even a final newline, which the proxy does not trim.
 2. **A Kubernetes Secret is written from the vault**, for software that can only read its
    credentials from Kubernetes or from a generated file. These are the exceptions, listed
    below.
@@ -26,9 +30,15 @@ OpenBao; what changes is how they reach the process.
 | Secret | Who writes it | Why not the injector |
 |---|---|---|
 | `cert-manager/ceffio-acme-dns` | `internal/ingress/dnswebhook.go` | cert-manager resolves the ClusterIssuer's `secretRef` itself. It has no way to reach OpenBao, and it is not our process to teach. |
-| `ceffio-system/longhorn-oauth2-proxy-vault` | `internal/modules/longhornui/install.go` | oauth2-proxy reads `OAUTH2_PROXY_CLIENT_SECRET` and `OAUTH2_PROXY_COOKIE_SECRET` as environment variables. The agent could render a file, but the pod would then need a shell wrapper to source it — one more place for a secret to pass through a command line. |
 | `ceffio-video/ghcr-pull` | `internal/talk/talk.go` | It is a `kubernetes.io/dockerconfigjson`, consumed by the kubelet to pull images. The kubelet reads it from the API, never from a mounted file. |
 | `ceffio-mail/*` | `internal/mail/mail.go` | Stalwart's own administration calls need a credential at a moment when no pod is available to inject into. |
+
+`ceffio-system/longhorn-oauth2-proxy-vault` used to be on this list. It is gone: the module
+now declares its vault access (`Info.Vault`) and oauth2-proxy reads its two credentials
+from injected files. Keeping a Secret was a second copy of a credential, kept in sync by
+nothing — a rotation in OpenBao left the pod authenticating with the old value, and no
+error said so. An installation that upgrades deletes the leftover Secret on its next
+install.
 
 Each is a copy with a short life, not a second source: regenerating the value happens in
 OpenBao, and the copy is rewritten from it on the next `ceffio install`.

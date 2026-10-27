@@ -16,7 +16,9 @@
 package capture
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -328,13 +330,43 @@ func attendrePret(ctx context.Context) error {
 	return fmt.Errorf("the capture service did not become ready in time: kubectl -n %s logs deploy/%s", ns, nom)
 }
 
-// Etat reads the cluster: is the Deployment ready?
-func Etat(ctx context.Context) bool {
+// Etat is what the service says about itself.
+//
+// WHY A STRUCT AND NOT A BOOLEAN: "the Deployment is ready" and "the last
+// recording was transcribed" are two different facts. A pod that runs and
+// fails every transcription looked exactly like one that never tried — the
+// silent failure the plan lists as a high risk. The module decides what to
+// present from both.
+type Situation struct {
+	Ready  bool
+	Reason string         // why it is not ready, when it is not
+	Last   map[string]any // GET /status, empty when the service does not answer
+}
+
+// LireEtat reads the Deployment, then asks the service for its last job.
+func LireEtat(ctx context.Context) Situation {
 	cli, err := k8sapi.Nouveau()
 	if err != nil {
-		return false
+		return Situation{Reason: "Kubernetes unreachable: " + err.Error()}
 	}
-	return cli.DeploiementPret(ctx, ns, nom)
+	if !cli.DeploiementPret(ctx, ns, nom) {
+		return Situation{Reason: "the Deployment is not ready"}
+	}
+	etat := Situation{Ready: true}
+	// READ THROUGH THE API'S SERVICE PROXY. An exec inside the pod would need a
+	// shell and a client in the image, and would grant a right to run commands
+	// in a workload for what is only a GET; `services/proxy` needs `get` on
+	// services/proxy alone, and behaves the same from the console and the CLI.
+	brut, err := cli.LireService(ctx, ns, nom, "http", "status")
+	if err != nil {
+		etat.Reason = err.Error()
+		return etat
+	}
+	dernier := map[string]any{}
+	if err := json.Unmarshal(bytes.TrimSpace(brut), &dernier); err == nil {
+		etat.Last = dernier
+	}
+	return etat
 }
 
 // Supprime removes what Deploy created, volumes included — the registry's

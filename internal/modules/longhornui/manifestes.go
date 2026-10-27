@@ -5,10 +5,73 @@ package longhornui
 
 import (
 	"fmt"
+
+	"github.com/ceffio-suite/ceffio/internal/vault"
 )
 
 // nomServiceAccount est celui que le rôle OpenBao désigne.
 const nomServiceAccount = nomDeploy
+
+// THE TWO CREDENTIALS ARRIVE AS FILES, ONE PER VALUE, because oauth2-proxy
+// accepts a path for each of them: --client-secret-file and
+// --cookie-secret-file (v7.15.5, pkg/apis/options/legacy_options.go for the
+// client and pkg/apis/options/cookie.go for the cookie).
+//
+// WHY NOT ONE FILE OF SHELL ASSIGNMENTS, the form every other workload uses:
+// oauth2-proxy has no shell. It would have to source that file through a wrapper,
+// and the values would then pass through a shell — the very thing the prefix
+// "--client-secret-file" exists to avoid. Each file holds its value and NOTHING
+// else, not even a final newline: the program reads the bytes with os.ReadFile
+// and does not trim them (vault.GabaritValeur carries the proof).
+const (
+	cheminSecretClient = "/secrets/client-secret"
+	cheminSecretCookie = "/secrets/cookie-secret"
+)
+
+// annotationsProxy builds the pod's annotation block: the address list's
+// checksum, then the injector's own.
+//
+// THE RETURNED BLOCK ENDS WITH A NEWLINE, and the manifest relies on it to place
+// the next key at its own indentation — the block's lines already carry theirs.
+//
+// THE ROLE NAMED HERE IS THE MODULE'S ID. The vault layer creates one Kubernetes
+// auth role per module, from the registry — that is exactly what A4 added. Any
+// other name asks for a role nobody created, and the pod hangs in Init with
+// "invalid role name": silent on the application side, since the proxy never
+// starts at all.
+func annotationsProxy(somme string) (string, error) {
+	coffre, err := vault.AnnotationsAgentFichiers(8, idModule, []vault.FichierInjecte{
+		{
+			Nom:     "client-secret",
+			Chemin:  cheminCoffre,
+			Gabarit: vault.GabaritValeur(cheminCoffre, "client-secret"),
+			Perms:   "0400",
+		},
+		{
+			Nom:     "cookie-secret",
+			Chemin:  cheminCoffre,
+			Gabarit: vault.GabaritValeur(cheminCoffre, "cookie_secret"),
+			Perms:   "0400",
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("longhorn-ui: the proxy's vault annotations: %w", err)
+	}
+
+	return fmt.Sprintf(`        # THE RESTART MECHANISM FOR THE ADDRESS LIST. oauth2-proxy reads the file at
+        # startup, so rewriting the ConfigMap changes nothing until the process
+        # restarts; Kubernetes restarts it when this value changes, and only then.
+        ceffio.io/acces-somme: %q
+        # THE AGENT MUST RUN AS THE POD'S USER, and this is not cosmetic: a file
+        # in 0400 is readable only by its owner, and the injector's init container
+        # creates it. Left to itself the agent runs as its own UID, the file
+        # belongs to that UID, and the proxy — 65532 — cannot open it. The pod
+        # then loops in Init on "permission denied", naming neither the file nor
+        # the mode.
+        vault.hashicorp.com/agent-run-as-user: "65532"
+        vault.hashicorp.com/agent-run-as-group: "65532"
+%s`, somme, coffre), nil
+}
 
 // manifesteProxy builds the oauth2-proxy Deployment.
 //
@@ -37,7 +100,7 @@ const nomServiceAccount = nomDeploy
 // is the address. The identity layer already creates the administrator with
 // emailVerified=true; the answer to a refusal is to verify the account, not to tell the
 // proxy to stop checking.
-func manifesteProxy(domaine, somme string) string {
+func manifesteProxy(domaine, annotations string) string {
 	hote := nomHote(domaine)
 	issuer := "https://keycloak." + domaine + "/realms/ceffio"
 
@@ -59,16 +122,17 @@ spec:
       labels:
         app: %[1]s
       annotations:
-        # THE RESTART MECHANISM FOR THE ADDRESS LIST. oauth2-proxy reads the file at
-        # startup, so rewriting the ConfigMap changes nothing until the process
-        # restarts; Kubernetes restarts it when this value changes, and only then.
-        ceffio.io/acces-somme: "%[3]s"
-    spec:
+%[3]s    spec:
       serviceAccountName: %[4]s
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
         runAsGroup: 65532
+        # THE INJECTED VOLUME IS SHARED WITH THE AGENT'S INIT CONTAINER, and
+        # fsGroup is what makes it writable on any storage class: without it the
+        # volume belongs to root, and the agent fails to create its file before
+        # the proxy ever runs.
+        fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -78,8 +142,14 @@ spec:
             - --provider=keycloak-oidc
             - --oidc-issuer-url=%[5]s
             - --client-id=%[6]s
-            # THE SECRET COMES FROM THE ENVIRONMENT THE AGENT RENDERS, never from an
-            # argument: an argument is readable in /proc/<pid>/cmdline.
+            # THE TWO SECRETS ARE FILES THE AGENT RENDERS. Not arguments: a
+            # secret on a command line is readable in /proc/<pid>/cmdline. Not
+            # environment variables either, and the difference is decisive --
+            # when the variable is set, oauth2-proxy NEVER OPENS THE FILE
+            # (ProviderData.GetClientSecret returns early), so the injected file
+            # would be decorative and a rotation in the vault would go unnoticed.
+            - --client-secret-file=%[10]s
+            - --cookie-secret-file=%[11]s
             - --upstream=http://longhorn-frontend.longhorn-system.svc:80
             # NO --email-domain, ON PURPOSE, and it is the security decision of this
             # module: an e-mail domain and a file of addresses are ALTERNATIVES, and
@@ -99,22 +169,6 @@ spec:
             - --pass-access-token=false
             - --http-address=0.0.0.0:4180
             - --metrics-address=0.0.0.0:44180
-          env:
-            # THE AGENT RENDERS /secrets/env FROM THE VAULT ENTRY; the shell sources it
-            # before starting, exactly as Keycloak does. Passing it as a plain env
-            # value would put the secret in the pod spec.
-            - name: OAUTH2_PROXY_CLIENT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: %[1]s-vault
-                  key: client_secret
-                  optional: true
-            - name: OAUTH2_PROXY_COOKIE_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: %[1]s-vault
-                  key: cookie_secret
-                  optional: true
           ports:
             - name: http
               containerPort: 4180
@@ -152,8 +206,9 @@ spec:
         - name: adresses
           configMap:
             name: %[9]s
-`, nomDeploy, nsSysteme, somme, nomServiceAccount,
-		issuer, clientOIDC, cheminAdresses, hote, nomConfig)
+`, nomDeploy, nsSysteme, annotations, nomServiceAccount,
+		issuer, clientOIDC, cheminAdresses, hote, nomConfig,
+		cheminSecretClient, cheminSecretCookie)
 }
 
 // manifesteServiceEtRoute builds the ClusterIP Service and the Ingress.

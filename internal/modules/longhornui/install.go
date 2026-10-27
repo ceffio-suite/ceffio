@@ -31,6 +31,15 @@ const (
 	coffreChemin    = "oauth2-proxy"
 )
 
+// cheminCoffre is the full vault path the injector reads, and the only one this
+// module declares.
+//
+// IT MUST START WITH "kv/data/ceffio/" + THE MODULE'S ID: the vault layer refuses
+// any other prefix (vault.PolitiqueModule), so a divergence between the component
+// name and the module ID would fail at provisioning — the good place — rather than
+// at the pod's first start.
+const cheminCoffre = "kv/data/ceffio/" + coffreComposant + "/" + coffreChemin
+
 // installer déploie le proxy, son client, ses secrets et sa route. Idempotent.
 func installer(ctx context.Context, env module.Env) error {
 	domaine := env.Domain
@@ -74,29 +83,20 @@ func installer(ctx context.Context, env module.Env) error {
 			"confidential client must have one", clientOIDC)
 	}
 
-	// 3. THE PROXY'S SECRETS, as a Kubernetes Secret the pod reads as environment
-	// variables.
+	// 3. THE PROXY'S SECRETS COME FROM THE INJECTOR, NOT FROM A KUBERNETES SECRET.
 	//
-	// WHY A SECRET RATHER THAN THE AGENT'S FILE: oauth2-proxy takes both credentials as
-	// OAUTH2_PROXY_* environment variables. The agent could render a file, but the pod
-	// would then need a shell wrapper to source it — one more place where a secret
-	// passes through a command line. The values still COME FROM THE VAULT: they are
-	// read from it here, and written into the Secret without ever appearing in a
-	// manifest, a log or an argument.
+	// THEY ARE RENDERED BY THE OPENBAO INJECTOR, as two files, and handed to the
+	// proxy by --client-secret-file / --cookie-secret-file. This is what A4 made
+	// possible: the module declares its own vault access (Info.Vault), the vault
+	// layer builds the policy and the Kubernetes role from the registry, and the
+	// pod's ServiceAccount — not this command — is what authenticates.
 	//
-	// AN ÉCART, RECORDED AND LOAD-BEARING: the plan asks for a dedicated OpenBao role
-	// bound to the proxy's ServiceAccount, on the model of the existing roles.
-	// internal/vault exports no function for that, and the agent annotations that would
-	// use it made the pod hang in Init with
-	//
-	//   invalid role name "longhorn-oauth2-proxy"
-	//
-	// so they are NOT used here. Adding the role belongs to a lot of its own — it
-	// touches the auth methods every component shares — and until then a Secret is
-	// what carries the two values.
-	if err := poserSecretProxy(ctx); err != nil {
-		return err
-	}
+	// WHAT THIS REPLACES, AND WHY THE OLD MODE WAS WRONG: the values were read
+	// here, then written into a Secret. That Secret was a SECOND COPY of the
+	// credential, outside OpenBao, kept in sync by nothing — rotating the secret
+	// in the vault left the pod authenticating with the old one indefinitely. The
+	// injector renders at pod start, so a rotation takes effect at the next
+	// restart, like every other component of the suite.
 
 	// 4. THE SERVICE ACCOUNT, WHICH MUST EXIST BEFORE THE POD.
 	//
@@ -124,11 +124,43 @@ func installer(ctx context.Context, env module.Env) error {
 	}
 
 	// 6. THE WORKLOAD, THE SERVICE AND THE ROUTE.
-	somme := sommeAdresses(adresses)
-	if err := appliquer(ctx, manifesteProxy(domaine, somme)); err != nil {
+	annotations, err := annotationsProxy(sommeAdresses(adresses))
+	if err != nil {
 		return err
 	}
-	return appliquer(ctx, manifesteServiceEtRoute(domaine))
+	if err := appliquer(ctx, manifesteProxy(domaine, annotations)); err != nil {
+		return err
+	}
+	if err := appliquer(ctx, manifesteServiceEtRoute(domaine)); err != nil {
+		return err
+	}
+
+	// 7. THE OLD SECRET IS REMOVED, AND LAST.
+	//
+	// IT COMES AFTER THE NEW DEPLOYMENT on purpose: an installation that still
+	// runs the previous mode has a pod whose environment was read from that
+	// Secret, and deleting it before the replacement exists would make any
+	// restart during the install fail to start. Once the new pod is applied, the
+	// Secret is a copy of a credential that nothing reads — the exact thing
+	// docs/secrets.md promises not to keep.
+	return supprimerSecretObsolete(ctx)
+}
+
+// supprimerSecretObsolete deletes the Kubernetes Secret the previous mode wrote.
+//
+// A MIGRATION, NOT A ROUTINE STEP: on a fresh installation there is nothing to
+// delete, and --ignore-not-found makes that the cheap case. It stays in the code
+// because an upgrade must not leave a credential behind, and because the next
+// install of every other module must not have to know this one's history.
+func supprimerSecretObsolete(ctx context.Context) error {
+	cmd := k8s.Command(ctx, "kubectl", "delete", "secret", nomDeploy+"-vault",
+		"-n", nsSysteme, "--ignore-not-found")
+	// SILENT ON SUCCESS: this is a cleanup, and printing it would suggest the
+	// module creates that Secret.
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("longhorn-ui: removing the obsolete Kubernetes Secret: %w", err)
+	}
+	return nil
 }
 
 // assurerCookieSecret stores a 32-byte cookie secret, once.
@@ -311,6 +343,10 @@ func desinstaller(ctx context.Context, env module.Env) error {
 	// failed above, and the next install would generate a different one for a client
 	// that still has the old. The entry holds two short strings; keeping it is the
 	// cheaper mistake.
+	//
+	// THE KUBERNETES SECRET IS NOT CREATED ANY MORE, but the deletion stays: an
+	// installation that ran the previous mode still holds a copy of the
+	// credentials there, and uninstalling must not leave it behind.
 	if err := k8s.Command(ctx, "kubectl", "delete", "secret", nomDeploy+"-vault",
 		"-n", nsSysteme, "--ignore-not-found").Run(); err != nil {
 		erreurs = append(erreurs, "secret: "+err.Error())
@@ -320,50 +356,6 @@ func desinstaller(ctx context.Context, env module.Env) error {
 			len(erreurs), strings.Join(erreurs, " · "))
 	}
 	return nil
-}
-
-// poserSecretProxy writes the two secrets the pod reads, from the vault.
-//
-// THE VALUES ARE READ FROM OPENBAO AND WRITTEN INTO A SECRET, never taken from a
-// manifest. `--from-literal` would put them in the process's argument list, which every
-// process on the node can read; they travel on standard input through a file that is
-// removed at once.
-func poserSecretProxy(ctx context.Context) error {
-	entree, err := secrets.LireEntreeCoffre(ctx, secrets.DepuisEnvironnement(),
-		coffreComposant, coffreChemin)
-	if err != nil {
-		return fmt.Errorf("longhorn-ui: reading the vault entry: %w", err)
-	}
-	cs, ck := entree["client-secret"], entree["cookie_secret"]
-	if cs == "" || ck == "" {
-		return fmt.Errorf("longhorn-ui: the vault entry %s/%s lacks %s: the proxy cannot "+
-			"start without both", coffreComposant, coffreChemin,
-			manquant(cs, ck))
-	}
-	manifeste := fmt.Sprintf(`apiVersion: v1
-kind: Secret
-metadata:
-  name: %s
-  namespace: %s
-type: Opaque
-stringData:
-  client_secret: %s
-  cookie_secret: %s
-`, nomDeploy+"-vault", nsSysteme, cs, ck)
-	return appliquer(ctx, manifeste)
-}
-
-// manquant names which of the two keys is absent, because "incomplete entry" sends the
-// reader to look at both.
-func manquant(cs, ck string) string {
-	var n []string
-	if cs == "" {
-		n = append(n, "client-secret")
-	}
-	if ck == "" {
-		n = append(n, "cookie_secret")
-	}
-	return strings.Join(n, " and ")
 }
 
 // verifierClient reports whether the Keycloak client exists.

@@ -669,6 +669,74 @@ func (c *Client) PodDuDeploiement(ctx context.Context, ns, nom, etiquette string
 // It reads the status rather than trusting the object's existence: a Deployment
 // with zero ready replicas exists, and answering "present" for it would claim a
 // service that is not serving.
+// LireService reads an HTTP path exposed by a Service, THROUGH THE KUBERNETES
+// API PROXY.
+//
+// WHY NOT AN EXEC INSIDE THE POD: reaching a service through `pods/exec` needs
+// a shell and a client in the image, and grants a right to run commands in a
+// workload for what is only a GET. `services/proxy` needs `get` on
+// services/proxy and nothing else, and it works the same from the console (in
+// cluster) and from the CLI (which has no route to the Service network).
+func (c *Client) LireService(ctx context.Context, ns, service, port, chemin string) ([]byte, error) {
+	brut, err := c.cs.CoreV1().Services(ns).ProxyGet("http", service, port, chemin, nil).DoRaw(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s/%s%s through the API proxy: %w", ns, service, chemin, err)
+	}
+	return brut, nil
+}
+
+// MettreAJourEnv replaces the named environment variables of one container,
+// leaving the others untouched, and updates the Deployment.
+//
+// WHY NOT kubectl: the console image has no shell and no kubectl — every write
+// it performs goes through the API. This is the same write, expressed where it
+// can run.
+func (c *Client) MettreAJourEnv(ctx context.Context, ns, deploiement, conteneur string, valeurs map[string]string) error {
+	d, err := c.cs.AppsV1().Deployments(ns).Get(ctx, deploiement, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("reading deployment %s/%s: %w", ns, deploiement, err)
+	}
+	trouve := false
+	for i := range d.Spec.Template.Spec.Containers {
+		c := &d.Spec.Template.Spec.Containers[i]
+		if c.Name != conteneur {
+			continue
+		}
+		trouve = true
+		for cle, valeur := range valeurs {
+			pose := false
+			for j := range c.Env {
+				if c.Env[j].Name == cle {
+					c.Env[j].Value = valeur
+					c.Env[j].ValueFrom = nil
+					pose = true
+				}
+			}
+			if !pose {
+				c.Env = append(c.Env, corev1.EnvVar{Name: cle, Value: valeur})
+			}
+		}
+	}
+	if !trouve {
+		return fmt.Errorf("deployment %s/%s has no container %q", ns, deploiement, conteneur)
+	}
+	if _, err := c.cs.AppsV1().Deployments(ns).Update(ctx, d, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("updating deployment %s/%s: %w", ns, deploiement, err)
+	}
+	return nil
+}
+
+// DeploiementExiste reports whether the Deployment object exists at all.
+//
+// WHY IT IS NOT DeploiementPret: a module must be able to say "absent" (never
+// installed) and "degraded" (installed, but broken) as two different things. A
+// pod that crash-loops is not an absent module, and telling an operator it is
+// absent sends them looking for an installation that is in fact there.
+func (c *Client) DeploiementExiste(ctx context.Context, ns, nom string) bool {
+	_, err := c.cs.AppsV1().Deployments(ns).Get(ctx, nom, metav1.GetOptions{})
+	return err == nil
+}
+
 func (c *Client) DeploiementPret(ctx context.Context, ns, nom string) bool {
 	d, err := c.cs.AppsV1().Deployments(ns).Get(ctx, nom, metav1.GetOptions{})
 	if err != nil {

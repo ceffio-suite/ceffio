@@ -43,8 +43,11 @@ image would tie a 1.5 GB dependency to every Ceffio release, including
 installations that never record.
 
 The Ceffio repository keeps only the **module**: it pins the image version in
-`internal/version` (the same rule as janus) and deploys it with `recording` as a
-declared dependency.
+`internal/version` (the same rule as janus) and deploys it with `recording` as its
+only declared dependency. It joins the call **through the signaling**, with the
+internal secret, exactly as the recorder does: it needs neither `exapps-daemon`
+nor HaRP, and requiring them would give Nextcloud the right to start containers
+for a component that never asks for it.
 
 Rejected alternatives: a Go rewrite of the signaling client (1 450 proven lines,
 undocumented protocol, cgo for whisper) and a new ExApp (no natural access to
@@ -57,11 +60,26 @@ Namespace `ceffio-video`, next to the recorder.
 | Object | Role |
 |---|---|
 | `Deployment ceffio-capture` (1 replica) | watch, capture, finalise |
-| `Service ceffio-capture` (`/healthz`) | supervision |
+| `Service ceffio-capture` (`/healthz`, `/status`) | supervision, and the last job's outcome |
 | `ServiceAccount` + `Role`/`RoleBinding` | two exec rights, nothing else |
 | `PersistentVolumeClaim` (2 Gi, mounted `/models-extra`) | additional models (`medium`), optional |
-| Native `Secret` | signaling internal secret, read from the vault, never regenerated |
-| Module settings | visible in the console |
+| No Kubernetes Secret | the signaling's internal secret is rendered into `/secrets/env` by the OpenBao injector; the module declares its own read-only vault access (`Info.Vault`) |
+| Module settings | transcription model and threads, visible in the console |
+
+**State.** `State` does not answer "installed" merely because the Deployment is
+ready: absent if it does not exist, **degraded** if it exists and is not ready
+(with the reason), and — when it is ready — a `Detail` built from `/status`, the
+last recording's outcome. A last job that **failed** makes the module degraded,
+so a silent failure becomes a visible one. `/status` carries the room, the owner,
+the start and end, `running` / `transcribed` / `failed`, the error message and
+the transcription duration; never the transcript itself.
+
+**Settings.** Group `transcription`, two keys: `model` (`small`, baked into the
+image, or `medium`, fetched into `/models-extra`) and `threads` (1–16, 4 by
+default). `Apply` rewrites the Deployment's variables, which restarts it. The
+model is refused at `Validate`/`Apply` when `medium` is asked for and neither
+present nor downloadable — an offline installation must be told so before the
+meeting, not after.
 
 Rights, and nothing more:
 
@@ -139,7 +157,7 @@ from the file name, duration from the metadata).
 | Phase | Content | Duration |
 |---|---|---|
 | 1 | Image (own repository), module, deployment, RBAC, state detection | 5–7 d — **done** |
-| 2 | Client extraction, capture and finalisation in the image, console settings | 5–7 d — **done in the image, to validate on a live installation** |
+| 2 | Client extraction, capture and finalisation in the image, console settings | 5–7 d — **done, validated on a live installation** |
 | 3 | Nextcloud deposit, muxing, multi-`.webm` split, names | 4–6 d |
 | 4 | CI multi-arch, docs, load tests (3–5 participants), prototype migration | 3–5 d |
 
