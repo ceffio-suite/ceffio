@@ -125,7 +125,7 @@ var Registry = []Composant{
 		// it carries its own Python stack (WebRTC, whisper) and its own release
 		// cycle, independent of the binary's versions. So what is pinned here is
 		// an IMAGE version, not the binary's tag — the same rule as janus.
-		Nom: "ceffio-capture", Image: "ghcr.io/ceffio-suite/ceffio-capture:v0.7.5",
+		Nom: "ceffio-capture", Image: "ghcr.io/ceffio-suite/ceffio-capture:v0.8.2",
 		Module: "internal/capture", Role: "per-participant audio capture and CPU transcription",
 	},
 	{

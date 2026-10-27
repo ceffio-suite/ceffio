@@ -83,29 +83,52 @@ meeting, not after.
 
 Rights, and nothing more:
 
-- `ceffio-files`: `pods/exec` on the Nextcloud pod (deposit + `occ files:scan`);
-- `ceffio-data`: `pods/exec` to read the recording state and the room language
-  (the application database user cannot reach the Nextcloud database — verified:
-  `permission denied for database "nextcloud"`).
+- `ceffio-files`: `pods/exec` on the Nextcloud pod — deposit, `chown`, and
+  `occ files:scan`. **It stays, and that is a decision, not an oversight.**
+  B4 asked whether the official OCS route
+  (`/ocs/v2.php/apps/spreed/api/v1/recording/<token>/store`) could carry the
+  `.srt` instead. It cannot: Talk accepts only `audio/ogg`, `video/ogg`,
+  `video/mp4`, `video/webm` and `video/x-matroska`
+  (`DEFAULT_ALLOWED_RECORDING_FORMATS`, `lib/Service/RecordingService.php`), so
+  a subtitle file is refused on its MIME type and then on its extension. The
+  plan's rule applies: when Talk does not provide for that case, we do not force
+  it, and we write down why.
+- **Nothing in `ceffio-data`.** The Role, its binding and the `pods/exec`
+  handshake are gone (B5) with the poll that needed them. The module's
+  `Info.Permissions` no longer names the namespace, so the console cannot create
+  that grant either; `Uninstall` still deletes the Role and RoleBinding an older
+  installation left there.
+
+The rules removed in B5, for the record: in `ceffio-data`, `get`/`list` on
+`pods` and `get`/`create` on `pods/exec`, for the `ceffio-capture` ServiceAccount.
+The console's own grant is unchanged — `ceffio-data` is administered by the
+`data` module, which still declares its own rights there.
 
 ## 5. Flow
 
 ```
-Talk                          ceffio-capture                    Nextcloud
- │                                  │                               │
- │ moderator starts the recording   │                               │
- │──── call_recording = 3 ─────────▶│ (watch, 1 s)                  │
- │                                  │── joins the call (internal ───│
- │                                  │   client, aiortc)             │
- │   one track per participant ◀────│                               │
- │                                  │                               │
- │   stop (call_recording = 0) ────▶│                               │
- │                                  │── whisper int8 (CPU) ────┐    │
- │                                  │── Opus 32k per track ────┤    │
- │                                  │── named, re-aligned .srt ┘    │
- │                                  │── WebVTT muxed in the .webm ──│
- │                                  │──── deposit + files:scan ────▶│
+Nextcloud ──POST /api/v1/room/<token>, signé──▶ relais (pod de l'enregistreur)
+                                                   │ 1. vérifie la signature
+                                                   │ 2. transmet à l'enregistreur
+                                                   │    (127.0.0.1:1234), tel quel
+                                                   │ 3. répond à Nextcloud
+                                                   │ 4. prévient la capture, signé,
+                                                   │    en arrière-plan
+                                                   ▼
+                                             ceffio-capture
+                                               start → rejoint l'appel
+                                                       (client signaling, aiortc)
+                                                       une piste Opus par participant
+                                               stop  → whisper int8 (CPU)
+                                                       .srt nommé, ré-aligné
+                                                       WebVTT dans le .webm
+                                                       dépôt + files:scan
 ```
+
+**No database, and no one-second poll.** The capture used to watch
+`call_recording` and to read the room language from `oc_talk_rooms`; both are
+gone. What replaced them is the relay (lots B1–B2), and the capture now holds no
+right on `ceffio-data` at all (B5).
 
 ## 6. Hard points and answers
 
@@ -127,11 +150,20 @@ shift reproduces the real delay. Residual error: 1-4 s.
 both session ids: names come from it directly. A database query keyed by the
 signaling id returned nothing — the first transcript said "participant C88GIU".
 
-**Language.** The room language is the reference: the moderator declares it,
-and Talk's own selector writes it. When the room has none, whisper detects it
-once per track. A bilingual call (French, then one Arabic sentence) renders the
-Arabic phonetically — accepted by the operator, and better than a per-chunk
-detection that hallucinated.
+**Language.** The room's declared language used to be the reference: the
+moderator set it in Talk, and the capture read it from `oc_talk_rooms`. With the
+database gone, that value no longer reaches the capture — the relay's
+notification does not carry it, and the signaling does not put it in the join
+reply this client reads. What remains is whisper's per-track detection, with
+`CEFFIO_LANGUE` as an installation-wide override.
+
+**The limit, stated plainly:** a French call that ends with one Arabic sentence
+can come back wholly in Arabic, because the detector picks the dominant
+language of the track. The operator accepted that trade when they accepted the
+plan's fallback; an installation that needs the old behaviour sets
+`CEFFIO_LANGUE=fr`. Bringing the room language back would need a Nextcloud
+credential for the capture (an app password and an OCS call) — a new secret and
+a new failure mode, deliberately not taken in this lot.
 
 **Writing into the launcher's files.** Through `pods/exec` in the Nextcloud pod
 (write, `chown www-data`, `occ files:scan`) — the same path Ceffio already uses
