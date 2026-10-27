@@ -46,7 +46,14 @@ func (m *captureModule) Info() module.Info {
 		Namespaces: []string{nsVideo},
 
 		Resources: "~1.5 GB image (model included), 4 GB RAM during transcription",
-		Warning:   "Transcription happens after the call, on this server's CPU; it can take a third of the meeting length.",
+		// THE DATA-PROTECTION OBLIGATION IS THE FIRST SENTENCE, not a footnote: a
+		// named transcript is personal data, and the operator learns it where they
+		// decide to install the module — not after a participant complains.
+		Warning: "Recording a call and transcribing it processes personal data: the voices " +
+			"and the names of the participants. Inform them before the meeting, and fix a " +
+			"retention period for the transcript (docs/capture-privacy.md). " +
+			"Transcription happens after the call, on this server's CPU; it can take a " +
+			"third of the meeting length.",
 
 		// Rights: the deployment itself in ceffio-video, and the two execs
 		// described in internal/capture (deposit files, read the recording
