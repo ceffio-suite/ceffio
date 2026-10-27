@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -542,5 +543,50 @@ func TestNewRefuse(t *testing.T) {
 		if _, err := New(o); err == nil {
 			t.Errorf("%s : accepté, attendu un refus", nom)
 		}
+	}
+}
+
+// TestStopEnTableauEstNotifie covers the shape that cost a real transcript.
+//
+// TALK SENDS `"stop": []` when the stop carries no participant — PHP encodes an
+// empty array that way. A struct field of type map refused the body, no
+// notification was sent, and the capture kept running: the meeting's .srt was
+// never written. The array is legitimate; it simply has no fields.
+func TestStopEnTableauEstNotifie(t *testing.T) {
+	const secret = "partage"
+	rec := nouvelEnregistreur(t, http.StatusOK, `{"ok":true}`)
+	cap := nouvelleCapture(t, 0)
+	r := relais(t, Options{Upstream: rec.srv.URL, Notify: cap.srv.URL, Secret: secret})
+
+	for i, corps := range [][]byte{
+		[]byte(`{"type":"stop","stop":[]}`),
+		[]byte(`{"type":"stop","stop":{"actor":{"type":"users","id":"bob"}}}`),
+	} {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, requeteDeTest(t, secret, "tok"+strconv.Itoa(i), corps))
+		if w.Code != http.StatusOK {
+			t.Fatalf("corps %d : code = %d", i, w.Code)
+		}
+	}
+	r.WaitNotifications()
+
+	recues, _ := cap.alertes()
+	if len(recues) != 2 {
+		t.Fatalf("%d notification(s), attendu deux — un stop en tableau doit être notifié", len(recues))
+	}
+	var avis map[string]any
+	_ = json.Unmarshal(recues[0], &avis)
+	if avis["type"] != "stop" || avis["token"] != "tok0" {
+		t.Errorf("notification = %s", recues[0])
+	}
+	// LE PREMIER N'A PAS D'ACTEUR, ET C'EST NORMAL : le champ est omis.
+	if _, ok := avis["actor"]; ok {
+		t.Errorf("un acteur a été inventé pour un stop qui n'en portait pas : %s", recues[0])
+	}
+	// LE SECOND LE PORTE, TEL QUEL.
+	_ = json.Unmarshal(recues[1], &avis)
+	acteur, _ := avis["actor"].(map[string]any)
+	if acteur["id"] != "bob" {
+		t.Errorf("acteur = %v, attendu celui de la requête", avis["actor"])
 	}
 }

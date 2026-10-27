@@ -338,10 +338,16 @@ func (r *Relay) notifier(req *http.Request, token string, corps []byte) {
 		return
 	}
 
+	// THE SECTIONS ARE READ AS RAW JSON, and that is not defensive style: Talk
+	// sends `"stop": []` — an ARRAY — when no participant is given (PHP encodes
+	// an empty array that way), and a struct field of type map refuses it. The
+	// first live recording proved the cost: the body failed to decode, no
+	// notification was sent, the capture never stopped, and the transcript was
+	// never written. A decoding detail became a lost transcript.
 	var requete struct {
-		Type  string                     `json:"type"`
-		Start map[string]json.RawMessage `json:"start"`
-		Stop  map[string]json.RawMessage `json:"stop"`
+		Type  string          `json:"type"`
+		Start json.RawMessage `json:"start"`
+		Stop  json.RawMessage `json:"stop"`
 	}
 	if err := json.Unmarshal(corps, &requete); err != nil {
 		r.logf("relay: recording body unreadable, nothing notified: %v", err)
@@ -351,8 +357,15 @@ func (r *Relay) notifier(req *http.Request, token string, corps []byte) {
 	if requete.Type == "stop" {
 		partie = requete.Stop
 	}
+
+	// AN OBJECT CARRIES FIELDS; an array carries none. Both are legitimate, and
+	// an absent section is simply an empty notification.
+	var champs map[string]json.RawMessage
+	if len(partie) > 0 && partie[0] == '{' {
+		_ = json.Unmarshal(partie, &champs) // a malformed object yields no field
+	}
 	owner := ""
-	if v, ok := partie["owner"]; ok {
+	if v, ok := champs["owner"]; ok {
 		_ = json.Unmarshal(v, &owner) // a non-string owner is simply empty
 	}
 
@@ -360,7 +373,7 @@ func (r *Relay) notifier(req *http.Request, token string, corps []byte) {
 		Type:    requete.Type,
 		Token:   token,
 		Owner:   owner,
-		Actor:   partie["actor"],
+		Actor:   champs["actor"],
 		Backend: req.Header.Get("Talk-Recording-Backend"),
 		At:      time.Now().UTC().Format(time.RFC3339),
 	})
