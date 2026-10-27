@@ -6,6 +6,7 @@ package capture
 import (
 	"context"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/ceffio-suite/ceffio/internal/module"
@@ -132,4 +133,20 @@ func (f *fauxMagasin) Ecrire(_ context.Context, _, _ string, d map[string]string
 func (f *fauxMagasin) Supprimer(_ context.Context, _, _, cle string) error {
 	delete(f.donnees, cle)
 	return nil
+}
+
+// TestLAvertissementNommeLesDonneesPersonnelles: l'avertissement affiché avant
+// l'installation doit dire la donnée personnelle, pas seulement le coût CPU. Un
+// opérateur qui découvre l'obligation après la première réunion l'a découverte
+// trop tard.
+func TestLAvertissementNommeLesDonneesPersonnelles(t *testing.T) {
+	w := (&captureModule{}).Info().Warning
+	for _, attendu := range []string{"personal data", "Inform"} {
+		if !strings.Contains(w, attendu) {
+			t.Errorf("Warning = %q, %q manquant", w, attendu)
+		}
+	}
+	if !strings.Contains(w, "docs/capture-privacy.md") {
+		t.Errorf("Warning ne renvoie pas à la page qui explique l'obligation : %q", w)
+	}
 }
