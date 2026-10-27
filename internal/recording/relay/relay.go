@@ -31,6 +31,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +47,23 @@ import (
 // /conf/recording.conf. Forwarding a body the recorder will refuse would only
 // move the refusal one hop further from its cause.
 const MaxBody = 1024
+
+// jetonValide is the only shape a room token may have.
+//
+// THE SIGNATURE DOES NOT COVER THE PATH. Talk signs `random || body`; the token
+// in `/api/v1/room/<token>` is covered by nothing. Whatever receives it must
+// therefore not trust it — and the capture puts it into file paths and, until
+// this fix, into shell commands.
+//
+// THE ALPHABET IS A SUPERSET OF TALK'S, ON PURPOSE. Talk generates 8 characters
+// from ISecureRandom::CHAR_LOWER + CHAR_DIGITS minus "l", "0" and "1"
+// (nextcloud/spreed, lib/Manager.php, generateNewToken), or 10 digits when SIP
+// is configured. [A-Za-z0-9]{4,64} contains all of those and rejects exactly what
+// matters here: '/', '..', ';', '|', '$', spaces and quotes. Tightening it to
+// the observed alphabet would reject tokens from another Talk version or
+// configuration for no security gain: the property we need is "no metacharacter",
+// not "Talk's exact generator".
+var jetonValide = regexp.MustCompile(`^[A-Za-z0-9]{4,64}$`)
 
 // maxResponse bounds what the relay reads back from the recorder. The recorder
 // answers with a short JSON document; an unbounded copy would let a
@@ -177,8 +195,11 @@ func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 // stop a recording.
 func (r *Relay) enregistrement(w http.ResponseWriter, req *http.Request) {
 	token := strings.TrimPrefix(req.URL.Path, "/api/v1/room/")
-	if token == "" {
-		http.NotFound(w, req)
+	// BEFORE ANYTHING ELSE, AND BEFORE ANY FORWARDING: an unauthenticated token
+	// must not reach the recorder, and must not be notifiable — the capture
+	// would put it in a path.
+	if !jetonValide.MatchString(token) {
+		http.Error(w, "invalid room token", http.StatusBadRequest)
 		return
 	}
 

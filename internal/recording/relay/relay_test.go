@@ -217,7 +217,7 @@ func TestSignatureInvalide(t *testing.T) {
 	cap := nouvelleCapture(t, 0)
 	r := relais(t, Options{Upstream: rec.srv.URL, Notify: cap.srv.URL, Secret: secret})
 
-	req := requeteDeTest(t, secret, "tok", []byte(`{"type":"start"}`))
+	req := requeteDeTest(t, secret, "tok1234", []byte(`{"type":"start"}`))
 	req.Header.Set("Talk-Recording-Checksum", strings.Repeat("0", 64))
 
 	w := httptest.NewRecorder()
@@ -244,7 +244,7 @@ func TestEnTeteManquant(t *testing.T) {
 	r := relais(t, Options{Upstream: rec.srv.URL, Secret: secret})
 
 	for _, entete := range []string{"Talk-Recording-Backend", "Talk-Recording-Random", "Talk-Recording-Checksum"} {
-		req := requeteDeTest(t, secret, "tok", []byte(`{"type":"start"}`))
+		req := requeteDeTest(t, secret, "tok1234", []byte(`{"type":"start"}`))
 		req.Header.Del(entete)
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
@@ -287,7 +287,7 @@ func TestCorpsSansLongueur(t *testing.T) {
 	rec := nouvelEnregistreur(t, http.StatusOK, `{"ok":true}`)
 	r := relais(t, Options{Upstream: rec.srv.URL, Secret: secret})
 
-	req := requeteDeTest(t, secret, "tok", []byte(`{"type":"start"}`))
+	req := requeteDeTest(t, secret, "tok1234", []byte(`{"type":"start"}`))
 	req.ContentLength = -1
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -308,7 +308,7 @@ func TestEnregistreurEnPanne(t *testing.T) {
 	r := relais(t, Options{Upstream: rec.srv.URL, Notify: cap.srv.URL, Secret: secret})
 
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, requeteDeTest(t, secret, "tok", []byte(`{"type":"start"}`)))
+	r.ServeHTTP(w, requeteDeTest(t, secret, "tok1234", []byte(`{"type":"start"}`)))
 	r.WaitNotifications()
 
 	if w.Code != http.StatusInternalServerError {
@@ -330,7 +330,7 @@ func TestEnregistreurInjoignable(t *testing.T) {
 	r := relais(t, Options{Upstream: portFerme(t), Notify: cap.srv.URL, Secret: secret})
 
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, requeteDeTest(t, secret, "tok", []byte(`{"type":"start"}`)))
+	r.ServeHTTP(w, requeteDeTest(t, secret, "tok1234", []byte(`{"type":"start"}`)))
 	r.WaitNotifications()
 
 	if w.Code != http.StatusBadGateway {
@@ -351,7 +351,7 @@ func TestNotificationSignee(t *testing.T) {
 	r := relais(t, Options{Upstream: rec.srv.URL, Notify: cap.srv.URL, Secret: secret})
 
 	corps := []byte(`{"type":"start","start":{"owner":"alice","actor":{"type":"users","id":"alice"}}}`)
-	req := requeteDeTest(t, secret, "tok-du-salon", corps)
+	req := requeteDeTest(t, secret, "tokdusalon", corps)
 	req.Header.Set("Talk-Recording-Backend", "https://cloud.exemple.org/")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -366,7 +366,7 @@ func TestNotificationSignee(t *testing.T) {
 	if err := json.Unmarshal(recues[0], &avis); err != nil {
 		t.Fatalf("la notification n'est pas du JSON : %v", err)
 	}
-	if avis["type"] != "start" || avis["token"] != "tok-du-salon" || avis["owner"] != "alice" {
+	if avis["type"] != "start" || avis["token"] != "tokdusalon" || avis["owner"] != "alice" {
 		t.Errorf("notification = %s", recues[0])
 	}
 	if avis["backend"] != "https://cloud.exemple.org/" {
@@ -401,7 +401,7 @@ func TestStopNotifieLeStop(t *testing.T) {
 
 	corps := []byte(`{"type":"stop","stop":{"owner":"bob","actor":{"type":"users","id":"bob"}}}`)
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, requeteDeTest(t, secret, "tok", corps))
+	r.ServeHTTP(w, requeteDeTest(t, secret, "tok1234", corps))
 	r.WaitNotifications()
 
 	recues, _ := cap.alertes()
@@ -425,7 +425,7 @@ func TestCaptureLenteNeRetardePasNextcloud(t *testing.T) {
 
 	debut := time.Now()
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, requeteDeTest(t, secret, "tok", []byte(`{"type":"start"}`)))
+	r.ServeHTTP(w, requeteDeTest(t, secret, "tok1234", []byte(`{"type":"start"}`)))
 	duree := time.Since(debut)
 
 	if duree > 500*time.Millisecond {
@@ -447,7 +447,7 @@ func TestSansCapture(t *testing.T) {
 	r := relais(t, Options{Upstream: rec.srv.URL, Secret: secret})
 
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, requeteDeTest(t, secret, "tok", []byte(`{"type":"start"}`)))
+	r.ServeHTTP(w, requeteDeTest(t, secret, "tok1234", []byte(`{"type":"start"}`)))
 	r.WaitNotifications()
 	if w.Code != http.StatusOK {
 		t.Errorf("code = %d, attendu 200", w.Code)
@@ -467,7 +467,7 @@ func TestCaptureAbsente(t *testing.T) {
 	})
 
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, requeteDeTest(t, secret, "tok", []byte(`{"type":"start"}`)))
+	r.ServeHTTP(w, requeteDeTest(t, secret, "tok1234", []byte(`{"type":"start"}`)))
 	r.WaitNotifications()
 
 	if w.Code != http.StatusOK {
@@ -513,8 +513,9 @@ func TestCheminsRefuses(t *testing.T) {
 	r := relais(t, Options{Upstream: rec.srv.URL, Secret: secret})
 
 	for _, c := range []struct{ methode, chemin string }{
-		{http.MethodGet, "/api/v1/room/tok"},   // the recorder serves POST only
-		{http.MethodPost, "/api/v1/room/"},     // no token
+		{http.MethodGet, "/api/v1/room/tok"}, // the recorder serves POST only
+		// "/api/v1/room/" (no token) is refused with 400 by the token check —
+		// see TestJetonInvalideRefuse; it is not a routing decision.
 		{http.MethodPost, "/api/v1/welcome"},   // not a recording
 		{http.MethodGet, "/"},                  // nothing else
 		{http.MethodPost, "/api/v1/roomx/tok"}, // a prefix is not a match
@@ -563,7 +564,7 @@ func TestStopEnTableauEstNotifie(t *testing.T) {
 		[]byte(`{"type":"stop","stop":{"actor":{"type":"users","id":"bob"}}}`),
 	} {
 		w := httptest.NewRecorder()
-		r.ServeHTTP(w, requeteDeTest(t, secret, "tok"+strconv.Itoa(i), corps))
+		r.ServeHTTP(w, requeteDeTest(t, secret, "tok"+strconv.Itoa(i)+"x", corps))
 		if w.Code != http.StatusOK {
 			t.Fatalf("corps %d : code = %d", i, w.Code)
 		}
@@ -576,7 +577,7 @@ func TestStopEnTableauEstNotifie(t *testing.T) {
 	}
 	var avis map[string]any
 	_ = json.Unmarshal(recues[0], &avis)
-	if avis["type"] != "stop" || avis["token"] != "tok0" {
+	if avis["type"] != "stop" || avis["token"] != "tok0x" {
 		t.Errorf("notification = %s", recues[0])
 	}
 	// LE PREMIER N'A PAS D'ACTEUR, ET C'EST NORMAL : le champ est omis.
@@ -588,5 +589,66 @@ func TestStopEnTableauEstNotifie(t *testing.T) {
 	acteur, _ := avis["actor"].(map[string]any)
 	if acteur["id"] != "bob" {
 		t.Errorf("acteur = %v, attendu celui de la requête", avis["actor"])
+	}
+}
+
+// TestJetonInvalideRefuse: the token in the path is covered by NO signature —
+// Talk signs random || body. It must therefore be refused before anything is
+// forwarded or notified, because the capture puts it into file paths.
+func TestJetonInvalideRefuse(t *testing.T) {
+	const secret = "partage"
+	rec := nouvelEnregistreur(t, http.StatusOK, `{"ok":true}`)
+	cap := nouvelleCapture(t, 0)
+	r := relais(t, Options{Upstream: rec.srv.URL, Notify: cap.srv.URL, Secret: secret})
+
+	for _, jeton := range []string{
+		"x;id",        // une commande dans un shell
+		"../../etc",   // une remontée de chemin
+		"",            // pas de jeton du tout
+		"a b",         // un espace
+		"tok/../../x", // un séparateur
+		"tok$(id)",    // une substitution
+		"1234567890123456789012345678901234567890123456789012345678901234567890", // trop long
+	} {
+		corps := []byte(`{"type":"start"}`)
+		// THE PATH IS SET AFTER PARSING: a token like "../../etc" or "a b" is not
+		// a valid URL, and the point is the handler's decision, not the URL
+		// parser's. A real server would normalise it; the relay must refuse it
+		// either way, so the handler is fed exactly the string it would see.
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/room/x", bytes.NewReader(corps))
+		req.URL.Path = "/api/v1/room/" + jeton
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Talk-Recording-Backend", "https://cloud.exemple.org/")
+		req.Header.Set("Talk-Recording-Random", "abc123")
+		req.Header.Set("Talk-Recording-Checksum", signe(secret, "abc123", corps))
+
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("jeton %q : code = %d, attendu 400", jeton, w.Code)
+		}
+	}
+	r.WaitNotifications()
+
+	if len(rec.recus()) != 0 {
+		t.Errorf("un jeton invalide a été transmis à l'enregistreur (%d requête(s))", len(rec.recus()))
+	}
+	if corps, _ := cap.alertes(); len(corps) != 0 {
+		t.Errorf("un jeton invalide a été notifié : %q", corps)
+	}
+}
+
+// TestJetonValideAccepte: ce que Talk produit réellement doit passer — 8
+// caractères alphanumériques, ou 10 chiffres quand SIP est configuré.
+func TestJetonValideAccepte(t *testing.T) {
+	const secret = "partage"
+	for _, jeton := range []string{"7kxkkuxm", "abc23456", "1234567890", "ABCDEFGH"} {
+		rec := nouvelEnregistreur(t, http.StatusOK, `{"ok":true}`)
+		r := relais(t, Options{Upstream: rec.srv.URL, Secret: secret})
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, requeteDeTest(t, secret, jeton, []byte(`{"type":"start"}`)))
+		if w.Code != http.StatusOK {
+			t.Errorf("jeton %q refusé (%d) : un vrai jeton Talk doit passer", jeton, w.Code)
+		}
 	}
 }
