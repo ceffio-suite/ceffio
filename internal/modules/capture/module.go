@@ -29,7 +29,6 @@ const (
 
 	nsVideo = "ceffio-video"
 	nsFiles = "ceffio-files"
-	nsData  = "ceffio-data"
 )
 
 type captureModule struct{}
@@ -104,13 +103,11 @@ func (m *captureModule) Info() module.Info {
 					{APIGroups: []string{""}, Resources: []string{"pods/exec"}, Verbs: []string{"create"}},
 				},
 			},
-			{
-				Namespace: nsData,
-				Rules: []rbacv1.PolicyRule{
-					{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"get", "list"}},
-					{APIGroups: []string{""}, Resources: []string{"pods/exec"}, Verbs: []string{"create"}},
-				},
-			},
+			// NO RIGHT ON ceffio-data, and its absence is the lot's point: the
+			// module no longer reads the recruitment state or the room language
+			// from the database, so it must not hold the exec that made it
+			// possible. The console therefore cannot create that Role any more
+			// either — the permission list is what it is allowed to grant.
 		},
 	}
 }

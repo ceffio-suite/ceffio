@@ -49,10 +49,16 @@ func TestInfoValide(t *testing.T) {
 	for _, p := range info.Permissions {
 		vus[p.Namespace] = true
 	}
-	for _, attendu := range []string{"ceffio-video", "ceffio-files", "ceffio-data"} {
+	for _, attendu := range []string{"ceffio-video", "ceffio-files"} {
 		if !vus[attendu] {
 			t.Errorf("aucune permission déclarée pour %q", attendu)
 		}
+	}
+	// PLUS AUCUN DROIT SUR LA BASE (lot B5) : l'état de l'enregistrement et la
+	// langue du salon viennent du relais, plus d'un exec dans le pod PostgreSQL.
+	if vus["ceffio-data"] {
+		t.Error("le module demande encore des droits sur ceffio-data : il n'y fait " +
+			"plus aucun appel, et une permission accordée est une permission utilisée")
 	}
 }
 

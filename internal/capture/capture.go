@@ -146,7 +146,24 @@ func annotationsCapture() string {
 //     `permission denied for database "nextcloud"`), so the query goes through
 //     the primary's local psql.
 func deployCompteEtDroits(ctx context.Context) error {
-	manifeste := fmt.Sprintf(`apiVersion: v1
+	// THE CAPTURE HAS NO RIGHT IN ceffio-data ANY MORE, and that is the point of
+	// the relay: it used to read the recording state and the room language from
+	// the database through pods/exec. Both come from the relay's notification
+	// now (lot B3), so the Role, its binding and the exec handshake are gone.
+	//
+	// THE RIGHT IN ceffio-files STAYS, and not by omission: the deposit is still
+	// an exec into the Nextcloud pod. The OCS route that would replace it
+	// (`/ocs/v2.php/apps/spreed/api/v1/recording/<token>/store`) accepts only
+	// ogg, ogv, mp4, webm and mkv — DEFAULT_ALLOWED_RECORDING_FORMATS in
+	// nextcloud/spreed, lib/Service/RecordingService.php — so a .srt is refused
+	// on its MIME type. Lot B4 asked the question; this is its answer.
+	return appliquer(ctx, manifesteCompteEtDroits())
+}
+
+// manifesteCompteEtDroits is the identity and the ONE remaining right, as YAML:
+// separated from the apply so a test can read what is granted without a cluster.
+func manifesteCompteEtDroits() string {
+	return fmt.Sprintf(`apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: %[1]s
@@ -181,38 +198,7 @@ subjects:
   - kind: ServiceAccount
     name: %[1]s
     namespace: %[2]s
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: %[1]s
-  namespace: %[4]s
-rules:
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get", "list"]
-  - apiGroups: [""]
-    resources: ["pods/exec"]
-    # GET as well as CREATE: the exec handshake is authorised by a get on the
-    # subresource before the websocket upgrade, and create alone answers 403
-    # ("cannot get resource pods/exec") — observed on the first live run.
-    verbs: ["get", "create"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: %[1]s
-  namespace: %[4]s
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: %[1]s
-subjects:
-  - kind: ServiceAccount
-    name: %[1]s
-    namespace: %[2]s
-`, nom, ns, nsFiles, nsData)
-	return appliquer(ctx, manifeste)
+`, nom, ns, nsFiles)
 }
 
 // manifesteVolume holds the OPTIONAL extra models (medium). The small model is
@@ -257,7 +243,7 @@ spec:
       labels:
         app: %[1]s
       annotations:
-%[9]s
+%[8]s
     spec:
       serviceAccountName: %[1]s
       containers:
@@ -277,13 +263,13 @@ spec:
               value: https://cloud.%[4]s
             - name: CEFFIO_NC_NAMESPACE
               value: %[6]s
-            - name: CEFFIO_DB_NAMESPACE
-              value: %[7]s
+            # CEFFIO_DB_NAMESPACE IS GONE, with the code that read it: the
+            # recording state and the room language come from the relay now.
             - name: CEFFIO_THREADS
               value: "4"
           ports:
             - name: http
-              containerPort: %[8]d
+              containerPort: %[7]d
           readinessProbe:
             httpGet:
               path: /healthz
@@ -311,8 +297,8 @@ spec:
       volumes:
         - name: modeles
           persistentVolumeClaim:
-            claimName: %[10]s
-`, nom, ns, image, domain, "", nsFiles, nsData, portHTTP, annotations, pvcNom)
+            claimName: %[9]s
+`, nom, ns, image, domain, "", nsFiles, portHTTP, annotations, pvcNom)
 }
 
 func manifesteService() string {
@@ -398,6 +384,11 @@ func Supprime(ctx context.Context) error {
 	}
 	// The Role/RoleBinding live in two other namespaces: one command each,
 	// `-n` applying to a single group of arguments.
+	//
+	// ceffio-data IS STILL LISTED, although Deploy creates nothing there any
+	// more: it is the MIGRATION. An installation that ran the database poll has
+	// a Role and a binding that must not survive the module — a grant left in a
+	// namespace is a grant someone will use.
 	for _, espace := range []string{nsFiles, nsData} {
 		cmd := k8s.Command(ctx, "kubectl", "delete", "--ignore-not-found",
 			"-n", espace, "role/"+nom, "rolebinding/"+nom)

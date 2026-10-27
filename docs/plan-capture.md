@@ -83,10 +83,26 @@ meeting, not after.
 
 Rights, and nothing more:
 
-- `ceffio-files`: `pods/exec` on the Nextcloud pod (deposit + `occ files:scan`);
-- `ceffio-data`: `pods/exec` to read the recording state and the room language
-  (the application database user cannot reach the Nextcloud database — verified:
-  `permission denied for database "nextcloud"`).
+- `ceffio-files`: `pods/exec` on the Nextcloud pod — deposit, `chown`, and
+  `occ files:scan`. **It stays, and that is a decision, not an oversight.**
+  B4 asked whether the official OCS route
+  (`/ocs/v2.php/apps/spreed/api/v1/recording/<token>/store`) could carry the
+  `.srt` instead. It cannot: Talk accepts only `audio/ogg`, `video/ogg`,
+  `video/mp4`, `video/webm` and `video/x-matroska`
+  (`DEFAULT_ALLOWED_RECORDING_FORMATS`, `lib/Service/RecordingService.php`), so
+  a subtitle file is refused on its MIME type and then on its extension. The
+  plan's rule applies: when Talk does not provide for that case, we do not force
+  it, and we write down why.
+- **Nothing in `ceffio-data`.** The Role, its binding and the `pods/exec`
+  handshake are gone (B5) with the poll that needed them. The module's
+  `Info.Permissions` no longer names the namespace, so the console cannot create
+  that grant either; `Uninstall` still deletes the Role and RoleBinding an older
+  installation left there.
+
+The rules removed in B5, for the record: in `ceffio-data`, `get`/`list` on
+`pods` and `get`/`create` on `pods/exec`, for the `ceffio-capture` ServiceAccount.
+The console's own grant is unchanged — `ceffio-data` is administered by the
+`data` module, which still declares its own rights there.
 
 ## 5. Flow
 
