@@ -203,3 +203,24 @@ func TestImageTagJamaisVide(t *testing.T) {
 		}
 	})
 }
+
+// TestUnDigestNeMasquePasLEtiquette: an image pinned by tag AND digest keeps its
+// tag as Version.
+//
+// WHY IT MATTERS: the operator reads the version in `ceffio status` and in the
+// upgrade plan. A digest suffix that swallowed the tag would show a hexadecimal
+// string where a version belongs, and the upgrade diff would compare digests
+// instead of versions.
+func TestUnDigestNeMasquePasLEtiquette(t *testing.T) {
+	cas := map[string]string{
+		"ghcr.io/ceffio-suite/ceffio-capture:v0.8.3@sha256:08a4fb37d5c0": "v0.8.3",
+		"docker.io/library/nextcloud:34.0.3":                             "34.0.3",
+		"ghcr.io/ceffio-suite/ceffio-capture@sha256:08a4fb37d5c0":        "", // digest seul : pas d'étiquette
+		"registry.local:5000/team/app:1.2.3":                             "1.2.3",
+	}
+	for image, attendu := range cas {
+		if got := TagDe(image); got != attendu {
+			t.Errorf("TagDe(%q) = %q, attendu %q", image, got, attendu)
+		}
+	}
+}
