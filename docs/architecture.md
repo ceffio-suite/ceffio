@@ -42,7 +42,7 @@ the console's rights are derived from those declarations.
 | `ceffio-identity` | `identity` | Keycloak |
 | `ceffio-files` | `files` | Nextcloud and its caches |
 | `ceffio-office` | `office` | ONLYOFFICE DocumentServer |
-| `ceffio-video` | `talk` | Talk signaling, Janus, coturn, recording |
+| `ceffio-video` | `talk` | Talk signaling, Janus, coturn, recording (with its relay), and the optional capture |
 | `ceffio-mail` | `mail` | Stalwart |
 | `ceffio-vault` | `vault` | OpenBao |
 | `ceffio-exapps` | `exapps-daemon` | HaRP, the daemon Nextcloud asks for external applications |
@@ -96,7 +96,8 @@ Installed by choice, either at install time (`--with <id>`) or afterwards
 
 | ID | What it adds | Requires | Default |
 |---|---|---|---|
-| `recording` | Records Talk calls | — | **yes** (`--without recording` to skip) |
+| `recording` | Records Talk calls, and carries the relay that forwards Talk's requests and wakes the capture | — | **yes** (`--without recording` to skip) |
+| `capture` | One audio track per participant, transcribed on this server and written beside the recording — told when to start by the relay, never by the database | `recording` | no |
 | `exapps-daemon` | HaRP, for Nextcloud external applications | — | no |
 | `live-transcription` | Live speech-to-text in Talk calls, on this server | `exapps-daemon` | no |
 | `longhorn-ui` | The storage interface at `longhorn.<domain>`, behind the single sign-on | `storage`, `identity`, `ingress` | no |
