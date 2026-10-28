@@ -109,6 +109,15 @@ git checkout main && git merge --no-ff hotfix/1.4.1
 git checkout develop && git merge --no-ff hotfix/1.4.1
 ```
 
+## A security problem is not an issue
+
+Do not open an issue, a discussion or a pull request for a vulnerability: they
+are public, indexed within hours, and the reporter cannot withdraw them. Use the
+private channels of [SECURITY.md](SECURITY.md) — GitHub private vulnerability
+reporting, or `security@mandem-it.com`. The same policy states what we commit to
+(a first answer in 3 working days, a fix in 30 days for a critical issue) and
+which versions receive fixes.
+
 ## Before submitting
 
 ```bash

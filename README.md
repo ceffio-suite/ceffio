@@ -542,6 +542,8 @@ Open points, stated plainly:
 
 ## License
 
+Security issues: see [SECURITY.md](SECURITY.md) — never in a public issue.
+
 Ceffio is distributed under the **GNU Affero General Public License v3.0 or later**
 (`AGPL-3.0-or-later`). See [LICENSE](LICENSE).
 
