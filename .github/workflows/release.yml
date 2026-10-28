@@ -358,8 +358,29 @@ jobs:
             --platform linux/amd64,linux/arm64 \
             -f build/console/Dockerfile \
             "${TAGS[@]}" \
+            --sbom=true --provenance=mode=max \
             --push .
           echo "Published: ${IMAGE}:${VERSION}"
+
+      - name: Prove the image carries its SBOM and its provenance
+        # AN ATTESTATION IS PUBLISHED OR IT IS NOT: "the build said pushed" does
+        # not prove the registry kept the attestation, and an empty one is worse
+        # than none — it is a line in a report that nobody can check.
+        #
+        # The same reading an operator would do by hand, on the published image.
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.release.outputs.tag }}"
+          VERSION="${VERSION#v}"
+          IMAGE="ghcr.io/ceffio-suite/ceffio:${VERSION}"
+          for ATTESTATION in SBOM Provenance; do
+            VALEUR="$(docker buildx imagetools inspect "$IMAGE" --format "{{ json .${ATTESTATION} }}")"
+            echo "${ATTESTATION} of ${IMAGE}: $(echo "$VALEUR" | head -c 300)"
+            if [ -z "$VALEUR" ] || [ "$VALEUR" = "null" ]; then
+              echo "::error::${IMAGE} carries no ${ATTESTATION} attestation"
+              exit 1
+            fi
+          done
 
       - name: Prove the image is pullable, anonymously
         # "The build said pushed" does not prove a stranger can pull the image:
