@@ -103,3 +103,37 @@ func TestLesAnnotationsSontCellesDuCoffre(t *testing.T) {
 		t.Errorf("claimName = %v, expected %v", claim, pvcNom)
 	}
 }
+
+// TestLaPolitiqueReseauNOuvreQueVersLEnregistreur: the capture accepts
+// notifications from one source — the relay, labelled app=talk-recording in this
+// namespace — and from nothing else.
+func TestLaPolitiqueReseauNOuvreQueVersLEnregistreur(t *testing.T) {
+	var p map[string]any
+	if err := yaml.Unmarshal([]byte(manifestePolitiqueReseau()), &p); err != nil {
+		t.Fatalf("the policy is not valid YAML: %v", err)
+	}
+	if p["kind"] != "NetworkPolicy" {
+		t.Fatalf("kind = %v", p["kind"])
+	}
+	spec := p["spec"].(map[string]any)
+	if sel := spec["podSelector"].(map[string]any)["matchLabels"].(map[string]any); sel["app"] != nom {
+		t.Errorf("the policy selects %v, expected the capture pod (%s)", sel, nom)
+	}
+	types := spec["policyTypes"].([]any)
+	if len(types) != 1 || types[0] != "Ingress" {
+		t.Errorf("policyTypes = %v : egress must not be restricted (the capture reaches the signaling and deposits)", types)
+	}
+	regles := spec["ingress"].([]any)
+	if len(regles) != 1 {
+		t.Fatalf("%d ingress rule(s), expected one", len(regles))
+	}
+	regle := regles[0].(map[string]any)
+	source := regle["from"].([]any)[0].(map[string]any)["podSelector"].(map[string]any)["matchLabels"].(map[string]any)
+	if source["app"] != "talk-recording" {
+		t.Errorf("the source is %v, expected the recorder pod", source)
+	}
+	port := regle["ports"].([]any)[0].(map[string]any)
+	if port["port"].(float64) != 8080 {
+		t.Errorf("port = %v, expected 8080", port["port"])
+	}
+}

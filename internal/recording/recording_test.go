@@ -264,3 +264,35 @@ func TestLesFichiersInjectesDuRecorder(t *testing.T) {
 		t.Error("le modèle du secret relais n'a pas de trim final : le fichier finirait par un saut de ligne")
 	}
 }
+
+// TestLaPolitiqueReseauDUneSeulePorte: the recorder pod accepts traffic from
+// Nextcloud only, on the relay's port. The recorder's own 1234 is not listed, so
+// it is reachable from nowhere — the relay uses loopback.
+func TestLaPolitiqueReseauDUneSeulePorte(t *testing.T) {
+	var p map[string]any
+	if err := yaml.Unmarshal([]byte(manifestePolitiqueReseau()), &p); err != nil {
+		t.Fatalf("the policy is not valid YAML: %v", err)
+	}
+	spec := p["spec"].(map[string]any)
+	if sel := spec["podSelector"].(map[string]any)["matchLabels"].(map[string]any); sel["app"] != nom {
+		t.Errorf("the policy selects %v, expected the recorder pod (%s)", sel, nom)
+	}
+	regles := spec["ingress"].([]any)
+	if len(regles) != 1 {
+		t.Fatalf("%d ingress rule(s), expected one", len(regles))
+	}
+	regle := regles[0].(map[string]any)
+	ns := regle["from"].([]any)[0].(map[string]any)["namespaceSelector"].(map[string]any)["matchLabels"].(map[string]any)
+	if ns["kubernetes.io/metadata.name"] != "ceffio-files" {
+		t.Errorf("the source namespace is %v, expected ceffio-files (Nextcloud)", ns)
+	}
+	port := regle["ports"].([]any)[0].(map[string]any)["port"].(float64)
+	if port != 1235 {
+		t.Errorf("port = %v, expected the relay's 1235", port)
+	}
+	// LE PORT DE L'ENREGISTREUR N'EST PAS DANS LA POLITIQUE : c'est ce qui le rend
+	// injoignable depuis le réseau des pods.
+	if strings.Contains(manifestePolitiqueReseau(), "1234") {
+		t.Error("the policy mentions 1234: the recorder's port must stay closed")
+	}
+}

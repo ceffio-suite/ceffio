@@ -43,6 +43,11 @@ const (
 	nom      = "talk-recording"
 	service  = "talk-recording"
 	portHTTP = 1234
+	// nsFiles is where Nextcloud runs: the only source the NetworkPolicy lets in.
+	nsFiles = "ceffio-files"
+	// portRelais is the relay's port in the recorder pod: the only one the
+	// Service targets, and the only one the NetworkPolicy opens.
+	portRelais = 1235
 )
 
 // The image comes from the version registry (internal/version), the single
@@ -167,8 +172,44 @@ func deployRecorder(ctx context.Context, domain string) error {
 		return err
 	}
 	manifeste := manifesteRecorder(domain, annotations)
+	if err := appliquer(ctx, manifeste); err != nil {
+		return err
+	}
+	return appliquer(ctx, manifestePolitiqueReseau())
+}
 
-	return appliquer(ctx, manifeste)
+// manifestePolitiqueReseau closes the recorder pod's ingress to ONE door.
+//
+// WHAT IT SAYS: only a pod of namespace ceffio-files — Nextcloud, the only thing
+// that ever has to start or stop a recording — may reach port 1235, the relay.
+// The recorder's own port 1234 is NOT listed, so it is reachable from nowhere:
+// the relay talks to it on 127.0.0.1, and loopback never crosses the CNI.
+//
+// WHAT IT DOES NOT TOUCH: egress (policyTypes is Ingress only), so the recorder
+// keeps reaching Nextcloud and the signaling; the kubelet's probes and the API
+// server's `services/proxy` reads come from the node and are not filtered by
+// pod-level policies — verified on the installation, with the pod staying Ready
+// and the capture's /status still readable through the API.
+func manifestePolitiqueReseau() string {
+	return fmt.Sprintf(`apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: %[1]s
+  namespace: %[2]s
+spec:
+  podSelector:
+    matchLabels:
+      app: %[1]s
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: %[3]s
+      ports:
+        - protocol: TCP
+          port: %[4]d
+`, nom, deployNS, nsFiles, portRelais)
 }
 
 // annotationsRecorder declares what the recorder's pod reads from the vault:
@@ -521,6 +562,9 @@ func Remove(ctx context.Context) error {
 		"Deployment/" + nom,
 		"Service/" + service,
 		"ServiceAccount/" + nom,
+		// THE POLICY GOES TOO: an ingress rule left behind in a namespace is a
+		// rule that outlives the reason it was written.
+		"NetworkPolicy/" + nom,
 	} {
 		if err := cli.SupprimerEfface(ctx, deployNS, forme); err != nil {
 			return err

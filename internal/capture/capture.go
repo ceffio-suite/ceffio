@@ -78,6 +78,9 @@ func Deploy(ctx context.Context, domain string) error {
 	if err := appliquer(ctx, manifesteService()); err != nil {
 		return err
 	}
+	if err := appliquer(ctx, manifestePolitiqueReseau()); err != nil {
+		return err
+	}
 	if err := attendrePret(ctx); err != nil {
 		return err
 	}
@@ -301,6 +304,40 @@ spec:
 `, nom, ns, image, domain, "", nsFiles, portHTTP, annotations, pvcNom)
 }
 
+// manifestePolitiqueReseau closes the capture's ingress to the recorder alone.
+//
+// WHAT IT SAYS: only a pod labelled app=talk-recording, in this same namespace,
+// may reach port 8080. That is the relay — the one thing that has to tell the
+// capture that a recording started or stopped. Nothing else in the cluster can
+// open a transcription.
+//
+// WHAT IT DOES NOT TOUCH: egress (Ingress only), so the capture keeps reaching
+// the signaling and executing its deposit; the kubelet's probes and the console's
+// `services/proxy` read of /status come from the node and are not filtered by
+// pod-level policies — verified on the installation, the pod staying Ready and
+// the module state still readable.
+func manifestePolitiqueReseau() string {
+	return fmt.Sprintf(`apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: %[1]s
+  namespace: %[2]s
+spec:
+  podSelector:
+    matchLabels:
+      app: %[1]s
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: %[3]s
+      ports:
+        - protocol: TCP
+          port: %[4]d
+`, nom, ns, "talk-recording", portHTTP)
+}
+
 func manifesteService() string {
 	return fmt.Sprintf(`apiVersion: v1
 kind: Service
@@ -377,7 +414,8 @@ func LireEtat(ctx context.Context) Situation {
 // contract: a removed module leaves nothing behind.
 func Supprime(ctx context.Context) error {
 	cmd := k8s.Command(ctx, "kubectl", "delete", "-n", ns, "--ignore-not-found",
-		"deployment/"+nom, "service/"+nom, "pvc/"+pvcNom, "serviceaccount/"+nom)
+		"deployment/"+nom, "service/"+nom, "pvc/"+pvcNom, "serviceaccount/"+nom,
+		"networkpolicy/"+nom)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("deleting the capture service: %w: %s", err, strings.TrimSpace(string(out)))
