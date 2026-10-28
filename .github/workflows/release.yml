@@ -126,8 +126,52 @@ jobs:
               -ldflags "-s -w -X github.com/ceffio-suite/ceffio/internal/version.Binary=${TAG} -X github.com/ceffio-suite/ceffio/internal/version.Commit=${COMMIT} -X github.com/ceffio-suite/ceffio/internal/version.Date=${DATE}" \
               -o "dist/ceffio-linux-$ARCH" ./cmd/ceffio
           done
-          ( cd dist && sha256sum ceffio-linux-* > checksums.txt )
           ls -la dist/
+
+      - name: Generate the SBOM of each binary
+        # ONE SBOM PER BINARY, CycloneDX JSON, produced by Syft ON THE BINARY:
+        # a Go binary carries its build information (module path, version,
+        # sum), which is what makes this SBOM list the actual dependencies
+        # rather than a copy of go.mod.
+        #
+        # SYFT IS INSTALLED BY A PINNED ACTION, and then CALLED DIRECTLY: the
+        # wrapper action would name the file itself, and the release contract
+        # below (and checksums.txt) needs exactly
+        # `ceffio-linux-<arch>.cdx.json`.
+        #
+        # WHY THE SBOM EXISTS AT ALL: the Cyber Resilience Act will require it,
+        # but the immediate reason is that an operator must be able to say what
+        # runs on their machine — and prove it.
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          syft-version: v1.55.0
+
+      - name: Write the SBOMs
+        run: |
+          set -euo pipefail
+          for ARCH in amd64 arm64; do
+            syft scan "file:dist/ceffio-linux-$ARCH" \
+              -o "cyclonedx-json=dist/ceffio-linux-$ARCH.cdx.json" \
+              --quiet
+            # A SBOM WITHOUT COMPONENTS IS WORSE THAN NONE: it looks like a
+            # proof and proves nothing. Go's build info should always yield some.
+            COMPOSANTS="$(python3 -c "import json,sys; d=json.load(open('dist/ceffio-linux-$ARCH.cdx.json')); print(len(d.get('components', [])))")"
+            echo "ceffio-linux-$ARCH: $COMPOSANTS components"
+            test "$COMPOSANTS" -gt 0
+          done
+
+      - name: Checksums, after the SBOMs
+        # THE SUMS COVER EVERYTHING THE RELEASE PUBLISHES, SBOMs included, so an
+        # operator can verify the document they are about to read. Computing them
+        # before the SBOMs existed is how a release ends up with files nobody can
+        # check.
+        run: |
+          set -euo pipefail
+          ( cd dist && sha256sum \
+              ceffio-linux-amd64 ceffio-linux-arm64 \
+              ceffio-linux-amd64.cdx.json ceffio-linux-arm64.cdx.json \
+              > checksums.txt )
+          cat dist/checksums.txt
 
       - name: Exercise what will be shipped
         # The native architecture is RUN, not just built — see ci.yml for why
@@ -175,6 +219,8 @@ jobs:
           | \`ceffio-linux-amd64\` | x86_64 |
           | \`ceffio-linux-arm64\` | aarch64 |
 
+          Software bill of materials: \`ceffio-linux-<arch>.cdx.json\` (CycloneDX JSON), covered by \`checksums.txt\`.
+
           ## Verify before running
 
           \`\`\`bash
@@ -194,6 +240,8 @@ jobs:
           files: |
             dist/ceffio-linux-amd64
             dist/ceffio-linux-arm64
+            dist/ceffio-linux-amd64.cdx.json
+            dist/ceffio-linux-arm64.cdx.json
             dist/checksums.txt
           body_path: RELEASE_BODY.md
         env:

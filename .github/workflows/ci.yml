@@ -121,6 +121,27 @@ jobs:
             -o "bin/ceffio-${VERSION}-linux-${GOARCH}" ./cmd/ceffio
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
+      - name: Generate the SBOM (not published)
+        # THE SAME TOOL AS THE RELEASE, ON THE SAME ARTEFACT, WITHOUT PUBLISHING:
+        # a Syft regression or a broken Go build-info must fail here, months
+        # before the release day, not on the day the release cannot go out.
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          syft-version: v1.55.0
+
+      - name: Write the SBOM (not published)
+        run: |
+          set -euo pipefail
+          BIN="bin/ceffio-${VERSION}-linux-${{ matrix.goarch }}"
+          syft scan "file:${BIN}" -o "cyclonedx-json=${BIN}.cdx.json" --quiet
+          # ZERO COMPONENTS MEANS THE TOOL SILENTLY STOPPED READING GO BUILD
+          # INFO. The SBOM would still be valid JSON, still be published, and
+          # describe nothing — the worst possible outcome for a document whose
+          # whole purpose is to be trusted.
+          COMPOSANTS="$(python3 -c "import json; d=json.load(open('${BIN}.cdx.json')); print(len(d.get('components', [])))")"
+          echo "SBOM for ${{ matrix.goarch }}: $COMPOSANTS components"
+          test "$COMPOSANTS" -gt 0
+
       - name: Verify the produced binary
         # We do not just note that the build finished: we RUN what was just
         # produced, when that is possible.
