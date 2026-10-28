@@ -167,10 +167,10 @@ afterwards (`ceffio module install <id>`, or the console's Modules page):
 
 | ID | Role | Resources | Requires | Installed by default |
 |---|---|---|---|---|
-| `recording` | Records Talk calls: a hidden participant joins the room, renders it and uploads the result to Nextcloud | — (workload limited to 2 GiB RAM, no model download) | — | **yes** (`--without recording` to skip) |
+| `recording` | Records Talk calls: a hidden participant joins the room, renders it and uploads the result to Nextcloud. A **relay** in the same pod forwards Talk's recording requests and tells the capture when a recording starts | — (workload limited to 2 GiB RAM, no model download) | — | **yes** (`--without recording` to skip) |
 | `exapps-daemon` | HaRP runs the containers Nextcloud asks for, speaking the Kubernetes API directly — prerequisite of every external application | — | — | no |
 | `live-transcription` | Transcribes speech live during a Talk call, on this server, with open source speech models; nothing is sent to a third party | ~9 GB disk, ~16 GB RAM | `exapps-daemon` (installed automatically with it) | no |
-| `capture` | Captures one audio track per participant during a Talk recording, transcribes each track on the CPU and writes the named transcript next to the recording | ~1,5 GB image, 4 GB RAM during transcription | `recording` | no |
+| `capture` | Captures one audio track per participant during a Talk recording, transcribes each track on the CPU and writes the named transcript next to the recording. Triggered by the recording relay: it reads **no database**, and holds no right on `ceffio-data` | ~1,5 GB image, 4 GB RAM during transcription | `recording` | no |
 | `longhorn-ui` | The storage interface at `longhorn.<domain>`, **behind the single sign-on** | negligible (one proxy pod) | `storage`, `identity`, `ingress` | no |
 
 > **`longhorn-ui` can delete volumes, and therefore data.** It installs nothing without

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1100" width="1200" height="1100" role="img" aria-label="The browser reaches Traefik over HTTPS, which routes by host name to Keycloak, Nextcloud, ONLYOFFICE, the console, OpenBao, Stalwart and the Talk signaling server. Keycloak provides SSO OIDC to Nextcloud, the console, OpenBao and Stalwart. Nextcloud calls ONLYOFFICE with a JWT token, and drives its External Apps through HaRP, an optional module that lives with them in ceffio-exapps. The Talk recording server joins calls through the signaling server. WebRTC media goes directly from the browser to Janus and coturn, in hostNetwork, without passing through Traefik. cert-manager issues the certificates, CloudNativePG runs PostgreSQL, and Longhorn provides every persistent volume. The CLI and the admin console are the same binary and drive the K3s Kubernetes API.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1100" width="1200" height="1100" role="img" aria-label="The browser reaches Traefik over HTTPS, which routes by host name to Keycloak, Nextcloud, ONLYOFFICE, the console, OpenBao, Stalwart and the Talk signaling server. Keycloak provides SSO OIDC to Nextcloud, the console, OpenBao and Stalwart. Nextcloud calls ONLYOFFICE with a JWT token, and drives its External Apps through HaRP, an optional module that lives with them in ceffio-exapps. The Talk recording server joins calls through the signaling server; a relay in its pod forwards Talk's recording requests and notifies the optional capture service, which records one track per speaker, transcribes it and deposits subtitles next to the recording. The optional longhorn-ui module exposes the Longhorn interface behind Keycloak. WebRTC media goes directly from the browser to Janus and coturn, in hostNetwork, without passing through Traefik. cert-manager issues the certificates, CloudNativePG runs PostgreSQL, and Longhorn provides every persistent volume. The CLI and the admin console are the same binary and drive the K3s Kubernetes API.">
 <style>
 .t-ns,.t-lbl,.t-host{font-family:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px}
 .t-ns{letter-spacing:.04em}
@@ -72,6 +72,7 @@
 <text class="t-host" x="275" y="390" text-anchor="middle">bao.</text>
 <text class="t-host" x="275" y="410" text-anchor="middle">mail.</text>
 <text class="t-host" x="275" y="430" text-anchor="middle">spreed.</text>
+<text class="t-host" x="275" y="450" text-anchor="middle">longhorn.</text>
 
 <!-- Routing bus: one stub per row of exposed services -->
 <line class="edge" x1="350" y1="390" x2="375" y2="390"/>
@@ -122,11 +123,14 @@
 <text class="t-ns" x="414" y="300">ceffio-system</text>
 <rect class="node" x="416" y="312" width="208" height="64" rx="7"/>
 <text class="t-name" x="430" y="338">Admin console</text>
-<text class="t-sub" x="430" y="357">status · accounts · modules</text>
-<text class="t-sub" x="416" y="398">same binary as the CLI; installs</text>
-<text class="t-sub" x="416" y="413">and removes optional modules</text>
-<rect class="pill" x="416" y="444" width="90" height="24" rx="12"/>
-<text class="t-host" x="461" y="460" text-anchor="middle">admin.</text>
+<text class="t-sub" x="430" y="357">same binary as the CLI</text>
+<rect class="node" x="416" y="384" width="208" height="54" rx="7"/>
+<text class="t-name" x="430" y="407">longhorn-ui</text>
+<text class="t-sub" x="430" y="426">oauth2-proxy · optional</text>
+<rect class="pill" x="416" y="446" width="76" height="24" rx="12"/>
+<text class="t-host" x="454" y="462" text-anchor="middle">admin.</text>
+<rect class="pill" x="500" y="446" width="96" height="24" rx="12"/>
+<text class="t-host" x="548" y="462" text-anchor="middle">longhorn.</text>
 
 <rect class="grp" x="670" y="280" width="240" height="200" rx="10"/>
 <text class="t-ns" x="684" y="300">ceffio-vault</text>
@@ -164,15 +168,20 @@
 <text class="t-name" x="822" y="581">coturn</text>
 <text class="t-sub" x="822" y="600">TURN</text>
 
-<rect class="node" x="416" y="644" width="150" height="56" rx="7"/>
-<text class="t-name" x="430" y="667">talk-recording</text>
-<text class="t-sub" x="430" y="686">optional · on by default</text>
-<line class="edge" x1="491" y1="644" x2="491" y2="618" marker-end="url(#ah)"/>
-<text class="t-sub" x="582" y="664">joins the call as a hidden</text>
-<text class="t-sub" x="582" y="679">participant, then uploads</text>
-<text class="t-sub" x="582" y="694">the file to Nextcloud</text>
+<rect class="node" x="416" y="640" width="128" height="56" rx="7"/>
+<text class="t-name" x="430" y="663">talk-recording</text>
+<text class="t-sub" x="430" y="682">relay + recorder</text>
+<line class="edge" x1="466" y1="640" x2="466" y2="618" marker-end="url(#ah)"/>
+<line class="edge" x1="544" y1="668" x2="602" y2="668" marker-end="url(#ah)"/>
+<text class="t-lbl" x="573" y="660" text-anchor="middle">notify</text>
+<rect class="node" x="604" y="640" width="130" height="56" rx="7"/>
+<text class="t-name" x="618" y="663">capture</text>
+<text class="t-sub" x="618" y="682">optional · Whisper</text>
+<polyline class="edge" points="640,640 640,630 530,630 530,618" marker-end="url(#ah)"/>
 <rect class="pill" x="416" y="708" width="96" height="24" rx="12"/>
 <text class="t-host" x="464" y="724" text-anchor="middle">spreed.</text>
+<text class="t-sub" x="524" y="719">.srt per speaker,</text>
+<text class="t-sub" x="524" y="733">next to the .webm</text>
 
 <rect class="grp" x="940" y="520" width="240" height="220" rx="10"/>
 <text class="t-ns" x="954" y="540">ceffio-exapps</text>
