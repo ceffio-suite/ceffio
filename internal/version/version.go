@@ -125,7 +125,11 @@ var Registry = []Composant{
 		// it carries its own Python stack (WebRTC, whisper) and its own release
 		// cycle, independent of the binary's versions. So what is pinned here is
 		// an IMAGE version, not the binary's tag — the same rule as janus.
-		Nom: "ceffio-capture", Image: "ghcr.io/ceffio-suite/ceffio-capture:v0.8.3",
+		// PINNED BY DIGEST AS WELL AS BY TAG: the tag says which version, the digest
+		// says which bytes. A tag can be moved on the registry; a digest cannot, and
+		// this image is the one that validates the room token — the reference has to
+		// be as immutable as the guarantee it carries.
+		Nom: "ceffio-capture", Image: "ghcr.io/ceffio-suite/ceffio-capture:v0.8.3@sha256:08a4fb37d5c0aa7116e7972303cb611cf99fabc15f462424c7d06841b2355ce8",
 		Module: "internal/capture", Role: "per-participant audio capture and CPU transcription",
 	},
 	{
@@ -206,7 +210,15 @@ func TagDe(image string) string { return tagDe(image) }
 // tagDe extracts the tag from an image reference.
 // "docker.io/library/nextcloud:34.0.3" → "34.0.3".
 // Returns "" if the image has no tag (thus implicit: latest).
+//
+// A DIGEST SUFFIX IS NOT A TAG: "repo:v0.8.3@sha256:08a4…" is pinned by tag AND
+// by digest, and the version the operator reads is v0.8.3 — not the digest hex.
+// The suffix is cut first, so the two pinning modes do not have to exclude each
+// other.
 func tagDe(image string) string {
+	if i := strings.Index(image, "@"); i >= 0 {
+		image = image[:i]
+	}
 	i := strings.LastIndex(image, ":")
 	if i < 0 {
 		return ""
