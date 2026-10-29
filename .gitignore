@@ -10,3 +10,8 @@
 
 # Binaire produit par `make pin-digests` à la racine
 /pin-digests
+
+# Caches locaux quand $HOME n'est pas inscriptible (bac à sable)
+/.gomodcache/
+/.gopath/
+/.cachego/
