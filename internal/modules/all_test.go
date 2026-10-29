@@ -57,7 +57,13 @@ func packagesQuiEnregistrent(t *testing.T, racine string) map[string]bool {
 		if d.IsDir() {
 			nom := d.Name()
 			// Neither dependencies nor artifacts: only our sources.
-			if nom == "vendor" || nom == "bin" || nom == ".git" || nom == "node_modules" {
+			// .gomodcache / .gopath / .cachego: the caches some environments
+			// keep INSIDE the repository (a sandbox that cannot write $HOME).
+			// Walking them parses the Go toolchain's own testdata — files that
+			// are deliberately invalid — and reports a dozen parse errors that
+			// have nothing to do with this project.
+			if nom == "vendor" || nom == "bin" || nom == ".git" || nom == "node_modules" ||
+				nom == ".gomodcache" || nom == ".gopath" || nom == ".cachego" {
 				return filepath.SkipDir
 			}
 			return nil
