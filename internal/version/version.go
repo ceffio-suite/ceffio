@@ -105,19 +105,19 @@ type Composant struct {
 // VerifierCoherence() function checks it and the test verifies it.
 var Registry = []Composant{
 	{
-		Nom: "keycloak", Image: "quay.io/keycloak/keycloak:26.7.3",
+		Nom: "keycloak", Image: "quay.io/keycloak/keycloak:26.7.3@sha256:29be7252db0a106f1cd2ac17b9a56ff2668073da645638a38b9fc67deeb2d6c4",
 		Module: "internal/identity", Role: "identity, OIDC SSO",
 	},
 	{
-		Nom: "nextcloud", Image: "docker.io/library/nextcloud:34.0.3",
+		Nom: "nextcloud", Image: "docker.io/library/nextcloud:34.0.3@sha256:b97df9e0e1ee3c8c6cc009cb3f12ddce915d624d543b3bb93882025fe323a407",
 		Module: "internal/files", Role: "files and documents",
 	},
 	{
-		Nom: "talk-signaling", Image: "docker.io/strukturag/nextcloud-spreed-signaling:2.1.1",
+		Nom: "talk-signaling", Image: "docker.io/strukturag/nextcloud-spreed-signaling:2.1.1@sha256:b306eae9d1e62c4b2eaf10a6683dfe1fe76b833bd0f68d1606861e33aff5bca1",
 		Module: "internal/talk", Role: "Talk: session coordination",
 	},
 	{
-		Nom: "janus", Image: "ghcr.io/ceffio-suite/janus-gateway:1.4.3-1",
+		Nom: "janus", Image: "ghcr.io/ceffio-suite/janus-gateway:1.4.3-1@sha256:f6d3e495f3bb671ddaff1a1b0d7adf697a2de469cf6351d22fc1403a0a9d0ea9",
 		Module: "internal/talk", Role: "Talk: SFU, media transport",
 	},
 	{
@@ -138,31 +138,31 @@ var Registry = []Composant{
 		// part of Nextcloud AIO. We pin an exact date rather than "latest" —
 		// a floating tag would make an installation non-reproducible, which is
 		// the rule this file enforces.
-		Nom: "talk-recording", Image: "docker.io/nextcloud/aio-talk-recording:20261014_095932",
+		Nom: "talk-recording", Image: "docker.io/nextcloud/aio-talk-recording:20261014_095932@sha256:eba5ed834c044e624155cd8f11cfa37d5de505ae17ff41c0251cfa9efb24a010",
 		Module: "internal/recording", Role: "server-side call recording for Talk",
 	},
 	{
-		Nom: "coturn", Image: "docker.io/coturn/coturn:4.18",
+		Nom: "coturn", Image: "docker.io/coturn/coturn:4.18@sha256:bbefd3e1fdfdc0d58770fe01b581fd8b00d9f3a5580d00acb77cf719a6bc78e3",
 		Module: "internal/talk", Role: "Talk: TURN/STUN relay",
 	},
 	{
-		Nom: "nats", Image: "docker.io/library/nats:2.15",
+		Nom: "nats", Image: "docker.io/library/nats:2.15@sha256:991242c32d2738ffd358fd6614dd96c735017b4b3b34bfdb2c52a072d66db211",
 		Module: "internal/talk", Role: "Talk: signaling messaging",
 	},
 	{
-		Nom: "openbao", Image: "docker.io/openbao/openbao:2.7.1",
+		Nom: "openbao", Image: "docker.io/openbao/openbao:2.7.1@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf",
 		Module: "internal/vault", Role: "secrets vault: centralization, rotation, audit",
 	},
 	{
-		Nom: "onlyoffice", Image: "docker.io/onlyoffice/documentserver:9.4.0.1",
+		Nom: "onlyoffice", Image: "docker.io/onlyoffice/documentserver:9.4.0.1@sha256:3ab6ebc7c605e5a32b7ae3ff19daed4925090245acc8100ce2230bd766c88212",
 		Module: "internal/office", Role: "document editing",
 	},
 	{
-		Nom: "valkey", Image: "docker.io/valkey/valkey:8.1.10",
+		Nom: "valkey", Image: "docker.io/valkey/valkey:8.1.10@sha256:640c5e62cea04b6d6f2084232651d0cc70362d31f4f805e7be94dbed6855e8f2",
 		Module: "internal/data", Role: "cache and shared state",
 	},
 	{
-		Nom: "stalwart", Image: "docker.io/stalwartlabs/stalwart:v0.16.26",
+		Nom: "stalwart", Image: "docker.io/stalwartlabs/stalwart:v0.16.26@sha256:254ce5d7f3dbe4bb628ce2c7912e664ecb1c3466db79907f4a44d9a00117776b",
 		Module: "internal/mail", Role: "mail: inbound SMTP, IMAP, filters",
 	},
 	{
@@ -183,7 +183,7 @@ var Registry = []Composant{
 	// authorization decision, and an unpinned tag would let that decision change
 	// between two installs of the same Ceffio version.
 	{
-		Nom: "oauth2-proxy", Image: "quay.io/oauth2-proxy/oauth2-proxy:v7.15.5",
+		Nom: "oauth2-proxy", Image: "quay.io/oauth2-proxy/oauth2-proxy:v7.15.5@sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916",
 		Module: "internal/modules/longhornui",
 		Role:   "Put a single sign-on in front of the Longhorn interface, which has none",
 	},

@@ -7,3 +7,6 @@
 .cachego/
 .gomodcache/
 .gotmp/
+
+# Binaire produit par `make pin-digests` à la racine
+/pin-digests

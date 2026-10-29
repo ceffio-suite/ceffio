@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright © MANDEM
-.PHONY: build test vet lint clean test-clean test-demo
+.PHONY: build test vet lint clean test-clean test-demo pin-digests
 
 build:
 	go build -o bin/ceffio ./cmd/ceffio
@@ -12,6 +12,13 @@ build:
 # Leaving it out of the default target means the one test that checks a feature
 # can be added without touching the console is the one nobody runs — which is
 # how a proof stops proving anything.
+# pin-digests pins every container image of the version registry by digest.
+#
+# IT WRITES internal/version/version.go, and it writes NOTHING when one image
+# cannot be resolved: a half-pinned registry looks done and is not.
+pin-digests:
+	go run ./cmd/pin-digests
+
 test: test-demo
 	go test ./...
 
