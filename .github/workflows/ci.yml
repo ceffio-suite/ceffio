@@ -30,6 +30,10 @@ on:
   pull_request:
     branches: [main, develop]
   workflow_dispatch:
+  # A VULNERABILITY FOUND AFTER THE RELEASE MUST BE SEEN WITHOUT WAITING FOR THE
+  # NEXT ONE. Weekly, on the published images.
+  schedule:
+    - cron: "0 6 * * 1"
 
 permissions:
   contents: read
@@ -142,6 +146,67 @@ jobs:
           echo "SBOM for ${{ matrix.goarch }}: $COMPOSANTS components"
           test "$COMPOSANTS" -gt 0
 
+      - name: Scan the SBOM with Grype
+        # THE GATE THE PLAN ASKS FOR: a CRITICAL vulnerability FOR WHICH A FIX
+        # EXISTS fails the build. Everything else is reported, not blocked — a
+        # CI that stops on every unfixed low finding is a CI people disable.
+        #
+        # `only-fixed` + `severity-cutoff: critical` is exactly that rule, and
+        # it is Grype's own, not a re-implementation: verified in the flags of
+        # v0.121.0 (`--fail-on`, `--only-fixed`).
+        id: grype
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          sbom: "bin/ceffio-${VERSION}-linux-${{ matrix.goarch }}.cdx.json"
+          severity-cutoff: critical
+          only-fixed: true
+          fail-build: true
+          output-format: json
+          output-file: "grype-${{ matrix.goarch }}.json"
+          grype-version: v0.121.0
+          cache-db: true
+
+      - name: Summarise the scan
+        # RUN EVEN WHEN THE GATE FAILS: the counts are what tells an operator
+        # whether the failure is one finding or forty.
+        if: always()
+        run: |
+          set -euo pipefail
+          RAPPORT="grype-${{ matrix.goarch }}.json"
+          if [ ! -s "$RAPPORT" ]; then
+            echo "### Grype (${{ matrix.goarch }})
+
+          no report produced — the scan did not run" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python3 - "$RAPPORT" "${{ matrix.goarch }}" >> "$GITHUB_STEP_SUMMARY" <<'FIN_PYTHON'
+          import json, sys
+          rapport, arch = sys.argv[1], sys.argv[2]
+          d = json.load(open(rapport))
+          matches = d.get("matches") or []
+          ordre = ["Critical", "High", "Medium", "Low", "Negligible", "Unknown"]
+          compte = {s: [0, 0] for s in ordre}   # [total, avec correctif]
+          for m in matches:
+              sev = (m.get("vulnerability") or {}).get("severity") or "Unknown"
+              fixe = ((m.get("vulnerability") or {}).get("fix") or {}).get("state") == "fixed"
+              if sev not in compte:
+                  sev = "Unknown"
+              compte[sev][0] += 1
+              if fixe:
+                  compte[sev][1] += 1
+          print("### Grype, binaire %s" % arch)
+          print()
+          print("| Sévérité | Total | Avec correctif |")
+          print("|---|---|---|")
+          for s in ordre:
+              total, fixe = compte[s]
+              if total or s == "Critical":
+                  print("| %s | %d | %d |" % (s, total, fixe))
+          print()
+          print("%d vulnérabilité(s) au total, %d avec un correctif."
+                % (sum(c[0] for c in compte.values()), sum(c[1] for c in compte.values())))
+          FIN_PYTHON
+
       - name: Verify the produced binary
         # We do not just note that the build finished: we RUN what was just
         # produced, when that is possible.
@@ -243,3 +308,94 @@ jobs:
             -f build/console/Dockerfile \
             -t ceffio-console:ci \
             .
+
+  # A VULNERABILITY DISCOVERED AFTER A RELEASE MUST BE SEEN WITHOUT WAITING FOR
+  # THE NEXT ONE. Once a week, the images we actually published are scanned
+  # again — the SBOM of the release does not change, the vulnerability database
+  # does.
+  scan-published:
+    name: scan the published images
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Resolve what to scan
+        # THE LAST RELEASE, NOT `latest`: `latest` follows the newest stable tag,
+        # but the weekly job must report on what an operator is running today —
+        # which is the last published release.
+        id: cibles
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="$(gh release view --json tagName -q .tagName)"
+          VERSION="${TAG#v}"
+          echo "console=ghcr.io/ceffio-suite/ceffio:${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "capture=ghcr.io/ceffio-suite/ceffio-capture:latest" >> "$GITHUB_OUTPUT"
+
+      - name: Scan the console image
+        id: console
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: ${{ steps.cibles.outputs.console }}
+          severity-cutoff: critical
+          only-fixed: true
+          fail-build: true
+          output-format: json
+          output-file: grype-console.json
+          grype-version: v0.121.0
+          cache-db: true
+
+      - name: Scan the capture image
+        id: capture
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: ${{ steps.cibles.outputs.capture }}
+          severity-cutoff: critical
+          only-fixed: true
+          fail-build: true
+          output-format: json
+          output-file: grype-capture.json
+          grype-version: v0.121.0
+          cache-db: true
+
+      - name: Summarise the scans
+        if: always()
+        run: |
+          set -euo pipefail
+          for NOM in console capture; do
+            RAPPORT="grype-${NOM}.json"
+            if [ ! -s "$RAPPORT" ]; then
+              echo "### Grype, image ${NOM} — aucun rapport produit" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+            python3 - "$RAPPORT" "$NOM" >> "$GITHUB_STEP_SUMMARY" <<'FIN_PYTHON'
+          import json, sys
+          rapport, nom = sys.argv[1], sys.argv[2]
+          d = json.load(open(rapport))
+          matches = d.get("matches") or []
+          ordre = ["Critical", "High", "Medium", "Low", "Negligible", "Unknown"]
+          compte = {s: [0, 0] for s in ordre}
+          for m in matches:
+              sev = (m.get("vulnerability") or {}).get("severity") or "Unknown"
+              fixe = ((m.get("vulnerability") or {}).get("fix") or {}).get("state") == "fixed"
+              if sev not in compte:
+                  sev = "Unknown"
+              compte[sev][0] += 1
+              if fixe:
+                  compte[sev][1] += 1
+          print("### Grype, image %s" % nom)
+          print()
+          print("| Sévérité | Total | Avec correctif |")
+          print("|---|---|---|")
+          for s in ordre:
+              total, fixe = compte[s]
+              if total or s == "Critical":
+                  print("| %s | %d | %d |" % (s, total, fixe))
+          print()
+          print("%d vulnérabilité(s) au total, %d avec un correctif."
+                % (sum(c[0] for c in compte.values()), sum(c[1] for c in compte.values())))
+          FIN_PYTHON
+          done
