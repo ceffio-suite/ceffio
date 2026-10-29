@@ -157,7 +157,12 @@ jobs:
         id: grype
         uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
-          sbom: "bin/ceffio-${VERSION}-linux-${{ matrix.goarch }}.cdx.json"
+          # `${{ env.VERSION }}`, NOT `${VERSION}`: a `with:` value is a YAML
+          # string that GitHub expands before the step runs, and the shell's
+          # `${VERSION}` is not a shell there — the first run passed the literal
+          # text to Grype, which then scanned nothing and failed on a missing
+          # file. Caught by the CI itself, which is what it is for.
+          sbom: "bin/ceffio-${{ env.VERSION }}-linux-${{ matrix.goarch }}.cdx.json"
           severity-cutoff: critical
           only-fixed: true
           fail-build: true
