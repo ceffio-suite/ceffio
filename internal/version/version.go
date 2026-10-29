@@ -173,7 +173,7 @@ var Registry = []Composant{
 		//
 		// THE VERSION IS THE UPSTREAM ONE, verified with `webhook --version`
 		// rather than read from a README.
-		Nom: "acme-dns-webhook", Image: "ghcr.io/ceffio-suite/acme-dns-webhook:v1.1.0",
+		Nom: "acme-dns-webhook", Image: "ghcr.io/ceffio-suite/acme-dns-webhook:v1.1.0@sha256:7d42ee03d206d3b00352f6565d51d99631aae2c4c8abded0ee26320643ad4f7f",
 		Module: "internal/ingress", Role: "TLS: DNS-01 solver for out-of-tree DNS hosts (libdns)",
 	},
 
