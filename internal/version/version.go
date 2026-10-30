@@ -98,6 +98,16 @@ type Composant struct {
 	Module  string `json:"module"`  // Go package that deploys it
 	Role    string `json:"role"`    // what it is for, in one line
 	Version string `json:"version"` // extracted tag, for comparison
+	// Licence is the SPDX identifier of the upstream project, VERIFIED AT ITS
+	// SOURCE (repository licence file or GitHub's licence detection) — never
+	// guessed. "NOASSERTION" when the source does not state one: the SBOM has
+	// to say "I do not know", not pick the most likely answer.
+	Licence string `json:"licence"`
+	// Optionnel marks a component that is NOT deployed on every installation,
+	// even when its module is: the DNS-01 solver only runs for the providers
+	// cert-manager does not know. Its absence is the normal state, and the SBOM
+	// must not report it as a missing piece.
+	Optionnel bool `json:"optionnel,omitempty"`
 }
 
 // Registry is the default inventory, aligned with the deployment code.
@@ -106,19 +116,19 @@ type Composant struct {
 var Registry = []Composant{
 	{
 		Nom: "keycloak", Image: "quay.io/keycloak/keycloak:26.7.3@sha256:29be7252db0a106f1cd2ac17b9a56ff2668073da645638a38b9fc67deeb2d6c4",
-		Module: "internal/identity", Role: "identity, OIDC SSO",
+		Module: "internal/identity", Role: "identity, OIDC SSO", Licence: "Apache-2.0",
 	},
 	{
 		Nom: "nextcloud", Image: "docker.io/library/nextcloud:34.0.3@sha256:b97df9e0e1ee3c8c6cc009cb3f12ddce915d624d543b3bb93882025fe323a407",
-		Module: "internal/files", Role: "files and documents",
+		Module: "internal/files", Role: "files and documents", Licence: "AGPL-3.0-or-later",
 	},
 	{
 		Nom: "talk-signaling", Image: "docker.io/strukturag/nextcloud-spreed-signaling:2.1.1@sha256:b306eae9d1e62c4b2eaf10a6683dfe1fe76b833bd0f68d1606861e33aff5bca1",
-		Module: "internal/talk", Role: "Talk: session coordination",
+		Module: "internal/talk", Role: "Talk: session coordination", Licence: "AGPL-3.0-or-later",
 	},
 	{
 		Nom: "janus", Image: "ghcr.io/ceffio-suite/janus-gateway:1.4.3-1@sha256:f6d3e495f3bb671ddaff1a1b0d7adf697a2de469cf6351d22fc1403a0a9d0ea9",
-		Module: "internal/talk", Role: "Talk: SFU, media transport",
+		Module: "internal/talk", Role: "Talk: SFU, media transport", Licence: "GPL-3.0-only",
 	},
 	{
 		// THE CAPTURE IMAGE HAS ITS OWN REPOSITORY (ceffio-suite/ceffio-capture):
@@ -130,7 +140,7 @@ var Registry = []Composant{
 		// this image is the one that validates the room token — the reference has to
 		// be as immutable as the guarantee it carries.
 		Nom: "ceffio-capture", Image: "ghcr.io/ceffio-suite/ceffio-capture:v0.8.3@sha256:08a4fb37d5c0aa7116e7972303cb611cf99fabc15f462424c7d06841b2355ce8",
-		Module: "internal/capture", Role: "per-participant audio capture and CPU transcription",
+		Module: "internal/capture", Role: "per-participant audio capture and CPU transcription", Licence: "AGPL-3.0-or-later",
 	},
 	{
 		// The recording server is published ONLY with date tags upstream
@@ -139,31 +149,31 @@ var Registry = []Composant{
 		// a floating tag would make an installation non-reproducible, which is
 		// the rule this file enforces.
 		Nom: "talk-recording", Image: "docker.io/nextcloud/aio-talk-recording:20261014_095932@sha256:eba5ed834c044e624155cd8f11cfa37d5de505ae17ff41c0251cfa9efb24a010",
-		Module: "internal/recording", Role: "server-side call recording for Talk",
+		Module: "internal/recording", Role: "server-side call recording for Talk", Licence: "AGPL-3.0-or-later",
 	},
 	{
 		Nom: "coturn", Image: "docker.io/coturn/coturn:4.18@sha256:bbefd3e1fdfdc0d58770fe01b581fd8b00d9f3a5580d00acb77cf719a6bc78e3",
-		Module: "internal/talk", Role: "Talk: TURN/STUN relay",
+		Module: "internal/talk", Role: "Talk: TURN/STUN relay", Licence: "BSD-3-Clause",
 	},
 	{
 		Nom: "nats", Image: "docker.io/library/nats:2.15@sha256:991242c32d2738ffd358fd6614dd96c735017b4b3b34bfdb2c52a072d66db211",
-		Module: "internal/talk", Role: "Talk: signaling messaging",
+		Module: "internal/talk", Role: "Talk: signaling messaging", Licence: "Apache-2.0",
 	},
 	{
 		Nom: "openbao", Image: "docker.io/openbao/openbao:2.7.1@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf",
-		Module: "internal/vault", Role: "secrets vault: centralization, rotation, audit",
+		Module: "internal/vault", Role: "secrets vault: centralization, rotation, audit", Licence: "MPL-2.0",
 	},
 	{
 		Nom: "onlyoffice", Image: "docker.io/onlyoffice/documentserver:9.4.0.1@sha256:3ab6ebc7c605e5a32b7ae3ff19daed4925090245acc8100ce2230bd766c88212",
-		Module: "internal/office", Role: "document editing",
+		Module: "internal/office", Role: "document editing", Licence: "AGPL-3.0-or-later",
 	},
 	{
 		Nom: "valkey", Image: "docker.io/valkey/valkey:8.1.10@sha256:640c5e62cea04b6d6f2084232651d0cc70362d31f4f805e7be94dbed6855e8f2",
-		Module: "internal/data", Role: "cache and shared state",
+		Module: "internal/data", Role: "cache and shared state", Licence: "BSD-3-Clause",
 	},
 	{
 		Nom: "stalwart", Image: "docker.io/stalwartlabs/stalwart:v0.16.26@sha256:254ce5d7f3dbe4bb628ce2c7912e664ecb1c3466db79907f4a44d9a00117776b",
-		Module: "internal/mail", Role: "mail: inbound SMTP, IMAP, filters",
+		Module: "internal/mail", Role: "mail: inbound SMTP, IMAP, filters", Licence: "AGPL-3.0-only",
 	},
 	{
 		// The DNS-01 webhook solver, deployed ONLY for providers cert-manager
@@ -174,7 +184,7 @@ var Registry = []Composant{
 		// THE VERSION IS THE UPSTREAM ONE, verified with `webhook --version`
 		// rather than read from a README.
 		Nom: "acme-dns-webhook", Image: "ghcr.io/ceffio-suite/acme-dns-webhook:v1.1.0@sha256:7d42ee03d206d3b00352f6565d51d99631aae2c4c8abded0ee26320643ad4f7f",
-		Module: "internal/ingress", Role: "TLS: DNS-01 solver for out-of-tree DNS hosts (libdns)",
+		Module: "internal/ingress", Role: "TLS: DNS-01 solver for out-of-tree DNS hosts (libdns)", Licence: "MIT", Optionnel: true,
 	},
 
 	// THE SIGN-IN IN FRONT OF AN ADMINISTRATION INTERFACE.
@@ -185,16 +195,16 @@ var Registry = []Composant{
 	{
 		Nom: "oauth2-proxy", Image: "quay.io/oauth2-proxy/oauth2-proxy:v7.15.5@sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916",
 		Module: "internal/modules/longhornui",
-		Role:   "Put a single sign-on in front of the Longhorn interface, which has none",
+		Role:   "Put a single sign-on in front of the Longhorn interface, which has none", Licence: "MIT",
 	},
 }
 
 // Helm charts used by the platform (operators).
 var Charts = []Composant{
 	{Nom: "cloudnative-pg", Image: "cloudnative-pg:0.29.0", Module: "internal/data",
-		Role: "PostgreSQL operator", Version: "0.29.0"},
+		Role: "PostgreSQL operator", Licence: "Apache-2.0", Version: "0.29.0"},
 	{Nom: "cert-manager", Image: "cert-manager:v1.21.1", Module: "internal/platform",
-		Role: "TLS certificate management", Version: "v1.21.1"},
+		Role: "TLS certificate management", Licence: "Apache-2.0", Version: "v1.21.1"},
 }
 
 func init() {
