@@ -971,3 +971,10 @@ func (c *Client) LireObjetDans(ctx context.Context, gvk schema.GroupVersionKind,
 	}
 	return obj, true, nil
 }
+
+// Kubernetes returns the typed client set.
+//
+// EXPOSED FOR THE COMMANDS THAT READ, and not for the ones that write: a command
+// that lists pods (ceffio sbom --cluster) has to go through the API, not through
+// `kubectl` in text, whose output format changes between versions.
+func (c *Client) Kubernetes() kubernetes.Interface { return c.cs }

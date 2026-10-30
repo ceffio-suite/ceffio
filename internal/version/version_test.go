@@ -224,3 +224,18 @@ func TestUnDigestNeMasquePasLEtiquette(t *testing.T) {
 		}
 	}
 }
+
+// TestChaqueImageEstEpingleeParDigest: a tag is a pointer the registry can move.
+//
+// WHY THIS IS A TEST AND NOT A CONVENTION: the installer deploys these images to
+// machines that keep files, mail and identities. A tag repointed upstream — by
+// accident, by a compromise, by a "helpful" rebuild — would ship other bytes to
+// the next installation, with no diff in this repository to show it. The digest
+// is the only reference that cannot move.
+func TestChaqueImageEstEpingleeParDigest(t *testing.T) {
+	for _, c := range Registry {
+		if !strings.Contains(c.Image, "@sha256:") {
+			t.Errorf("%s: image %q carries no digest — run `make pin-digests`", c.Nom, c.Image)
+		}
+	}
+}

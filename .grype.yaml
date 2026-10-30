@@ -1,0 +1,26 @@
+# Grype's configuration for this repository.
+#
+# WHY IT EXISTS: a scan that reports a hundred findings nobody reads is a scan
+# that has stopped working. A finding we decide to live with — because no fix
+# exists for our configuration, because the vulnerable code path is never
+# reached, or because the component is not in the shipped binary — is written
+# HERE, with the reason. Silence is not an exception; a documented line is.
+#
+# THE FORMAT OF AN ENTRY, and what it must carry:
+#
+#   ignore:
+#     - vulnerability: CVE-2099-0000          # the finding, exactly
+#       reason: "…"                            # why it does not apply here
+#       # In the pull request that adds it: the decider, and a review date.
+#       # An exception without an owner is a vulnerability with a delay.
+#
+# RULES WE HOLD OURSELVES TO:
+#   - the gate is `severity-cutoff: critical` + `only-fixed: true`: only a
+#     CRITICAL finding WITH a fix stops the build;
+#   - an exception is justified in its own commit, never added to make a red
+#     build green without a word;
+#   - every exception is reviewed at the next minor release.
+#
+# THAT `only-fixed` RULE IS ALSO WHY THERE IS NO `fail-on` HERE: the decision
+# lives in the workflow, and one place to change it is one place to audit.
+ignore: []

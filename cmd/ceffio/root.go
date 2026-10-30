@@ -47,6 +47,7 @@ Stalwart) behind a unified install and management experience.`,
 		newPublicIPCmd(),
 		newRecordingRelayCmd(),
 		newThemeCmd(),
+		newSBOMCmd(),
 	)
 
 	return c
