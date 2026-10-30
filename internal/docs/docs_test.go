@@ -217,3 +217,23 @@ func TestLeReadmeNeVantePasCeQuiNExistePas(t *testing.T) {
 		t.Error("README.md no longer states coturn's relay range at all")
 	}
 }
+
+// TestLaPolitiqueDeSecuriteEstAtteignable: SECURITY.md must be reached from the
+// README's walk, so that its OWN links are checked by TestAucunLienMort.
+//
+// WHY AN EXPLICIT TEST: the walk follows links, so removing one line from the
+// README would silently drop the whole policy from the coverage — no test would
+// fail, and a dead link inside the policy would only be found by the person who
+// needed it.
+func TestLaPolitiqueDeSecuriteEstAtteignable(t *testing.T) {
+	root := racine(t)
+	if _, err := os.Stat(filepath.Join(root, "SECURITY.md")); err != nil {
+		t.Fatalf("SECURITY.md is missing at the root: %v", err)
+	}
+	for _, d := range documents(t) {
+		if d == "SECURITY.md" {
+			return
+		}
+	}
+	t.Error("SECURITY.md is not reachable from README.md: link it, so its links are checked too")
+}
