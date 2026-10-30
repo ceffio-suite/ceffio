@@ -126,8 +126,120 @@ jobs:
               -ldflags "-s -w -X github.com/ceffio-suite/ceffio/internal/version.Binary=${TAG} -X github.com/ceffio-suite/ceffio/internal/version.Commit=${COMMIT} -X github.com/ceffio-suite/ceffio/internal/version.Date=${DATE}" \
               -o "dist/ceffio-linux-$ARCH" ./cmd/ceffio
           done
-          ( cd dist && sha256sum ceffio-linux-* > checksums.txt )
           ls -la dist/
+
+      - name: Generate the SBOM of each binary
+        # ONE SBOM PER BINARY, CycloneDX JSON, produced by Syft ON THE BINARY:
+        # a Go binary carries its build information (module path, version,
+        # sum), which is what makes this SBOM list the actual dependencies
+        # rather than a copy of go.mod.
+        #
+        # SYFT IS INSTALLED BY A PINNED ACTION, and then CALLED DIRECTLY: the
+        # wrapper action would name the file itself, and the release contract
+        # below (and checksums.txt) needs exactly
+        # `ceffio-linux-<arch>.cdx.json`.
+        #
+        # WHY THE SBOM EXISTS AT ALL: the Cyber Resilience Act will require it,
+        # but the immediate reason is that an operator must be able to say what
+        # runs on their machine — and prove it.
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          syft-version: v1.55.0
+
+      - name: Write the SBOMs
+        run: |
+          set -euo pipefail
+          for ARCH in amd64 arm64; do
+            syft scan "file:dist/ceffio-linux-$ARCH" \
+              -o "cyclonedx-json=dist/ceffio-linux-$ARCH.cdx.json" \
+              --quiet
+            # A SBOM WITHOUT COMPONENTS IS WORSE THAN NONE: it looks like a
+            # proof and proves nothing. Go's build info should always yield some.
+            COMPOSANTS="$(python3 -c "import json,sys; d=json.load(open('dist/ceffio-linux-$ARCH.cdx.json')); print(len(d.get('components', [])))")"
+            echo "ceffio-linux-$ARCH: $COMPOSANTS components"
+            test "$COMPOSANTS" -gt 0
+          done
+
+      - name: Scan the SBOMs with Grype (amd64)
+        # THE SAME GATE AS THE CI, ON THE ARTEFACTS ABOUT TO BE PUBLISHED: a
+        # critical, fixable vulnerability stops the release — better no release
+        # than one shipped with a known, correctable hole.
+        id: grype-amd64
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          sbom: "dist/ceffio-linux-amd64.cdx.json"
+          severity-cutoff: critical
+          only-fixed: true
+          fail-build: true
+          output-format: json
+          output-file: "grype-amd64.json"
+          grype-version: v0.121.0
+          cache-db: true
+
+      - name: Scan the SBOMs with Grype (arm64)
+        id: grype-arm64
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          sbom: "dist/ceffio-linux-arm64.cdx.json"
+          severity-cutoff: critical
+          only-fixed: true
+          fail-build: true
+          output-format: json
+          output-file: "grype-arm64.json"
+          grype-version: v0.121.0
+          cache-db: true
+
+      - name: Summarise the scans
+        if: always()
+        run: |
+          set -euo pipefail
+          for ARCH in amd64 arm64; do
+            RAPPORT="grype-${ARCH}.json"
+            if [ ! -s "$RAPPORT" ]; then
+              echo "### Grype, binaire ${ARCH} — aucun rapport produit" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+            python3 - "$RAPPORT" "$ARCH" >> "$GITHUB_STEP_SUMMARY" <<'FIN_PYTHON'
+          import json, sys
+          rapport, arch = sys.argv[1], sys.argv[2]
+          d = json.load(open(rapport))
+          matches = d.get("matches") or []
+          ordre = ["Critical", "High", "Medium", "Low", "Negligible", "Unknown"]
+          compte = {s: [0, 0] for s in ordre}
+          for m in matches:
+              sev = (m.get("vulnerability") or {}).get("severity") or "Unknown"
+              fixe = ((m.get("vulnerability") or {}).get("fix") or {}).get("state") == "fixed"
+              if sev not in compte:
+                  sev = "Unknown"
+              compte[sev][0] += 1
+              if fixe:
+                  compte[sev][1] += 1
+          print("### Grype, binaire %s" % arch)
+          print()
+          print("| Sévérité | Total | Avec correctif |")
+          print("|---|---|---|")
+          for s in ordre:
+              total, fixe = compte[s]
+              if total or s == "Critical":
+                  print("| %s | %d | %d |" % (s, total, fixe))
+          print()
+          print("%d vulnérabilité(s) au total, %d avec un correctif."
+                % (sum(c[0] for c in compte.values()), sum(c[1] for c in compte.values())))
+          FIN_PYTHON
+          done
+
+      - name: Checksums, after the SBOMs
+        # THE SUMS COVER EVERYTHING THE RELEASE PUBLISHES, SBOMs included, so an
+        # operator can verify the document they are about to read. Computing them
+        # before the SBOMs existed is how a release ends up with files nobody can
+        # check.
+        run: |
+          set -euo pipefail
+          ( cd dist && sha256sum \
+              ceffio-linux-amd64 ceffio-linux-arm64 \
+              ceffio-linux-amd64.cdx.json ceffio-linux-arm64.cdx.json \
+              > checksums.txt )
+          cat dist/checksums.txt
 
       - name: Exercise what will be shipped
         # The native architecture is RUN, not just built — see ci.yml for why
@@ -175,6 +287,8 @@ jobs:
           | \`ceffio-linux-amd64\` | x86_64 |
           | \`ceffio-linux-arm64\` | aarch64 |
 
+          Software bill of materials: \`ceffio-linux-<arch>.cdx.json\` (CycloneDX JSON), covered by \`checksums.txt\`.
+
           ## Verify before running
 
           \`\`\`bash
@@ -194,6 +308,8 @@ jobs:
           files: |
             dist/ceffio-linux-amd64
             dist/ceffio-linux-arm64
+            dist/ceffio-linux-amd64.cdx.json
+            dist/ceffio-linux-arm64.cdx.json
             dist/checksums.txt
           body_path: RELEASE_BODY.md
         env:
@@ -310,8 +426,29 @@ jobs:
             --platform linux/amd64,linux/arm64 \
             -f build/console/Dockerfile \
             "${TAGS[@]}" \
+            --sbom=true --provenance=mode=max \
             --push .
           echo "Published: ${IMAGE}:${VERSION}"
+
+      - name: Prove the image carries its SBOM and its provenance
+        # AN ATTESTATION IS PUBLISHED OR IT IS NOT: "the build said pushed" does
+        # not prove the registry kept the attestation, and an empty one is worse
+        # than none — it is a line in a report that nobody can check.
+        #
+        # The same reading an operator would do by hand, on the published image.
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.release.outputs.tag }}"
+          VERSION="${VERSION#v}"
+          IMAGE="ghcr.io/ceffio-suite/ceffio:${VERSION}"
+          for ATTESTATION in SBOM Provenance; do
+            VALEUR="$(docker buildx imagetools inspect "$IMAGE" --format "{{ json .${ATTESTATION} }}")"
+            echo "${ATTESTATION} of ${IMAGE}: $(echo "$VALEUR" | head -c 300)"
+            if [ -z "$VALEUR" ] || [ "$VALEUR" = "null" ]; then
+              echo "::error::${IMAGE} carries no ${ATTESTATION} attestation"
+              exit 1
+            fi
+          done
 
       - name: Prove the image is pullable, anonymously
         # "The build said pushed" does not prove a stranger can pull the image:
