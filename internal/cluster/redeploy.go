@@ -42,6 +42,12 @@ func Redeployer(ctx context.Context, domain string) error {
 	}
 
 	// 2. Identity: depends on the database.
+	//
+	// THE DOMAIN IS ANNOUNCED HERE, and its absence is not a detail: the identity
+	// layer builds the suite's OIDC redirect_uri from it, and an empty domain
+	// makes the whole replay fail at the SSO phase — which is what "ceffio
+	// upgrade" did, for every installation, until this line.
+	identity.PoserDomaine(domain)
 	if err := identity.Deploy(ctx); err != nil {
 		return err
 	}
