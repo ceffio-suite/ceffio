@@ -133,7 +133,17 @@ canceled — and not pursued without a safety net.
 			fmt.Println()
 			fmt.Println("Upgrading...")
 
-			res, err := upgrade.Executer(ctx, versionreg.Registry, upgrade.Options{
+			// THE BINARY ITSELF IS PART OF WHAT IS UPGRADED. The console, the
+			// public-IP reporter and the Talk relay all run this image; leaving
+			// it out of the target means the plan compares every component
+			// except the one the operator just replaced, and answers "nothing
+			// to do" while old pods keep running.
+			cible := append([]versionreg.Composant{}, versionreg.Registry...)
+			if binaire, ok := versionreg.ComposantBinaire(); ok {
+				cible = append(cible, binaire)
+			}
+
+			res, err := upgrade.Executer(ctx, cible, upgrade.Options{
 				Domain:    domaine,
 				BackupDir: dir,
 				Progress: func(e string) {

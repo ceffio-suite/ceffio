@@ -46,6 +46,9 @@ presented as a proof.`,
 		Args: cobra.NoArgs,
 		RunE: func(c *cobra.Command, args []string) error {
 			doc := sbom.Construire(version.Registry)
+			// The platform runs here too, and the document must say so — but without
+			// claiming a pin Ceffio does not hold.
+			sbom.AjouteLaPlateforme(&doc, version.Plateforme)
 			sbom.AjouteLeBinaire(&doc)
 			doc.Metadata.Timestamp = time.Now().UTC().Format(time.RFC3339)
 

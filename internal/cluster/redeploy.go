@@ -13,8 +13,10 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/files"
 	"github.com/ceffio-suite/ceffio/internal/identity"
 	"github.com/ceffio-suite/ceffio/internal/ingress"
+	"github.com/ceffio-suite/ceffio/internal/k8sapi"
 	"github.com/ceffio-suite/ceffio/internal/office"
 	"github.com/ceffio-suite/ceffio/internal/platform"
+	"github.com/ceffio-suite/ceffio/internal/publicip"
 	"github.com/ceffio-suite/ceffio/internal/sso"
 	"github.com/ceffio-suite/ceffio/internal/stacks"
 )
@@ -83,6 +85,17 @@ func Redeployer(ctx context.Context, domain string) error {
 			return err
 		}
 		if err := console.Deploy(ctx, domain); err != nil {
+			return err
+		}
+		// THE PUBLIC-IP REPORTER RUNS THE SAME IMAGE, and it was deployed exactly
+		// once — at install. Without this line an installation keeps a reporter
+		// from the release that created it, forever: the code is idempotent, so
+		// replaying it is how it follows the binary.
+		cli, err := k8sapi.Nouveau()
+		if err != nil {
+			return err
+		}
+		if err := publicip.Deploy(ctx, cli.Kubernetes()); err != nil {
 			return err
 		}
 	}

@@ -67,8 +67,24 @@ type Component struct {
 
 // License carries the SPDX identifier. `id` is an enum in the official schema,
 // so an invented string fails the test that validates the document.
+//
+// NOASSERTION IS AN EXPRESSION, NOT AN ID: the official schema accepts only real
+// SPDX identifiers in `license.id`, and `NOASSERTION` belongs to the
+// `expression` form. Writing it as an id fails validation — which is how the
+// difference was found, by the test that reads the schema rather than our idea
+// of it.
 type License struct {
-	License LicenceID `json:"license"`
+	License    *LicenceID `json:"license,omitempty"`
+	Expression string     `json:"expression,omitempty"`
+}
+
+// licence builds the right shape for what we know: an identifier when the source
+// states one, an expression otherwise.
+func licence(id string) License {
+	if id == "" || id == "NOASSERTION" {
+		return License{Expression: "NOASSERTION"}
+	}
+	return License{License: &LicenceID{ID: id}}
 }
 
 // LicenceID is the `license` object of CycloneDX.
@@ -108,16 +124,15 @@ func Construire(composants []version.Composant) Document {
 			Name:    c.Nom,
 			Version: c.Version,
 			Purl:    purlDe(c.Image),
-			Licenses: []License{{
-				// NEVER A GUESS: the registry carries the SPDX identifier
-				// verified at the upstream source, or NOASSERTION.
-				License: LicenceID{ID: licenceOuNoAssertion(c.Licence)},
-			}},
+			// NEVER A GUESS: the registry carries the SPDX identifier verified
+			// at the upstream source, or NOASSERTION.
+			Licenses: []License{licence(c.Licence)},
 			Properties: []Property{
 				{Name: "ceffio:role", Value: c.Role},
 				{Name: "ceffio:module", Value: c.Module},
 				{Name: "ceffio:image", Value: c.Image},
 				{Name: "ceffio:optional", Value: fmt.Sprintf("%t", c.Optionnel)},
+				{Name: "ceffio:pinned", Value: "true"},
 			},
 		})
 	}
@@ -177,4 +192,42 @@ func licenceOuNoAssertion(l string) string {
 // Decrit rend le document lisible en une ligne, pour les journaux.
 func Decrit(d Document) string {
 	return fmt.Sprintf("%d composant(s), binaire %s", len(d.Components), version.Binary)
+}
+
+// AjouteLaPlateforme appends the components Ceffio does not pin.
+//
+// THEY CARRY `ceffio:pinned=false`, and that property is the whole point: an
+// image whose version belongs to a chart is reported, not claimed. The document
+// says what sits on the machine; it does not pretend Ceffio chose the version.
+func AjouteLaPlateforme(doc *Document, composants []version.Composant) {
+	for _, c := range composants {
+		doc.Components = append(doc.Components, Component{
+			Type:     "container",
+			Name:     c.Nom,
+			Version:  versionDe(c.Image),
+			Purl:     purlDe(c.Image),
+			Licenses: []License{licence(c.Licence)},
+			Properties: []Property{
+				{Name: "ceffio:role", Value: c.Role},
+				{Name: "ceffio:module", Value: c.Module},
+				{Name: "ceffio:image", Value: c.Image},
+				{Name: "ceffio:optional", Value: fmt.Sprintf("%t", c.Optionnel)},
+				{Name: "ceffio:pinned", Value: "false"},
+			},
+		})
+	}
+	sort.SliceStable(doc.Components, func(i, j int) bool {
+		return doc.Components[i].Name < doc.Components[j].Name
+	})
+}
+
+// versionDe returns the tag of an image reference, empty when it has none.
+func versionDe(image string) string {
+	if strings.Contains(image, "@") {
+		return ""
+	}
+	if i := strings.LastIndex(image, ":"); i >= 0 && !strings.Contains(image[i:], "/") {
+		return image[i+1:]
+	}
+	return ""
 }
