@@ -47,9 +47,9 @@ jobs:
     name: format, vet and tests
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
@@ -98,11 +98,11 @@ jobs:
           - { goarch: amd64, suffixe: linux-amd64 }
           - { goarch: arm64, suffixe: linux-arm64 }
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
@@ -245,7 +245,7 @@ jobs:
           ./"$BIN" status --help > /dev/null
           echo "the binary starts and its command tree responds"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ceffio-${{ matrix.suffixe }}
           path: bin/ceffio-*-linux-*
@@ -267,14 +267,14 @@ jobs:
     runs-on: ubuntu-24.04
     needs: binary
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: ceffio-linux-amd64
           path: tmp/amd64
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: ceffio-linux-arm64
           path: tmp/arm64
@@ -300,7 +300,7 @@ jobs:
           chmod +x dist/ceffio-linux-amd64 dist/ceffio-linux-arm64
           ls -la dist/
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Build the image for both architectures
         # NO --push: this job does not even have `packages: write`, so a push
