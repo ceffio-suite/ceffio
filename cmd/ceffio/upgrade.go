@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/ceffio-suite/ceffio/internal/cluster"
+	"github.com/ceffio-suite/ceffio/internal/module"
 	"github.com/ceffio-suite/ceffio/internal/upgrade"
 	versionreg "github.com/ceffio-suite/ceffio/internal/version"
 	"github.com/spf13/cobra"
@@ -99,8 +100,16 @@ canceled — and not pursued without a safety net.
 
 			if len(plan.Changements) == 0 {
 				fmt.Println()
-				fmt.Println("✓ No version drift: nothing to upgrade.")
-				return nil
+				if planSeul {
+					fmt.Println("✓ No version drift: nothing to upgrade.")
+					return nil
+				}
+				// PAS DE DÉRIVE DE VERSION, MAIS UNE CONVERGENCE À FAIRE : les
+				// modules optionnels installés ne sont pas des composants du
+				// registre, le plan ne les voit pas, et ils suivent le binaire
+				// au moment du rejeu — pas avant.
+				fmt.Println("· No version drift in the registry: replaying the installation, " +
+					"so the installed modules follow the binary.")
 			}
 
 			fmt.Println()
@@ -143,8 +152,20 @@ canceled — and not pursued without a safety net.
 				},
 				// The application consists in replaying the deployment: each
 				// module targets the pinned registry version and is idempotent.
+				//
+				// AND THE INSTALLED OPTIONAL MODULES ARE REPLAYED TOO: they are
+				// not part of the core layers, and without this a module
+				// installed once keeps the image of that day — a relay three
+				// releases behind, two versions of the binary running at once.
+				// Une convergence : même sans dérive de version, les modules
+				// optionnels installés sont rejoués (ils suivent le binaire).
+				ToujoursRejouer: true,
 				Appliquer: func(ctx context.Context) error {
-					return cluster.Redeployer(ctx, domaine)
+					if err := cluster.Redeployer(ctx, domaine); err != nil {
+						return err
+					}
+					return module.RejouerInstalles(ctx, module.All(), moduleEnv(domaine),
+						func(e string) { fmt.Printf("  · %s\n", e) })
 				},
 			})
 			if res != nil && res.Sauvegarde != "" {

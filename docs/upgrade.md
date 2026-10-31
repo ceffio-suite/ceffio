@@ -29,20 +29,24 @@ the backup, and says which one is missing. That is deliberate: an upgrade that
 silently rewrote the ClusterIssuers back to HTTP-01 would lose a DNS-01 wildcard
 at the next renewal.
 
-## What it does not do
+## Optional modules are replayed too
 
-**It does not replay the optional modules.** The layers it replays are the core
-ones (platform, data, identity, files, office, SSO, ingress, console). A module
-installed later — `recording`, `capture`, `live-transcription`, `exapps-daemon`
-— keeps the image it was installed with. That is a real gap, not a design
-choice: the relay of a `recording` installation can stay several releases
-behind, and `ceffio module install <id>` answers "already installed" instead of
-replaying.
+An upgrade is a **convergence**, not only a version bump. The core layers are
+replayed, and so are the optional modules that are installed: their image is not
+a component of the version registry, so the plan cannot see it — but it follows
+the binary, and only a replay makes it.
 
-To see whether an installation is in that state:
+The replay only *replays*: a module whose state is not `installed` is left
+alone, so an upgrade never installs something the operator did not ask for. A
+module that fails stops the upgrade and is named.
+
+## Checking that nothing lags
 
 ```bash
 ceffio sbom --cluster
 ```
 
-It reports `divergence` when two references of the same image run at once.
+It reports a `divergence` when two references of the same image run at once —
+the signature of a component that was deployed once and never refreshed. On a
+converged installation it prints `The cluster matches the registry.` and exits
+0.
