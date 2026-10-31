@@ -4,6 +4,7 @@
 package sbom
 
 import (
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -135,5 +136,57 @@ func TestUneRepliqueNEstPasUnEcart(t *testing.T) {
 		if e.Genre == "hors-registre" || e.Genre == "digest" {
 			t.Errorf("replicas of the same image must not produce %v", e)
 		}
+	}
+}
+
+// TestDeuxVersionsQuiTournentEnsemble: the drift an install-and-forget
+// component produces. The comparison must say it, because it is how the
+// public-IP reporter was found three releases behind.
+func TestDeuxVersionsQuiTournentEnsemble(t *testing.T) {
+	doc := Construire(nil)
+	doc.Components = append(doc.Components, Component{
+		Type: "container", Name: "ceffio",
+		Properties: []Property{
+			{Name: "ceffio:image", Value: "ghcr.io/ceffio-suite/ceffio"},
+			{Name: "ceffio:module", Value: "internal/console"},
+			{Name: "ceffio:pinned", Value: "false"},
+		},
+	})
+	pods := []corev1.Pod{
+		pod("ceffio-system", "admin", "ghcr.io/ceffio-suite/ceffio:0.10.3", ""),
+		pod("ceffio-system", "public-ip", "ghcr.io/ceffio-suite/ceffio:0.8.4", ""),
+	}
+	ecarts := Comparer(doc, pods, toutAttendu)
+	var divergences []Ecart
+	for _, e := range ecarts {
+		if e.Genre == "divergence" {
+			divergences = append(divergences, e)
+		}
+	}
+	if len(divergences) != 1 {
+		t.Fatalf("%d divergence(s), expected 1 (%v)", len(divergences), ecarts)
+	}
+	if !strings.Contains(divergences[0].Detail, "0.8.4") || !strings.Contains(divergences[0].Detail, "0.10.3") {
+		t.Errorf("detail = %q, both references must be named", divergences[0].Detail)
+	}
+}
+
+// TestUnComposantDePlateformeNEstPasHorsRegistre: the document describes it, so
+// it is known — and its version belongs to a chart, so it is never compared.
+func TestUnComposantDePlateformeNEstPasHorsRegistre(t *testing.T) {
+	doc := Construire(nil)
+	doc.Components = append(doc.Components, Component{
+		Type: "container", Name: "driver-csi",
+		Properties: []Property{
+			{Name: "ceffio:image", Value: "docker.io/longhornio/csi-attacher"},
+			{Name: "ceffio:module", Value: "internal/storage"},
+			{Name: "ceffio:pinned", Value: "false"},
+			{Name: "ceffio:optional", Value: "false"},
+		},
+	})
+	pods := []corev1.Pod{pod("longhorn-system", "csi", "docker.io/longhornio/csi-attacher:v4.13.0", "")}
+	ecarts := Comparer(doc, pods, toutAttendu)
+	if len(ecarts) != 0 {
+		t.Errorf("a platform component that runs is not a difference, got %v", ecarts)
 	}
 }

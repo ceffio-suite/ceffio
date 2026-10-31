@@ -51,6 +51,9 @@ func compilateur(t *testing.T) *jsonschema.Schema {
 func TestLeDocumentValideLeSchemaCycloneDX(t *testing.T) {
 	doc := Construire(version.Registry)
 	AjouteLeBinaire(&doc)
+	// LA PLATEFORME AUSSI : ses entrées portent `ceffio:pinned=false`, et le
+	// schéma officiel doit accepter un composant sans version.
+	AjouteLaPlateforme(&doc, version.Plateforme)
 	doc.Metadata.Timestamp = "2026-10-30T12:00:00Z"
 
 	brut, err := json.Marshal(doc)
@@ -82,8 +85,14 @@ func TestLeDocumentEstStable(t *testing.T) {
 // NOASSERTION, never "Apache-2.0" because it is the most common one.
 func TestUneLicenceInconnueNVautPasUneSupposition(t *testing.T) {
 	doc := Construire([]version.Composant{{Nom: "x", Image: "docker.io/x/y:1", Licence: ""}})
-	if got := doc.Components[0].Licenses[0].License.ID; got != "NOASSERTION" {
-		t.Errorf("licence = %q, expected NOASSERTION", got)
+	// NOASSERTION is an EXPRESSION in CycloneDX, not an identifier: the official
+	// schema rejects it in `license.id`.
+	l := doc.Components[0].Licenses[0]
+	if l.Expression != "NOASSERTION" {
+		t.Errorf("expression = %q, expected NOASSERTION", l.Expression)
+	}
+	if l.License != nil {
+		t.Errorf("an unknown licence must not be written as an SPDX id (%v)", l.License)
 	}
 }
 

@@ -49,19 +49,24 @@ type reference struct {
 // comparison therefore reads, from the pod's SPEC, the reference the operator
 // asked for: a pod pinned by digest is compared by digest, a pod asking for a
 // tag is compared by tag, and the two cases never mix.
+//
+// A COMPONENT THE DOCUMENT MARKS `ceffio:pinned=false` IS NEVER COMPARED: its
+// version belongs to a chart Ceffio does not control. It is only counted as
+// known, and it is still subject to the divergence check below.
 func Comparer(doc Document, pods []corev1.Pod, moduleInstalle func(module string) bool) []Ecart {
-	// One observation per repository: three replicas of the same image are one
-	// fact, not three findings.
-	observes := map[string]reference{}
+	// repositif → the references actually running. A repository can run several
+	// at once, and that is a finding of its own.
+	observes := map[string]map[string]reference{}
 	for _, pod := range pods {
 		for _, conteneur := range pod.Spec.Containers {
 			ref := decoupe(conteneur.Image)
 			if ref.repo == "" {
 				continue
 			}
-			if _, vu := observes[ref.repo]; !vu {
-				observes[ref.repo] = ref
+			if observes[ref.repo] == nil {
+				observes[ref.repo] = map[string]reference{}
 			}
+			observes[ref.repo][ref.String()] = ref
 		}
 	}
 
@@ -74,11 +79,15 @@ func Comparer(doc Document, pods []corev1.Pod, moduleInstalle func(module string
 			continue
 		}
 		attendu := decoupe(image)
-		vu, tourne := observes[attendu.repo]
+		refs, tourne := observes[attendu.repo]
 		if !tourne {
 			// UN COMPOSANT CONDITIONNEL N'EST PAS UN COMPOSANT MANQUANT : le
 			// solveur DNS ne tourne que pour les fournisseurs hors catalogue.
-			if propriete(c, "ceffio:optional") != "true" && moduleInstalle(propriete(c, "ceffio:module")) {
+			// ET UN COMPOSANT NON ÉPINGLÉ N'EST PAS ATTENDU : la couche de
+			// stockage peut ne pas être utilisée.
+			if propriete(c, "ceffio:pinned") != "false" &&
+				propriete(c, "ceffio:optional") != "true" &&
+				moduleInstalle(propriete(c, "ceffio:module")) {
 				ecarts = append(ecarts, Ecart{
 					Genre: "absent", Nom: c.Name,
 					Detail: "the registry has it, no pod runs it",
@@ -88,25 +97,30 @@ func Comparer(doc Document, pods []corev1.Pod, moduleInstalle func(module string
 		}
 		vus[attendu.repo] = true
 
-		// DIGEST AGAINST DIGEST, TAG AGAINST TAG — never one against the other.
-		if attendu.digest != "" && vu.digest != "" && attendu.digest != vu.digest {
-			ecarts = append(ecarts, Ecart{
-				Genre: "version", Nom: c.Name,
-				Detail: fmt.Sprintf("running %s, registry pins %s", court(vu.digest), court(attendu.digest)),
-			})
+		if propriete(c, "ceffio:pinned") == "false" {
+			// Sa version appartient au chart : rien à comparer.
 			continue
 		}
-		if attendu.tag != "" && vu.tag != "" && attendu.tag != vu.tag {
+
+		// DIGEST AGAINST DIGEST, TAG AGAINST TAG — never one against the other.
+		// A component corresponds as soon as ONE of the references running for
+		// its repository corresponds; a pod that asks for the registry's tag is
+		// not drifted because the registry also documents a digest.
+		correspond := false
+		for _, vu := range refs {
+			if referencesCorrespondent(vu, attendu) {
+				correspond = true
+			}
+		}
+		if !correspond {
 			ecarts = append(ecarts, Ecart{
 				Genre: "version", Nom: c.Name,
-				Detail: fmt.Sprintf("running tag %s, registry pins %s", vu.tag, attendu.tag),
+				Detail: fmt.Sprintf("running %s, registry pins %s", listeRefs(refs), attendu.String()),
 			})
 		}
 	}
 
-	// Images that run and that the registry does not describe. An operator's own
-	// sidecar and a component Ceffio deploys without listing both have to be
-	// visible.
+	// Images that run and that the document does not describe.
 	var inattendus []string
 	for repo := range observes {
 		if !vus[repo] {
@@ -121,6 +135,18 @@ func Comparer(doc Document, pods []corev1.Pod, moduleInstalle func(module string
 		})
 	}
 
+	// TWO VERSIONS OF THE SAME IMAGE AT ONCE. A rolling update shows this
+	// briefly and it is normal; an installation that sits in it is not — this
+	// is how a component deployed once and never refreshed is found.
+	for repo, refs := range observes {
+		if len(refs) > 1 {
+			ecarts = append(ecarts, Ecart{
+				Genre: "divergence", Nom: repo,
+				Detail: fmt.Sprintf("%d références tournent ensemble : %s", len(refs), listeRefs(refs)),
+			})
+		}
+	}
+
 	sort.SliceStable(ecarts, func(i, j int) bool {
 		if ecarts[i].Genre != ecarts[j].Genre {
 			return ecarts[i].Genre < ecarts[j].Genre
@@ -128,6 +154,57 @@ func Comparer(doc Document, pods []corev1.Pod, moduleInstalle func(module string
 		return ecarts[i].Nom < ecarts[j].Nom
 	})
 	return ecarts
+}
+
+// referencesCorrespondent compares what is comparable: a digest when both sides
+// have one, a tag when neither does. Absent on one side means "no claim", not
+// "mismatch".
+func referencesCorrespondent(vu, attendu reference) bool {
+	switch {
+	case vu.digest != "" && attendu.digest != "":
+		return vu.digest == attendu.digest
+	case vu.tag != "" && attendu.tag != "":
+		return vu.tag == attendu.tag
+	default:
+		return true
+	}
+}
+
+// listeRefs renders the references observed for one repository, shortened.
+func listeRefs(refs map[string]reference) string {
+	var noms []string
+	for _, r := range refs {
+		noms = append(noms, r.String())
+	}
+	sort.Strings(noms)
+	return strings.Join(noms, ", ")
+}
+
+// listeTags renders only the tags, for the message of a tag comparison.
+func listeTags(refs map[string]reference) string {
+	var noms []string
+	for _, r := range refs {
+		if r.tag != "" {
+			noms = append(noms, r.tag)
+		} else {
+			noms = append(noms, court(r.digest))
+		}
+	}
+	sort.Strings(noms)
+	return strings.Join(noms, ", ")
+}
+
+// String renders a reference the way an operator reads it: tag and short
+// digest, one or the other.
+func (r reference) String() string {
+	switch {
+	case r.tag != "" && r.digest != "":
+		return r.tag + "@" + court(r.digest)
+	case r.tag != "":
+		return r.tag
+	default:
+		return court(r.digest)
+	}
 }
 
 // decoupe splits "docker.io/library/nextcloud:34.0.3@sha256:…" into its parts.

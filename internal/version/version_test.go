@@ -239,3 +239,45 @@ func TestChaqueImageEstEpingleeParDigest(t *testing.T) {
 		}
 	}
 }
+
+// TestComposantBinaireNExisteQuePourUneVersionPubliee: a development build names
+// no image anybody can pull, so it must not enter the upgrade target.
+func TestComposantBinaireNExisteQuePourUneVersionPubliee(t *testing.T) {
+	ancien := Binary
+	defer func() { Binary = ancien }()
+
+	Binary = "v0.10.3"
+	c, ok := ComposantBinaire()
+	if !ok {
+		t.Fatal("a release binary must give a component")
+	}
+	if c.Image != "ghcr.io/ceffio-suite/ceffio:0.10.3" || c.Version != "0.10.3" {
+		t.Errorf("component = %+v, expected the 0.10.3 image", c)
+	}
+
+	for _, dev := range []string{"0.0.0-dev", "dev-inconnu", ""} {
+		Binary = dev
+		if _, ok := ComposantBinaire(); ok {
+			t.Errorf("%q: a development build must not give a component", dev)
+		}
+	}
+}
+
+// TestChaqueComposantDePlateformePorteSaLicence: the platform list is what an
+// operator reads to know what runs; an empty licence would silently become
+// NOASSERTION.
+func TestChaqueComposantDePlateformePorteSaLicence(t *testing.T) {
+	vus := map[string]bool{}
+	for _, c := range Plateforme {
+		if c.Licence == "" {
+			t.Errorf("%s: no licence", c.Nom)
+		}
+		if c.Image == "" || c.Nom == "" {
+			t.Errorf("%s: incomplete entry", c.Nom)
+		}
+		if vus[c.Image] {
+			t.Errorf("%s: listed twice", c.Nom)
+		}
+		vus[c.Image] = true
+	}
+}

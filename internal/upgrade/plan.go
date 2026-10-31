@@ -58,7 +58,11 @@ func Preparer(ctx context.Context, cible []version.Composant) *Plan {
 	// 1. Does the cluster respond, and is it healthy? Upgrading a version on
 	//    a degraded cluster makes it impossible to tell the original outage
 	//    from the one we just introduced.
-	nodes := imagesEnService(ctx)
+	// LA CIBLE, PAS SEULEMENT LE REGISTRE : le binaire lui-même est un composant
+	// de l'installation (console, relais, rapporteur d'IP), et l'oublier ici est
+	// ce qui fait répondre « rien à faire » à une installation qui tourne en
+	// 0.8.4.
+	nodes := imagesEnService(ctx, cible)
 	p.NoeudsTotal, p.NoeudsPrets = noeuds(ctx)
 	if p.NoeudsTotal == 0 {
 		p.Blocages = append(p.Blocages, "Cluster unreachable: cannot prepare an upgrade.")
@@ -129,7 +133,7 @@ func Preparer(ctx context.Context, cible []version.Composant) *Plan {
 // The registry already carries the answer: every component pins a FULL image
 // reference. Two images belong to the same component when their REPOSITORY is
 // the same, whatever the tag — the tag is precisely what is being compared.
-func imagesEnService(ctx context.Context) map[string]versionImage {
+func imagesEnService(ctx context.Context, composants []version.Composant) map[string]versionImage {
 	var images []string
 	raw, err := kubectl(ctx, "get", "pods", "-A", "-o", "json")
 	if err != nil {
@@ -161,7 +165,7 @@ func imagesEnService(ctx context.Context) map[string]versionImage {
 			}
 		}
 	}
-	return associer(images, version.Registry)
+	return associer(images, composants)
 }
 
 // depotsAlias lists, per component, the repositories a PREVIOUS version of the

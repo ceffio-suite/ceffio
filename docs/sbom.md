@@ -29,6 +29,15 @@ Each component carries its name, its version, its image **with the digest it was
 pinned to**, its role, its SPDX licence, and the module that deploys it. The
 binary itself is in `metadata.component`, with its commit and build date.
 
+The document carries **two kinds of components**, and says which is which with
+the property `ceffio:pinned`:
+
+- `true` — an image Ceffio ships and pins, by digest: the version registry;
+- `false` — an image that runs on the machine but whose version belongs to the
+  chart or the operator that deploys it (Longhorn, cert-manager, CloudNativePG,
+  the AppAPI proxy, the console itself). Ceffio describes it and reports what
+  runs; it does not claim to have chosen the version.
+
 Without `--cluster`, the document describes what Ceffio can deploy. With
 `--cluster`, the registry is compared with the images actually running in the
 `ceffio-*` namespaces, `longhorn-system`, `cert-manager` and `cnpg-system`, and
@@ -37,7 +46,10 @@ the command reports:
 - an image that runs and that the registry does not describe;
 - a component that runs with another tag or another digest than the one the
   registry pins;
-- a component the registry expects (a core module) that runs nowhere.
+- a component the registry expects (a core module) that runs nowhere;
+- **two references of the same image running at once** — a rolling update shows
+  it for a moment, an installation that stays in it does not: this is how a
+  component deployed once and never refreshed is found.
 
 An optional module that is not installed is **not** a difference: the document
 says `ceffio:optional=true` and `ceffio:installed` reflects what was observed.
