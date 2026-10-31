@@ -321,3 +321,84 @@ func ExtraireImages(podsJSON string) map[string]string {
 	}
 	return out
 }
+
+// Plateforme lists the components that run on an installation and that CEFFIO
+// DOES NOT PIN: their version belongs to the chart or the operator that deploys
+// them (Longhorn, cert-manager, CloudNativePG, the AppAPI proxy…), or to this
+// very binary (the console).
+//
+// WHY A SEPARATE LIST AND NOT Registry: `ceffio upgrade` and the deployment
+// replay iterate Registry to decide what to move to a pinned version. An entry
+// there is a promise — "this is the image Ceffio chose, by digest". Adding these
+// would make the upgrade pin images it does not own, against the values of a
+// Helm chart it does not control. The SBOM needs them for another reason: an
+// operator reading the document must see what actually sits on the machine, not
+// only what Ceffio ships.
+//
+// NO DIGEST, AND THAT IS THE POINT: writing one here would be a claim of control
+// Ceffio does not have. The comparison reports what runs, by tag, and reports
+// two versions of the same image running at once.
+//
+// Licences: verified at the source (the project's LICENSE file, or GitHub's
+// licence detection) for every entry. NOASSERTION where the source states
+// nothing — never the most plausible answer.
+var Plateforme = []Composant{
+	{Nom: "ceffio", Image: "ghcr.io/ceffio-suite/ceffio", Module: "internal/console", Role: "console", Licence: "AGPL-3.0-or-later"},
+	{Nom: "vault-k8s", Image: "docker.io/hashicorp/vault-k8s", Module: "internal/vault", Role: "injecteur de secrets", Licence: "MPL-2.0"},
+
+	// Longhorn: eleven images, one project (Apache-2.0), deployed by the chart
+	// of the storage layer.
+	{Nom: "longhorn-manager", Image: "docker.io/longhornio/longhorn-manager", Module: "internal/storage", Role: "stockage", Licence: "Apache-2.0"},
+	{Nom: "longhorn-engine", Image: "docker.io/longhornio/longhorn-engine", Module: "internal/storage", Role: "stockage", Licence: "Apache-2.0"},
+	{Nom: "longhorn-instance-manager", Image: "docker.io/longhornio/longhorn-instance-manager", Module: "internal/storage", Role: "stockage", Licence: "Apache-2.0"},
+	{Nom: "longhorn-share-manager", Image: "docker.io/longhornio/longhorn-share-manager", Module: "internal/storage", Role: "stockage", Licence: "Apache-2.0"},
+	{Nom: "longhorn-ui", Image: "docker.io/longhornio/longhorn-ui", Module: "internal/storage", Role: "stockage", Licence: "Apache-2.0"},
+	{Nom: "csi-attacher", Image: "docker.io/longhornio/csi-attacher", Module: "internal/storage", Role: "stockage", Licence: "Apache-2.0"},
+	{Nom: "csi-provisioner", Image: "docker.io/longhornio/csi-provisioner", Module: "internal/storage", Role: "stockage", Licence: "Apache-2.0"},
+	{Nom: "csi-resizer", Image: "docker.io/longhornio/csi-resizer", Module: "internal/storage", Role: "stockage", Licence: "Apache-2.0"},
+	{Nom: "csi-snapshotter", Image: "docker.io/longhornio/csi-snapshotter", Module: "internal/storage", Role: "stockage", Licence: "Apache-2.0"},
+	{Nom: "csi-node-driver-registrar", Image: "docker.io/longhornio/csi-node-driver-registrar", Module: "internal/storage", Role: "stockage", Licence: "Apache-2.0"},
+	{Nom: "livenessprobe", Image: "docker.io/longhornio/livenessprobe", Module: "internal/storage", Role: "stockage", Licence: "Apache-2.0"},
+
+	// cert-manager: the chart pins these three, not the version registry.
+	{Nom: "cert-manager-controller", Image: "quay.io/jetstack/cert-manager-controller", Module: "internal/ingress", Role: "certificats", Licence: "Apache-2.0"},
+	{Nom: "cert-manager-cainjector", Image: "quay.io/jetstack/cert-manager-cainjector", Module: "internal/ingress", Role: "certificats", Licence: "Apache-2.0"},
+	{Nom: "cert-manager-webhook", Image: "quay.io/jetstack/cert-manager-webhook", Module: "internal/ingress", Role: "certificats", Licence: "Apache-2.0"},
+
+	// CloudNativePG: the operator, and the PostgreSQL images it runs. The
+	// operator's repository is Apache-2.0; PostgreSQL itself is under the
+	// PostgreSQL licence, which is what the database is licensed under — the
+	// packaging being Apache-2.0 does not relicense the database.
+	{Nom: "cloudnative-pg", Image: "ghcr.io/cloudnative-pg/cloudnative-pg", Module: "internal/data", Role: "base de données", Licence: "Apache-2.0"},
+	{Nom: "postgresql", Image: "ghcr.io/cloudnative-pg/postgresql", Module: "internal/data", Role: "base de données", Licence: "PostgreSQL"},
+
+	// The AppAPI side: Nextcloud's own services, whose licences are not stated
+	// anywhere we could read — NOASSERTION rather than "Nextcloud is AGPL, so
+	// this is too".
+	{Nom: "harp", Image: "ghcr.io/nextcloud/nextcloud-appapi-harp", Module: "internal/exapps", Role: "appapi", Licence: "NOASSERTION"},
+	{Nom: "live-transcription", Image: "ghcr.io/nextcloud-releases/live_transcription", Module: "internal/exapps", Role: "transcription", Licence: "NOASSERTION"},
+}
+
+// ComposantBinaire returns THIS binary as a component, and whether that makes
+// sense: only a released binary names an image that exists in the registry
+// (a development build would name `dev-…`, which nobody can pull).
+//
+// WHY IT MATTERS: the console, the public-IP reporter and the Talk relay all run
+// the SAME image. Without this component, the upgrade plan never compares that
+// repository — so `ceffio upgrade` answers "no version drift" while an
+// installation keeps running a reporter from three releases ago. That is not a
+// hypothetical: it is how the drift was found.
+func ComposantBinaire() (Composant, bool) {
+	tag := ImageTag()
+	if !reRelease.MatchString("v" + tag) {
+		return Composant{}, false
+	}
+	return Composant{
+		Nom:     "ceffio",
+		Image:   "ghcr.io/ceffio-suite/ceffio:" + tag,
+		Module:  "internal/console",
+		Role:    "console, relais et rapporteur d'IP",
+		Version: tag,
+		Licence: "AGPL-3.0-or-later",
+	}, true
+}
