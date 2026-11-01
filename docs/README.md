@@ -37,6 +37,7 @@ Kept for context. **They do not describe the current code.**
 |---|---|
 | [history/plan-talk-hpb.md](history/plan-talk-hpb.md) | The working note for moving from Matrix/Element to Talk + HPB |
 | [plan-capture.md](plan-capture.md) | Feasibility plan: per-participant capture, the `ceffio-capture` image, and its deployment alongside `recording` |
+| [cra-reporting.md](cra-reporting.md) | The 24/72/14-day runbook: the two channels, the SRP account, and what must already exist |
 | [upgrade.md](upgrade.md) | What `ceffio upgrade` replays, what it needs in its environment, and what it does not do |
 | [sbom.md](sbom.md) | Where the SBOM of the binary, of the images and of an installation live, and how to read them |
 | [capture-privacy.md](capture-privacy.md) | What the capture processes, where the transcript lives, and what the organisation must do — with a notice template |

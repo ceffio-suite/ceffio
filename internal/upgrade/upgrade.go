@@ -23,6 +23,16 @@ type Options struct {
 	// actually updates the images: each module's Deploy() targets the
 	// version pinned in the registry.
 	Appliquer func(ctx context.Context) error
+
+	// ToujoursRejouer forces the apply phase even when the plan finds no version
+	// drift in the registry.
+	//
+	// WHY: an upgrade is a CONVERGENCE, not only a version bump. The optional
+	// modules installed after the fact keep an image that is not a registry
+	// component — the plan cannot see it — and they follow the binary only if
+	// the replay runs. Without this flag, a fully up-to-date core answers
+	// "nothing to do" while a relay stays three releases behind.
+	ToujoursRejouer bool
 }
 
 // Resultat reports what happened, including on failure.
@@ -61,10 +71,13 @@ func Executer(ctx context.Context, cible []version.Composant, o Options) (*Resul
 		res.Erreurs = append(res.Erreurs, plan.Blocages...)
 		return res, fmt.Errorf("preflight refused: %s", strings.Join(plan.Blocages, " ; "))
 	}
-	if len(plan.Changements) == 0 {
+	if len(plan.Changements) == 0 && !o.ToujoursRejouer {
 		o.Progress("no version drift: nothing to do")
 		res.Applique = true
 		return res, nil
+	}
+	if len(plan.Changements) == 0 {
+		o.Progress("no version drift in the registry: replaying the installation")
 	}
 
 	// 2. Mandatory backup.

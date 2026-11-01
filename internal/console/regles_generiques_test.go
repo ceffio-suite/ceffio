@@ -44,6 +44,7 @@ var routesAutorisees = map[string]string{
 	"/favicon.svg":                       "icon",
 	"/favicon-32.png":                    "icon",
 	"/apple-touch-icon.png":              "icon",
+	"/.well-known/security.txt":          "RFC 9116, and only on the project's own domain",
 	"/api/":                              "404 for unknown API paths",
 	"/api/status":                        "cluster state",
 	"/api/users":                         "account management",
