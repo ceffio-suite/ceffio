@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright © MANDEM
+version: 2
+
+# ROUTINE UPDATES ONLY. A vulnerable dependency is a SECURITY update, and those
+# are already enabled on this repository (Dependabot alerts + automated security
+# fixes): this file does not gate them, it only adds the scheduled ones.
+#
+# ONE RULE MUST SURVIVE: every GitHub Action is pinned by COMMIT SHA, with its
+# version in a comment. Dependabot rewrites the SHA and keeps the comment; it
+# never replaces a SHA with a tag. A configuration that loosened that would undo
+# the pinning on its first run.
+#
+# GROUPS, BECAUSE FIFTY PULL REQUESTS IS THE SAME AS NONE: one PR per ecosystem
+# per week for minor and patch. A MAJOR stays alone, with its own diff — that is
+# where a human has to read before merging.
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Paris
+    open-pull-requests-limit: 5
+    groups:
+      go-deps:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: deps(go)
+
+  # The console image lives in build/console, not at the root.
+  - package-ecosystem: docker
+    directory: /build/console
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Paris
+    open-pull-requests-limit: 3
+    groups:
+      images:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: deps(docker)
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Paris
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: deps(actions)
