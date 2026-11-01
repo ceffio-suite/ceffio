@@ -22,6 +22,9 @@ that is down, or compromised, must not be able to silence the channel through
 which its own vulnerability is reported. A security contact hosted on the
 product is a contact that fails exactly when it is needed.
 
+**The alias is forwarded to a mailbox that is read every day**, so the message
+does not wait in an account nobody opens.
+
 **The clock starts when someone reads it**, not when the message arrives. The
 24-hour early warning is counted from the moment MANDEM becomes aware of an
 actively exploited vulnerability, and a mailbox nobody watches makes that moment
