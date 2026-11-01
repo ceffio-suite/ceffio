@@ -150,6 +150,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/favicon.svg", s.handleIcone)
 	mux.HandleFunc("/favicon-32.png", s.handleIcone)
 	mux.HandleFunc("/apple-touch-icon.png", s.handleIcone)
+	// RFC 9116: served on the project's own domain, and nowhere else.
+	mux.HandleFunc("/.well-known/security.txt", s.handleSecurityTxt)
 
 	// UNKNOWN /api/ PATHS ANSWER 404. Without this, the catch-all below serves
 	// the HTML page with a 200 for anything, including a route that was removed:
