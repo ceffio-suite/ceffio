@@ -884,6 +884,17 @@ spec:
             port:
               number: 8088
 `
+	// THE APEX DOMAIN CARRIES ONE FILE, AND ONLY ON THE PROJECT'S INSTALLATION.
+	//
+	// RFC 9116 wants the file at the origin a reporter reaches, and a customer's
+	// installation is not the project's origin: the console answers 404 for
+	// every other domain, and this Ingress is not created for them at all.
+	// PathExact on one path: the apex keeps 404 for everything else, so the page
+	// that lives there (or will live there) is not replaced by the console.
+	if domain == DomaineDuProjet {
+		manifest += securityTxtIngress(domain)
+	}
+
 	cmd := k8s.Command(ctx, "kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(manifest)
 	cmd.Stdout = os.Stdout
@@ -1229,4 +1240,39 @@ func oneLine(s string) string {
 		s = s[:200] + "…"
 	}
 	return strings.TrimSpace(s)
+}
+
+// securityTxtIngress exposes /.well-known/security.txt on the apex domain.
+//
+// WHY A SECOND INGRESS AND NOT A RULE ON THE FIRST: the admin console listens
+// on admin.<domain>, the file has to live at the apex. One path, PathType
+// Exact, so no other request to the apex reaches the console.
+func securityTxtIngress(domain string) string {
+	return `
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ceffio-security-txt
+  namespace: ` + deployNS + `
+  annotations:
+    cert-manager.io/cluster-issuer: ` + ingress.PourDomaine(domain) + `
+    traefik.ingress.kubernetes.io/router.middlewares: ceffio-system-ceffio-redirect-https@kubernetescrd
+spec:
+  ingressClassName: traefik
+  tls:
+  - hosts: [` + domain + `]
+    secretName: ceffio-org-tls
+  rules:
+  - host: ` + domain + `
+    http:
+      paths:
+      - path: /.well-known/security.txt
+        pathType: Exact
+        backend:
+          service:
+            name: ceffio-admin
+            port:
+              number: 8088
+`
 }

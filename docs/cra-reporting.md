@@ -65,6 +65,18 @@ published on the [SRP status page](https://www.enisa.europa.eu/topics/product-se
 (a notification due while the platform is down has its own procedure, FAQ
 question 25).
 
+## The public contact file
+
+`https://ceffio.org/.well-known/security.txt` (RFC 9116) points a scanner or a
+researcher at the mailbox, with `Expires`, the canonical URL and the policy.
+
+**It is served by the project's own installation only.** The console answers 404
+on every other domain and creates no route for it — a customer runs their own
+service, their security contact is theirs, and our address on their domain would
+send reports to the wrong party. A test enforces both halves: the content on
+`ceffio.org`, the 404 elsewhere, and an `Expires` that must stay at least 300
+days ahead or the build fails.
+
 ## What this project gives the person who has to notify
 
 The notification asks what runs, where, and since when. That is exactly what the
