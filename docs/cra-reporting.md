@@ -49,6 +49,22 @@ Users hear about it through a Security Advisory and the release notes.
 ENISA's own advice: register **when a notification is needed**, not
 pre-emptively. The account is not a subscription.
 
+## Where the account stands
+
+| | |
+|---|---|
+| EU Login | created, for the AR |
+| SRP account | **Active**, role *AR Primary User* |
+| Manufacturer | MANDEM |
+| Coordinating CSIRT | CSIRT France — CERT-FR (ANSSI) |
+| Association AR ↔ manufacturer | validated by CERT-FR after registration, **in parallel**; it does not block a notification |
+| Secondary AR | **to be invited** — the invitation lives 7 days |
+
+The platform is at <https://portal.cra-srp.enisa.europa.eu>; its state is
+published on the [SRP status page](https://www.enisa.europa.eu/topics/product-security/vulnerability-services/eu-incident-response-and-cyber-crisis-management/single-reporting-platform-srp/cra-srp-status)
+(a notification due while the platform is down has its own procedure, FAQ
+question 25).
+
 ## What this project gives the person who has to notify
 
 The notification asks what runs, where, and since when. That is exactly what the
