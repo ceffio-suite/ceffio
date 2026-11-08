@@ -5,6 +5,7 @@ package longhornui
 
 import (
 	"fmt"
+	"github.com/ceffio-suite/ceffio/internal/version"
 
 	"github.com/ceffio-suite/ceffio/internal/vault"
 )
@@ -137,7 +138,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: oauth2-proxy
-          image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.5
+          image: %[12]s
           args:
             - --provider=keycloak-oidc
             - --oidc-issuer-url=%[5]s
@@ -208,7 +209,12 @@ spec:
             name: %[9]s
 `, nomDeploy, nsSysteme, annotations, nomServiceAccount,
 		issuer, clientOIDC, cheminAdresses, hote, nomConfig,
-		cheminSecretClient, cheminSecretCookie)
+		cheminSecretClient, cheminSecretCookie,
+		// L'IMAGE VIENT DU REGISTRE. Elle était écrite ici en clair, et le
+		// module — optionnel, donc rejoué à chaque upgrade — réappliquait
+		// l'ancienne version : « oauth2-proxy : still on v7.15.5 (target
+		// v7.15.6) » après une mise à jour complète.
+		version.Image("oauth2-proxy"))
 }
 
 // manifesteServiceEtRoute builds the ClusterIP Service and the Ingress.

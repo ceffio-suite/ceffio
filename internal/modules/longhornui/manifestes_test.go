@@ -76,10 +76,20 @@ func TestLImageEstEpinglee(t *testing.T) {
 	if !strings.HasPrefix(img, "quay.io/oauth2-proxy/oauth2-proxy:") {
 		t.Errorf("image = %q, attendu l'image officielle épinglée", img)
 	}
-	tag := img[strings.LastIndex(img, ":")+1:]
+	// LE DIGEST EST MAINTENANT LÀ AUSSI : l'image vient du registre, qui épingle
+	// par digest. On lit donc l'étiquette AVANT le "@", sinon on lit le digest.
+	reference := img
+	if i := strings.Index(reference, "@"); i >= 0 {
+		reference = reference[:i]
+	}
+	tag := reference[strings.LastIndex(reference, ":")+1:]
 	if tag == "latest" || !strings.HasPrefix(tag, "v") {
 		t.Errorf("tag = %q : une étiquette flottante ferait varier la décision "+
 			"d'autorisation entre deux installations de la même version de Ceffio", tag)
+	}
+	// Un digest est une garantie plus forte qu'une étiquette : il doit être là.
+	if !strings.Contains(img, "@sha256:") {
+		t.Errorf("image = %q : le registre épingle par digest, le manifeste doit le porter", img)
 	}
 }
 
