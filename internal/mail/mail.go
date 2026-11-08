@@ -31,6 +31,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"github.com/ceffio-suite/ceffio/internal/version"
 	"os"
 	"strings"
 	"time"
@@ -44,11 +45,14 @@ import (
 
 // Actual version observed on Docker Hub (not invented).
 const (
-	stalwartImage = "docker.io/stalwartlabs/stalwart:v0.16.26"
-	ns            = "ceffio-mail"
+	ns = "ceffio-mail"
 	// Default domain for the mailboxes. Overridden by the caller.
 	domaineDefaut = "example.com"
 )
+
+// LES IMAGES VIENNENT DU REGISTRE, pas d'une copie locale : une copie est ce
+// qui a laissé le registre avancer pendant que la grappe restait en arrière.
+var stalwartImage = version.Image("stalwart")
 
 // Deploy installs the mail layer (Phase 13), idempotently:
 //  1. secrets (admin password, storage key)

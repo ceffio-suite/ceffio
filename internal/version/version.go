@@ -402,3 +402,24 @@ func ComposantBinaire() (Composant, bool) {
 		Licence: "AGPL-3.0-or-later",
 	}, true
 }
+
+// Image returns the pinned reference (tag AND digest) of a component.
+//
+// WHY IT PANICS: the caller is a module that has just been rewritten to ask
+// instead of carrying its own copy. A name that does not exist is a programming
+// error, and a package that panics at init is caught by the first test that
+// imports it — whereas an empty image would deploy nothing and say nothing.
+//
+// WHY IT EXISTS AT ALL: ten modules carried their own image constant
+// (files.nextcloudImage, identity.keycloakImage…), so the registry described
+// versions the deployment never used. An upgrade moved the registry, compared
+// the registry, and left the cluster on the old image — reported afterwards as
+// "still on 26.7.3 (target 26.8.2)". One source, or none.
+func Image(nom string) string {
+	for _, c := range Registry {
+		if c.Nom == nom {
+			return c.Image
+		}
+	}
+	panic("version.Image: composant inconnu : " + nom)
+}

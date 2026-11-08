@@ -72,6 +72,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/ceffio-suite/ceffio/internal/version"
 	"os"
 	"strings"
 	"time"
@@ -83,10 +84,6 @@ import (
 )
 
 const (
-	// Real version observed on Docker Hub (not invented): 2.7.1, published
-	// 2026-10-01.
-	openbaoImage = "docker.io/openbao/openbao:2.7.1"
-
 	ns      = "ceffio-vault"
 	service = "openbao"
 	pod     = "openbao-0"
@@ -95,6 +92,10 @@ const (
 	cheminCle     = "/openbao/secrets/unseal.key"
 	cheminAudit   = "/openbao/audit/audit.log"
 )
+
+// openbaoImage: READ FROM THE REGISTRY, not copied. The copy is what let the
+// registry move while the cluster stayed on the old image.
+var openbaoImage = version.Image("openbao")
 
 // Resultat gives the caller what it needs to consume the vault
 // (BAO_ADDR/BAO_TOKEN). Pret=false means "the vault is not there, continue
