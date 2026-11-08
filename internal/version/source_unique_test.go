@@ -11,8 +11,15 @@ import (
 	"testing"
 )
 
-// littéralImage reconnaît une image de conteneur écrite en dur.
-var littéralImage = regexp.MustCompile(`(?m)^\s*\w+[Ii]mage\s*=\s*"[a-z0-9.-]+/[^"]*"`)
+// littéralImage reconnaît une image de conteneur écrite en dur, sous les DEUX
+// formes que ce dépôt a produites : une affectation Go, et une ligne YAML dans
+// un manifeste construit par fmt.Sprintf. La seconde a échappé à la première
+// version de ce test — oauth2-proxy est resté en v7.15.5 après un upgrade
+// complet, parce que le module écrivait l'image en clair dans son Deployment.
+var littéralImage = regexp.MustCompile(`(?m)^\s*(\w+[Ii]mage\s*=\s*"|image:\s*)[a-z0-9.-]+\.[a-z]+/[^"\s]*`)
+
+// imageYAML attrape la forme YAML quand l'image est sur la même ligne que la clé.
+var imageYAML = regexp.MustCompile(`(?m)^\s*image:\s*\S+`)
 
 // TestAucuneImageEnDurHorsDuRegistre: le registre se dit « source unique », et
 // dix modules gardaient pourtant leur propre constante.
@@ -49,6 +56,13 @@ func TestAucuneImageEnDurHorsDuRegistre(t *testing.T) {
 			return err
 		}
 		for _, ligne := range littéralImage.FindAllString(string(brut), -1) {
+			coupables = append(coupables, chemin+" : "+strings.TrimSpace(ligne))
+		}
+		for _, ligne := range imageYAML.FindAllString(string(brut), -1) {
+			// Une image interpolée (`image: %[12]s`) n'est pas un littéral.
+			if strings.Contains(ligne, "%") {
+				continue
+			}
 			coupables = append(coupables, chemin+" : "+strings.TrimSpace(ligne))
 		}
 		return nil
