@@ -575,20 +575,38 @@ func TestStopEnTableauEstNotifie(t *testing.T) {
 	if len(recues) != 2 {
 		t.Fatalf("%d notification(s), attendu deux — un stop en tableau doit être notifié", len(recues))
 	}
-	var avis map[string]any
-	_ = json.Unmarshal(recues[0], &avis)
-	if avis["type"] != "stop" || avis["token"] != "tok0x" {
-		t.Errorf("notification = %s", recues[0])
+	// L'ORDRE N'EST PAS GARANTI : les deux notifications partent en parallèle,
+	// et supposer qu'elles arrivent dans l'ordre des requêtes a déjà rendu ce
+	// test rouge en CI alors que le relais était correct. On les range par
+	// jeton, qui est ce qu'elles décrivent.
+	parJeton := map[string]map[string]any{}
+	for _, brute := range recues {
+		var avis map[string]any
+		if err := json.Unmarshal(brute, &avis); err != nil {
+			t.Fatalf("notification illisible (%s) : %v", brute, err)
+		}
+		jeton, _ := avis["token"].(string)
+		parJeton[jeton] = avis
+	}
+	sansActeur, ok := parJeton["tok0x"]
+	if !ok {
+		t.Fatalf("aucune notification pour tok0x : %v", parJeton)
+	}
+	if sansActeur["type"] != "stop" {
+		t.Errorf("type = %v, attendu stop", sansActeur["type"])
 	}
 	// LE PREMIER N'A PAS D'ACTEUR, ET C'EST NORMAL : le champ est omis.
-	if _, ok := avis["actor"]; ok {
-		t.Errorf("un acteur a été inventé pour un stop qui n'en portait pas : %s", recues[0])
+	if _, present := sansActeur["actor"]; present {
+		t.Errorf("un acteur a été inventé pour un stop qui n'en portait pas : %v", sansActeur)
 	}
 	// LE SECOND LE PORTE, TEL QUEL.
-	_ = json.Unmarshal(recues[1], &avis)
-	acteur, _ := avis["actor"].(map[string]any)
+	avecActeur, ok := parJeton["tok1x"]
+	if !ok {
+		t.Fatalf("aucune notification pour tok1x : %v", parJeton)
+	}
+	acteur, _ := avecActeur["actor"].(map[string]any)
 	if acteur["id"] != "bob" {
-		t.Errorf("acteur = %v, attendu celui de la requête", avis["actor"])
+		t.Errorf("acteur = %v, attendu celui de la requête", avecActeur["actor"])
 	}
 }
 
