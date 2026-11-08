@@ -34,7 +34,6 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/version"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/ceffio-suite/ceffio/internal/ingress"
 	"github.com/ceffio-suite/ceffio/internal/k8s"
@@ -397,21 +396,23 @@ spec:
 // configured domain fails for the wrong reasons.
 func waitReady(ctx context.Context) error {
 	fmt.Println("∙ waiting for Stalwart to be ready...")
-	limite := time.Now().Add(4 * time.Minute)
-	for time.Now().Before(limite) {
-		out, _ := k8s.Command(ctx, "kubectl", "-n", ns, "get", "pods",
-			"-l", "app=stalwart", "-o", "jsonpath={.items[*].status.containerStatuses[*].ready}").Output()
-		if strings.TrimSpace(string(out)) == "true" {
-			fmt.Println("  ✓ Stalwart ready")
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(5 * time.Second):
-		}
+	// ON ATTEND LE DÉPLOIEMENT, PAS UN POD QUELCONQUE.
+	//
+	// « Un pod porte readiness=true » est vrai dès que l'ancien RéplicaSet l'est,
+	// c'est-à-dire pendant tout le rollout : la vérification rendait la main
+	// immédiatement, et l'étape suivante (un exec) tombait sur le pod que le
+	// kubelet était en train de supprimer. Mesuré en production, au passage à
+	// Stalwart 1.0.3 : « JMAP call x:AllowedIp/get: exit status 7 ».
+	//
+	// `rollout status` attend le NOUVEAU RéplicaSet, celui qui va servir.
+	out, err := k8s.Command(ctx, "kubectl", "-n", ns, "rollout", "status",
+		"deployment/stalwart", "--timeout=240s").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("Stalwart did not become ready within 4 minutes: %w: %s",
+			err, strings.TrimSpace(string(out)))
 	}
-	return fmt.Errorf("Stalwart is not ready after 4 minutes")
+	fmt.Println("  ✓ Stalwart ready")
+	return nil
 }
 
 // configurerRelais declares the outbound send relay.
