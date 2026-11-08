@@ -164,7 +164,7 @@ var Registry = []Composant{
 		Module: "internal/vault", Role: "secrets vault: centralization, rotation, audit", Licence: "MPL-2.0",
 	},
 	{
-		Nom: "onlyoffice", Image: "docker.io/onlyoffice/documentserver:9.4.0.1@sha256:3ab6ebc7c605e5a32b7ae3ff19daed4925090245acc8100ce2230bd766c88212",
+		Nom: "onlyoffice", Image: "docker.io/onlyoffice/documentserver:10.0.0.1@sha256:ca17889f10b11141cc6441836aebdd2835cf3e1b49681b2fd6e155c94b7850b3",
 		Module: "internal/office", Role: "document editing", Licence: "AGPL-3.0-or-later",
 	},
 	{
