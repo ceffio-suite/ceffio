@@ -4,11 +4,18 @@
 package identity
 
 import (
+	"context"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/ceffio-suite/ceffio/internal/identity/theme"
+	"github.com/ceffio-suite/ceffio/internal/k8sapi"
 )
 
 // TestLesClassesDuHeaderSontStylees is the check the plan asks for, and it catches a
@@ -187,5 +194,50 @@ func TestCorpsJSONIsoleLeDocument(t *testing.T) {
 		if got := corpsJSON(cas.entree); got != cas.attendu {
 			t.Errorf("%s :\n  obtenu  %q\n  attendu %q", cas.nom, got, cas.attendu)
 		}
+	}
+}
+
+// TestPodKeycloakIgnoreUnPodQuiMeurt: le pod en cours de suppression répond
+// encore « Ready » quelques secondes, et un exec dessus est tué avec lui.
+//
+// LE DÉFAUT, MESURÉ : juste après le déploiement de Keycloak 26.8, l'application
+// du thème a échoué avec « command terminated with exit code 137 » — rien
+// d'autre. Le pod choisi était celui que le kubelet était en train de tuer.
+func TestPodKeycloakIgnoreUnPodQuiMeurt(t *testing.T) {
+	maintenant := time.Now()
+	cli := fake.NewSimpleClientset(
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "keycloak-vieux", Namespace: "ceffio-identity",
+				Labels:            map[string]string{"app": "keycloak"},
+				CreationTimestamp: metav1.NewTime(maintenant.Add(-time.Hour)),
+			},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{Name: "keycloak", Ready: true}}},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "keycloak-neuf", Namespace: "ceffio-identity",
+				Labels:            map[string]string{"app": "keycloak"},
+				CreationTimestamp: metav1.NewTime(maintenant),
+			},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{Name: "keycloak", Ready: true}}},
+		},
+	)
+	// Le vieux pod est marqué pour suppression : il ne doit jamais être choisi.
+	vieux, _ := cli.CoreV1().Pods("ceffio-identity").Get(context.Background(), "keycloak-vieux", metav1.GetOptions{})
+	vieux.DeletionTimestamp = &metav1.Time{Time: maintenant}
+	if _, err := cli.CoreV1().Pods("ceffio-identity").Update(context.Background(), vieux, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("marquage du pod : %v", err)
+	}
+
+	client := k8sapi.PourTest(cli, nil)
+	nom, err := podKeycloak(context.Background(), client, "ceffio-identity")
+	if err != nil {
+		t.Fatalf("podKeycloak : %v", err)
+	}
+	if nom != "keycloak-neuf" {
+		t.Errorf("pod choisi = %q, attendu keycloak-neuf (le plus récent, pas celui qui meurt)", nom)
 	}
 }

@@ -163,10 +163,25 @@ func podKeycloak(ctx context.Context, cli *k8sapi.Client, ns string) (string, er
 	if err != nil {
 		return "", fmt.Errorf("listing the keycloak pods: %w", err)
 	}
-	for _, p := range pods {
-		if p.Ready && p.Phase == "Running" {
-			return p.Name, nil
+	// UN POD EN COURS DE SUPPRESSION RÉPOND ENCORE « Ready » QUELQUES SECONDES.
+	// Le choisir, c'est attacher l'exec à un processus que le kubelet va tuer :
+	// « command terminated with exit code 137 », sans un mot d'explication —
+	// mesuré au premier passage sur Keycloak 26.8, juste après le déploiement.
+	//
+	// On garde donc le plus RÉCENT des pods sains : c'est celui du déploiement
+	// en cours.
+	var choisi *k8sapi.Pod
+	for i := range pods {
+		p := pods[i]
+		if !p.Ready || p.Phase != "Running" || p.Supprime {
+			continue
 		}
+		if choisi == nil || p.Cree.After(choisi.Cree) {
+			choisi = &p
+		}
+	}
+	if choisi != nil {
+		return choisi.Name, nil
 	}
 	return "", fmt.Errorf("no Ready keycloak pod in %s: the realm cannot be read or "+
 		"written until one is running", ns)
