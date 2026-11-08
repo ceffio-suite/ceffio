@@ -127,7 +127,7 @@ var Registry = []Composant{
 		Module: "internal/talk", Role: "Talk: session coordination", Licence: "AGPL-3.0-or-later",
 	},
 	{
-		Nom: "janus", Image: "ghcr.io/ceffio-suite/janus-gateway:1.4.3-1@sha256:f6d3e495f3bb671ddaff1a1b0d7adf697a2de469cf6351d22fc1403a0a9d0ea9",
+		Nom: "janus", Image: "ghcr.io/ceffio-suite/janus-gateway:1.4.3-2@sha256:0034ce2f7f24071ee1da55eadbc92b90347b6c1491e52f68ed1ecf6cbe029ea5",
 		Module: "internal/talk", Role: "Talk: SFU, media transport", Licence: "GPL-3.0-only",
 	},
 	{
