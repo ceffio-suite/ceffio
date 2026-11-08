@@ -5,6 +5,7 @@ package cluster
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/ceffio-suite/ceffio/internal/acme"
@@ -15,12 +16,15 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/identity"
 	"github.com/ceffio-suite/ceffio/internal/ingress"
 	"github.com/ceffio-suite/ceffio/internal/k8sapi"
+	"github.com/ceffio-suite/ceffio/internal/mail"
 	"github.com/ceffio-suite/ceffio/internal/office"
 	"github.com/ceffio-suite/ceffio/internal/platform"
 	"github.com/ceffio-suite/ceffio/internal/publicip"
 	"github.com/ceffio-suite/ceffio/internal/sso"
 	"github.com/ceffio-suite/ceffio/internal/stacks"
 	"github.com/ceffio-suite/ceffio/internal/talk"
+	"github.com/ceffio-suite/ceffio/internal/theming"
+	"github.com/ceffio-suite/ceffio/internal/vault"
 )
 
 // Redeployer replays the full deployment of an existing installation.
@@ -77,6 +81,35 @@ func Redeployer(ctx context.Context, domain string) error {
 		return err
 	}
 	if err := apps.Deploy(ctx); err != nil {
+		return err
+	}
+	// THEMING, VAULT AND MAIL ARE CORE LAYERS TOO. They were in neither replay
+	// either: an upgrade left the mailbox and the vault on the version they were
+	// installed with, and finished with "openbao : still on 2.7.1 (target 2.7.2)".
+	// The order follows the install sequence.
+	if err := theming.Deploy(ctx); err != nil {
+		return err
+	}
+	if res := vault.Deploy(ctx, domain); res != nil && !res.Pret {
+		// LE COFFRE N'EST PAS PRÊT : ce n'est pas fatal ici (les couches qui
+		// suivent lisent leurs secrets au démarrage), mais le taire ferait
+		// passer une installation dégradée pour une réussite.
+		fmt.Printf("  ! vault not ready after the replay (%s)\n", res.Adresse)
+	}
+	// THE SEND RELAY IS NOT REPLAYED: it lives in Stalwart's own configuration,
+	// written through its admin API, and the install path only verifies it. An
+	// empty relay here therefore changes nothing — it must not wipe what the
+	// operator configured.
+	if err := mail.Deploy(ctx, domain, "", 0, "", ""); err != nil {
+		return err
+	}
+	if err := mail.ConfigurerSSO(ctx, domain, mail.SSO{
+		Hote:         mail.DomaineMessagerie(domain),
+		Issuer:       "https://keycloak." + domain + "/realms/ceffio",
+		ClientID:     "stalwart-webui",
+		DomaineAdmin: "ceffio.local",
+		CompteAdmin:  "adminceffio",
+	}); err != nil {
 		return err
 	}
 
