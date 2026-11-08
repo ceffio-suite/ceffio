@@ -172,7 +172,7 @@ var Registry = []Composant{
 		Module: "internal/data", Role: "cache and shared state", Licence: "BSD-3-Clause",
 	},
 	{
-		Nom: "stalwart", Image: "docker.io/stalwartlabs/stalwart:v0.16.26@sha256:254ce5d7f3dbe4bb628ce2c7912e664ecb1c3466db79907f4a44d9a00117776b",
+		Nom: "stalwart", Image: "docker.io/stalwartlabs/stalwart:v0.16.27@sha256:c429b311c93db5606598abc1c68225a85a6953183848ae01bee9c6a98885836c",
 		Module: "internal/mail", Role: "mail: inbound SMTP, IMAP, filters", Licence: "AGPL-3.0-only",
 	},
 	{
