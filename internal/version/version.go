@@ -115,11 +115,11 @@ type Composant struct {
 // VerifierCoherence() function checks it and the test verifies it.
 var Registry = []Composant{
 	{
-		Nom: "keycloak", Image: "quay.io/keycloak/keycloak:26.7.3@sha256:29be7252db0a106f1cd2ac17b9a56ff2668073da645638a38b9fc67deeb2d6c4",
+		Nom: "keycloak", Image: "quay.io/keycloak/keycloak:26.8.2@sha256:3879c623248408de29a5303178b5816c77e8dfef3890c361f8c0bbeaa979ba3b",
 		Module: "internal/identity", Role: "identity, OIDC SSO", Licence: "Apache-2.0",
 	},
 	{
-		Nom: "nextcloud", Image: "docker.io/library/nextcloud:34.0.3@sha256:b97df9e0e1ee3c8c6cc009cb3f12ddce915d624d543b3bb93882025fe323a407",
+		Nom: "nextcloud", Image: "docker.io/library/nextcloud:35.0.2@sha256:d88929dc8386420b8963f86cabb667fdaf733eef9dcf8fc98e226801a32c023c",
 		Module: "internal/files", Role: "files and documents", Licence: "AGPL-3.0-or-later",
 	},
 	{
@@ -148,7 +148,7 @@ var Registry = []Composant{
 		// part of Nextcloud AIO. We pin an exact date rather than "latest" —
 		// a floating tag would make an installation non-reproducible, which is
 		// the rule this file enforces.
-		Nom: "talk-recording", Image: "docker.io/nextcloud/aio-talk-recording:20261014_095932@sha256:eba5ed834c044e624155cd8f11cfa37d5de505ae17ff41c0251cfa9efb24a010",
+		Nom: "talk-recording", Image: "docker.io/nextcloud/aio-talk-recording:20261029_171813@sha256:4c706359e025640c2415fd0321b0ed8b4cd3a8b154193eb170343bb1ed8f089d",
 		Module: "internal/recording", Role: "server-side call recording for Talk", Licence: "AGPL-3.0-or-later",
 	},
 	{
@@ -156,11 +156,11 @@ var Registry = []Composant{
 		Module: "internal/talk", Role: "Talk: TURN/STUN relay", Licence: "BSD-3-Clause",
 	},
 	{
-		Nom: "nats", Image: "docker.io/library/nats:2.15@sha256:991242c32d2738ffd358fd6614dd96c735017b4b3b34bfdb2c52a072d66db211",
+		Nom: "nats", Image: "docker.io/library/nats:2.15.2@sha256:b6c40dcfe5ae9174dcafa9c43f800afb93b8b0ffcde02ac00efc6b66031d9a50",
 		Module: "internal/talk", Role: "Talk: signaling messaging", Licence: "Apache-2.0",
 	},
 	{
-		Nom: "openbao", Image: "docker.io/openbao/openbao:2.7.1@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf",
+		Nom: "openbao", Image: "docker.io/openbao/openbao:2.7.2@sha256:5046911075e137e154ce49ab051502f4ec7cf367d484ae4a4dce665d9b90561f",
 		Module: "internal/vault", Role: "secrets vault: centralization, rotation, audit", Licence: "MPL-2.0",
 	},
 	{
@@ -168,7 +168,7 @@ var Registry = []Composant{
 		Module: "internal/office", Role: "document editing", Licence: "AGPL-3.0-or-later",
 	},
 	{
-		Nom: "valkey", Image: "docker.io/valkey/valkey:8.1.10@sha256:640c5e62cea04b6d6f2084232651d0cc70362d31f4f805e7be94dbed6855e8f2",
+		Nom: "valkey", Image: "docker.io/valkey/valkey:9.2@sha256:247b5e730bdc9dc29fddb8274d1731b203a1a1a46af63eae3a9d55b4bf74853f",
 		Module: "internal/data", Role: "cache and shared state", Licence: "BSD-3-Clause",
 	},
 	{
@@ -193,7 +193,7 @@ var Registry = []Composant{
 	// authorization decision, and an unpinned tag would let that decision change
 	// between two installs of the same Ceffio version.
 	{
-		Nom: "oauth2-proxy", Image: "quay.io/oauth2-proxy/oauth2-proxy:v7.15.5@sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916",
+		Nom: "oauth2-proxy", Image: "quay.io/oauth2-proxy/oauth2-proxy:v7.15.6@sha256:c3415e8660af553f5e18f5d90db050614c02493c0ac6260ac59442f6d9b12048",
 		Module: "internal/modules/longhornui",
 		Role:   "Put a single sign-on in front of the Longhorn interface, which has none", Licence: "MIT",
 	},
