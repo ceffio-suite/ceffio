@@ -119,7 +119,7 @@ var Registry = []Composant{
 		Module: "internal/identity", Role: "identity, OIDC SSO", Licence: "Apache-2.0",
 	},
 	{
-		Nom: "nextcloud", Image: "docker.io/library/nextcloud:34.0.3@sha256:b97df9e0e1ee3c8c6cc009cb3f12ddce915d624d543b3bb93882025fe323a407",
+		Nom: "nextcloud", Image: "docker.io/library/nextcloud:35.0.2@sha256:d88929dc8386420b8963f86cabb667fdaf733eef9dcf8fc98e226801a32c023c",
 		Module: "internal/files", Role: "files and documents", Licence: "AGPL-3.0-or-later",
 	},
 	{
@@ -168,7 +168,7 @@ var Registry = []Composant{
 		Module: "internal/office", Role: "document editing", Licence: "AGPL-3.0-or-later",
 	},
 	{
-		Nom: "valkey", Image: "docker.io/valkey/valkey:8.1.10@sha256:640c5e62cea04b6d6f2084232651d0cc70362d31f4f805e7be94dbed6855e8f2",
+		Nom: "valkey", Image: "docker.io/valkey/valkey:9.2@sha256:247b5e730bdc9dc29fddb8274d1731b203a1a1a46af63eae3a9d55b4bf74853f",
 		Module: "internal/data", Role: "cache and shared state", Licence: "BSD-3-Clause",
 	},
 	{
