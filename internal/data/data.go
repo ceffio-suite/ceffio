@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"github.com/ceffio-suite/ceffio/internal/storage"
+	"github.com/ceffio-suite/ceffio/internal/version"
 	"os"
 	"strings"
 	"time"
@@ -32,11 +33,11 @@ const (
 	cnpgNamespace    = "cnpg-system"
 	pgClusterName    = "ceffio-pg"
 	pgNamespace      = "ceffio-data"
-	// Valkey 8.1.10: latest stable of the 8.x branch at the time of the license
-	// migration (verified on Docker Hub, published 2026-09-21). Pinned exactly:
-	// no "8", no "latest".
-	valkeyImage = "docker.io/valkey/valkey:8.1.10"
 )
+
+// valkeyImage: the cache and session store. READ FROM THE REGISTRY, not copied:
+// a copy is what let the registry move while the cluster stayed behind.
+var valkeyImage = version.Image("valkey")
 
 // Deploy installs the data layer (Phase 3), idempotently:
 //  1. CloudNativePG operator

@@ -55,9 +55,6 @@ const (
 	secretPull = "ghcr-pull"
 
 	// HPB images.
-	signalingImage = "docker.io/strukturag/nextcloud-spreed-signaling:2.1.1"
-	natsImage      = "docker.io/library/nats:2.15"
-	coturnImage    = "docker.io/coturn/coturn:4.18"
 
 	// STUN server in charge of discovering the public address Janus must
 	// announce, when it is not provided at deploy time.
@@ -84,6 +81,12 @@ const (
 	portJanusAPI    = 8088 // Janus HTTP API (used by the signaling)
 	portJanusWS     = 8188 // Janus WebSocket transport
 )
+
+// LES IMAGES VIENNENT DU REGISTRE, pas d'une copie locale : une copie est ce
+// qui a laissé le registre avancer pendant que la grappe restait en arrière.
+var signalingImage = version.Image("talk-signaling")
+var natsImage = version.Image("nats")
+var coturnImage = version.Image("coturn")
 
 // The Janus image is READ FROM THE VERSION REGISTRY, not duplicated here.
 // It was duplicated, and the two copies had drifted (1.3.0-1 in the registry,

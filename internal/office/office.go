@@ -16,6 +16,7 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"github.com/ceffio-suite/ceffio/internal/storage"
 	"github.com/ceffio-suite/ceffio/internal/vault"
+	"github.com/ceffio-suite/ceffio/internal/version"
 	"os"
 	"strings"
 	"time"
@@ -23,8 +24,7 @@ import (
 
 // Pinned versions (discovered via Docker Hub / Quay, not invented).
 const (
-	officeImage = "docker.io/onlyoffice/documentserver:9.4.0.1"
-	ns          = "ceffio-office"
+	ns = "ceffio-office"
 	// ONLYOFFICE service name for the connector (internal URL).
 	//
 	// THE TRAILING SLASH IS REQUIRED, and its absence is silent. The connector's
@@ -44,6 +44,9 @@ const (
 	// Nextcloud (ceffio-files namespace) for installing the connector.
 	nextcloudNS = "ceffio-files"
 )
+
+// officeImage: READ FROM THE REGISTRY, not copied.
+var officeImage = version.Image("onlyoffice")
 
 // Deploy installs the office layer (Phase 6), idempotently:
 //  1. ONLYOFFICE JWT secret (generated, shared with the connector)
