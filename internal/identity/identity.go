@@ -126,7 +126,7 @@ func Deploy(ctx context.Context) error {
 	// IT IS IDEMPOTENT: assurerUnClient rewrites the same properties on every run and
 	// reuses each client's stored secret, so reapplying costs a few API calls and
 	// changes nothing that was already right.
-	if err := sso.EnsureOIDCClients(ctx, domaineDepuisKeycloak()); err != nil {
+	if err := sso.EnsureOIDCClients(ctx, domaineAnnonce()); err != nil {
 		return fmt.Errorf("the suite's OIDC clients could not be applied: %w", err)
 	}
 
@@ -134,17 +134,22 @@ func Deploy(ctx context.Context) error {
 	return nil
 }
 
-// domaineDepuisKeycloak returns the installation's domain, read from what Keycloak
-// itself announces.
+// domaineAnnonce returns the domain that the caller announced through PoserDomaine.
 //
-// WHY NOT A PARAMETER: Deploy takes none, and the callers that have the domain
-// (install, redeploy) already pass it to EnsureOIDCClients themselves. Reading it from
-// the running Keycloak keeps this function self-contained — and it is the authoritative
-// answer, since KC_HOSTNAME is what the issuer is built from.
+// ITS OLD NAME — domaineDepuisKeycloak — CLAIMED A READ THAT NEVER HAPPENED: it said
+// the domain was "read from what Keycloak itself announces", and the function returned a
+// package variable. Nothing was read, KC_HOSTNAME is not even set on the Deployment
+// (see the commented block below), and the name invited the next reader to trust a
+// mechanism that did not exist. The name now says what the code does.
+//
+// WHY A PACKAGE VARIABLE AND NOT A PARAMETER: Deploy takes none, and it is called from
+// paths that do not all know the domain. Whoever knows it announces it first; whoever
+// does not (install, upgrade) deduces it from the keycloak ingress, which is the layer
+// that owns it.
 //
 // AN EMPTY DOMAIN IS AN ERROR, NOT A DEFAULT: building redirect URIs from a guessed
 // domain would write clients pointing at someone else's host.
-func domaineDepuisKeycloak() string {
+func domaineAnnonce() string {
 	return domaineEnCours
 }
 

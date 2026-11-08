@@ -49,6 +49,38 @@ canceled — and not pursued without a safety net.
 			fmt.Println()
 			fmt.Println("Preflight...")
 
+			// THE DOMAIN, DEDUCED WHEN THE FLAG IS ABSENT — and refused when it
+			// cannot be found, BEFORE anything is modified.
+			//
+			// The replay reapplies the suite's OIDC clients and builds their return
+			// addresses from the domain. With an empty one it stopped at the SSO
+			// phase, i.e. AFTER the backup and after having replayed the platform,
+			// data and identity layers: the operator was left with a half-replayed
+			// stack and an error about a redirect_uri.
+			//
+			// THE HELP TEXT PROMISED THE DEDUCTION AND NOBODY IMPLEMENTED IT. The
+			// reader it needed already existed — domaineDeLaPlateforme reads the
+			// keycloak ingress, the layer that owns the domain — so this adds no
+			// second source of truth: --domain, when given, still wins.
+			//
+			// AN EMPTY DOMAIN IS NOT A DEFAULT: pointing return addresses at a
+			// guessed host would break every login silently.
+			if domaine == "" {
+				domaine = domaineDeLaPlateforme(ctx)
+				if domaine != "" {
+					fmt.Printf("Domain: %s (deduced from the keycloak ingress)\n", domaine)
+				}
+			}
+			if domaine == "" {
+				fmt.Println()
+				fmt.Println("  ✗ the installation's domain could not be read from the keycloak ingress")
+				fmt.Println("    pass --domain <domain>: the replay builds the suite's OIDC return")
+				fmt.Println("    addresses from it, and there is no safe default")
+				fmt.Println()
+				fmt.Println("✗ Preflight refused — nothing was modified.")
+				os.Exit(1)
+			}
+
 			cible := cibleUpgrade()
 
 			plan := upgrade.Preparer(ctx, cible)
