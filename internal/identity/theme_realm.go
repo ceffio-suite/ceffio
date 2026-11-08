@@ -113,7 +113,12 @@ func appliquerThemeRealm(ctx context.Context, ns string, r ReglagesRealm) error 
 // THE PASSWORD NEVER TRAVELS ON THE COMMAND LINE, which every process on the node
 // can read: it stays in the shell variable the file defines.
 func kcadmConnecte() string {
+	// KCADM EST UNE SECONDE JVM DANS LE MÊME CONTENEUR. Sans plafond, elle prend
+	// la même fraction de mémoire que Keycloak et le noyau tue le client — mesuré
+	// en production : exit 137, « the login theme could not be applied », au
+	// premier passage sur Keycloak 26.8.
 	return `set -a; . /secrets/env; set +a; ` +
+		`export JAVA_OPTS="${JAVA_OPTS:--Xmx256m -XX:MaxMetaspaceSize=192m}"; ` +
 		`/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 ` +
 		`--realm master --user "$KC_BOOTSTRAP_ADMIN_USERNAME" ` +
 		`--password "$KC_BOOTSTRAP_ADMIN_PASSWORD" >/dev/null && `
