@@ -924,6 +924,14 @@ type Pod struct {
 	Name  string
 	Phase string
 	Ready bool
+	// Supprime dit que le pod est en cours de suppression. UN POD QUI MEURT
+	// RÉPOND ENCORE « Ready » PENDANT QUELQUES SECONDES, et un `exec` dessus
+	// est tué avec lui : c'est ce qui a fait échouer l'application du thème
+	// Keycloak juste après un déploiement, avec un exit 137 sans message.
+	Supprime bool
+	// Cree permet de départager deux pods sains : le plus récent est celui du
+	// déploiement en cours.
+	Cree time.Time
 }
 
 // Pods lists the pods of a namespace, optionally filtered by a label selector.
@@ -945,7 +953,13 @@ func (c *Client) Pods(ctx context.Context, ns, selecteur string) ([]Pod, error) 
 				break
 			}
 		}
-		out = append(out, Pod{Name: p.Name, Phase: string(p.Status.Phase), Ready: ready})
+		out = append(out, Pod{
+			Name:     p.Name,
+			Phase:    string(p.Status.Phase),
+			Ready:    ready,
+			Supprime: p.DeletionTimestamp != nil,
+			Cree:     p.CreationTimestamp.Time,
+		})
 	}
 	return out, nil
 }
