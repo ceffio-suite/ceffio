@@ -49,19 +49,38 @@ func main() {
 	var remplacements, echecs int
 	nouveau := motifImage.ReplaceAllStringFunc(registre, func(trouve string) string {
 		image := motifImage.FindStringSubmatch(trouve)[1]
-		if strings.Contains(image, "@sha256:") {
-			fmt.Printf("  déjà épinglée : %s\n", image)
-			return trouve
-		}
 		if !strings.Contains(image, "/") {
 			fmt.Printf("  ignorée (ce n'est pas une image de conteneur) : %s\n", image)
 			return trouve
 		}
-		digest, err := digestDe(image)
+		// LE DIGEST D'ABORD, LA COMPARAISON ENSUITE.
+		//
+		// « Déjà épinglée » ne veut pas dire « il y a un digest » : après un
+		// changement d'étiquette, l'ancien digest reste dans le fichier et
+		// désigne une AUTRE image. C'est exactement ce qui est arrivé — Nextcloud
+		// 34.0.3 et 35.0.2 se sont retrouvés avec le même digest, ce qui est
+		// impossible — et le contrôle qui l'a vu est celui qui a lu le registre,
+		// pas celui qui lisait le fichier.
+		reference := image
+		deja := ""
+		if i := strings.Index(image, "@sha256:"); i >= 0 {
+			reference, deja = image[:i], image[i+1:]
+		}
+		digest, err := digestDe(reference)
 		if err != nil {
 			echecs++
 			fmt.Printf("  ÉCHEC : %s : %v\n", image, err)
 			return trouve
+		}
+		if deja == digest {
+			fmt.Printf("  déjà épinglée : %s\n", image)
+			return trouve
+		}
+		if deja != "" {
+			// LE CAS QUI MENTAIT : l'étiquette a bougé, le digest est resté.
+			remplacements++
+			fmt.Printf("  ré-épinglée : %s -> %s\n", image, digest[:19]+"…")
+			return strings.Replace(trouve, `"`+image+`"`, `"`+reference+"@"+digest+`"`, 1)
 		}
 		remplacements++
 		fmt.Printf("  épinglée : %s -> %s\n", image, digest[:19]+"…")
