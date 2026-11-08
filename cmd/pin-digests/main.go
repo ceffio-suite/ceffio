@@ -49,19 +49,47 @@ func main() {
 	var remplacements, echecs int
 	nouveau := motifImage.ReplaceAllStringFunc(registre, func(trouve string) string {
 		image := motifImage.FindStringSubmatch(trouve)[1]
-		if strings.Contains(image, "@sha256:") {
-			fmt.Printf("  déjà épinglée : %s\n", image)
-			return trouve
-		}
 		if !strings.Contains(image, "/") {
 			fmt.Printf("  ignorée (ce n'est pas une image de conteneur) : %s\n", image)
 			return trouve
 		}
-		digest, err := digestDe(image)
+		// LE DIGEST D'ABORD, LA COMPARAISON ENSUITE.
+		//
+		// « Déjà épinglée » ne veut pas dire « il y a un digest » : après un
+		// changement d'étiquette, l'ancien digest reste dans le fichier et
+		// désigne une AUTRE image. C'est exactement ce qui est arrivé — Nextcloud
+		// 34.0.3 et 35.0.2 se sont retrouvés avec le même digest, ce qui est
+		// impossible — et le contrôle qui l'a vu est celui qui a lu le registre,
+		// pas celui qui lisait le fichier.
+		reference := image
+		deja := ""
+		if i := strings.Index(image, "@sha256:"); i >= 0 {
+			reference, deja = image[:i], image[i+1:]
+		}
+		digest, err := digestDe(reference)
 		if err != nil {
+			// UNE VÉRIFICATION QUI ÉCHOUE N'EST PAS UNE ÉPINGLAGE QUI ÉCHOUE.
+			// Le registre peut être injoignable (quota, panne) alors que le
+			// digest déjà écrit est le bon : refuser d'écrire les autres
+			// corrections à cause de cela bloquerait un lot entier pour une
+			// panne passagère. Un NOUVEL épinglage, lui, reste bloquant.
+			if deja != "" {
+				fmt.Printf("  non vérifiée (registre injoignable) : %s : %v\n", image, err)
+				return trouve
+			}
 			echecs++
 			fmt.Printf("  ÉCHEC : %s : %v\n", image, err)
 			return trouve
+		}
+		if deja == digest {
+			fmt.Printf("  déjà épinglée : %s\n", image)
+			return trouve
+		}
+		if deja != "" {
+			// LE CAS QUI MENTAIT : l'étiquette a bougé, le digest est resté.
+			remplacements++
+			fmt.Printf("  ré-épinglée : %s -> %s\n", image, digest[:19]+"…")
+			return strings.Replace(trouve, `"`+image+`"`, `"`+reference+"@"+digest+`"`, 1)
 		}
 		remplacements++
 		fmt.Printf("  épinglée : %s -> %s\n", image, digest[:19]+"…")
@@ -89,11 +117,34 @@ func main() {
 // the digest that `@sha256:` must carry — the one a pull resolves per platform.
 // Using the amd64 manifest's digest instead would break arm64 installations.
 func digestDe(image string) (string, error) {
+	digest, err := inspecter(image)
+	if err == nil {
+		return digest, nil
+	}
+	// LE QUOTA DE DOCKER HUB EST UNE PANNE QUOTIDIENNE, PAS UNE ERREUR.
+	//
+	// Docker Hub limite les tirages anonymes par adresse IP, et un maintien de
+	// registre en fait quatorze d'un coup. Le miroir de Google sert les mêmes
+	// manifests, donc les mêmes digests : on y va, et ON LE DIT — un digest
+	// résolu ailleurs n'est pas un digest volé, mais il ne doit pas passer
+	// inaperçu.
+	if strings.HasPrefix(image, "docker.io/") {
+		mire := "mirror.gcr.io/" + strings.TrimPrefix(image, "docker.io/")
+		if d, errMiroir := inspecter(mire); errMiroir == nil {
+			fmt.Printf("  quota Docker Hub atteint : %s résolue via le miroir\n", image)
+			return d, nil
+		}
+	}
+	return "", fmt.Errorf("imagetools inspect : %w", err)
+}
+
+// inspecter resolves one reference through buildx.
+func inspecter(image string) (string, error) {
 	cmd := exec.Command("docker", "buildx", "imagetools", "inspect", image,
 		"--format", "{{json .Manifest.Digest}}")
 	sortie, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("imagetools inspect : %w", err)
+		return "", err
 	}
 	var digest string
 	if err := json.Unmarshal(sortie, &digest); err != nil {
