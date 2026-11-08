@@ -171,6 +171,10 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("/", s.handleIndex) // public page (the JS asks for the key for /api/*)
 	mux.HandleFunc("/api/status", s.requireAuth(s.handleStatus))
+	// The installation's bill of materials — the same document `ceffio sbom`
+	// writes, so an operator can answer "what runs here, and which bytes is it"
+	// without a terminal.
+	mux.HandleFunc("/api/sbom", s.requireAuth(s.handleSBOM))
 	mux.HandleFunc("/api/users", s.requireAuth(s.handleUsers))
 	mux.HandleFunc("/api/users/", s.requireAuth(s.handleUsersByID))
 	// Single administration account: identifier, password rotation.

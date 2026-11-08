@@ -1,0 +1,82 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright © MANDEM
+name: registry freshness
+
+# THE PIN IS A PHOTOGRAPH. Every image in internal/version is pinned by digest,
+# which is what makes the SBOM true — and what lets a component sit two years
+# behind without a single warning, because nothing in the repository looks at
+# what upstream publishes.
+#
+# This job looks, once a week, and opens ONE issue naming what moved. It does not
+# open a PR: a digest bump touches the deployment, the SBOM and the release
+# notes, and that is a decision, not a chore.
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    name: is any pinned image behind?
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Ask the registries what they publish
+        id: fraicheur
+        # 2 means "something moved" — the tool's contract, not an error.
+        run: |
+          set +e
+          go run ./cmd/registry-check > rapport.md 2>&1
+          CODE=$?
+          cat rapport.md
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Open or update the tracking issue
+        if: steps.fraicheur.outputs.code == '2'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TITRE="registry: des composants épinglés ont une version plus récente"
+          if [ -n "$(gh issue list --search "$TITRE in:title" --state open --json number -q '.[0].number')" ]; then
+            NUMERO=$(gh issue list --search "$TITRE in:title" --state open --json number -q '.[0].number')
+            {
+              echo "Mise à jour du $(date -u +%Y-%m-%dT%H:%MZ)."
+              echo
+              cat rapport.md
+            } >> commentaire.md
+            gh issue comment "$NUMERO" --body-file commentaire.md
+            echo "issue #$NUMERO mise à jour"
+          else
+            {
+              echo "Le contrôle hebdomadaire a trouvé des versions plus récentes que celles épinglées dans \`internal/version\`."
+              echo
+              echo "**Ce que ça veut dire.** Le registre est épinglé par digest : c'est ce qui rend le SBOM vrai, et c'est aussi ce qui laisse un composant vieillir en silence. Ce ticket est le seul endroit où ce silence est rompu."
+              echo
+              echo "**Ce qu'il faut faire.** Lire le tableau, choisir ce qui monte, puis : \`make pin-digests\` met à jour les digests, la release porte le changement."
+              echo
+              echo "\`\`\`"
+              cat rapport.md
+              echo "\`\`\`"
+            } > corps.md
+            gh issue create --title "$TITRE" --body-file corps.md --label dependencies
+            echo "issue créée"
+          fi
+
+      - name: Say that everything is current
+        if: steps.fraicheur.outputs.code == '0'
+        run: |
+          echo "Rien à signaler — chaque composant épinglé est la version la plus récente." >> "$GITHUB_STEP_SUMMARY"

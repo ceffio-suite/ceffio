@@ -127,7 +127,7 @@ var Registry = []Composant{
 		Module: "internal/talk", Role: "Talk: session coordination", Licence: "AGPL-3.0-or-later",
 	},
 	{
-		Nom: "janus", Image: "ghcr.io/ceffio-suite/janus-gateway:1.4.3-1@sha256:f6d3e495f3bb671ddaff1a1b0d7adf697a2de469cf6351d22fc1403a0a9d0ea9",
+		Nom: "janus", Image: "ghcr.io/ceffio-suite/janus-gateway:1.4.3-2@sha256:0034ce2f7f24071ee1da55eadbc92b90347b6c1491e52f68ed1ecf6cbe029ea5",
 		Module: "internal/talk", Role: "Talk: SFU, media transport", Licence: "GPL-3.0-only",
 	},
 	{
@@ -183,7 +183,7 @@ var Registry = []Composant{
 		//
 		// THE VERSION IS THE UPSTREAM ONE, verified with `webhook --version`
 		// rather than read from a README.
-		Nom: "acme-dns-webhook", Image: "ghcr.io/ceffio-suite/acme-dns-webhook:v1.1.0@sha256:7d42ee03d206d3b00352f6565d51d99631aae2c4c8abded0ee26320643ad4f7f",
+		Nom: "acme-dns-webhook", Image: "ghcr.io/ceffio-suite/acme-dns-webhook:v1.1.3@sha256:332a98ba283a814682e0927678203fe1b887540e44eef77e12a99332a1db0339",
 		Module: "internal/ingress", Role: "TLS: DNS-01 solver for out-of-tree DNS hosts (libdns)", Licence: "MIT", Optionnel: true,
 	},
 

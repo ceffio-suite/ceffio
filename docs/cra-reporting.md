@@ -16,6 +16,22 @@ what order, with what already in hand.
 A report received on the mailbox may become a notification on the platform; the
 reverse is not true, and the platform is not a support channel.
 
+**The mailbox is hosted outside any Ceffio installation** — verified by sending
+and receiving a message. That is not an accident worth losing: an installation
+that is down, or compromised, must not be able to silence the channel through
+which its own vulnerability is reported. A security contact hosted on the
+product is a contact that fails exactly when it is needed.
+
+**The alias is forwarded to a mailbox that is read every day**, so the message
+does not wait in an account nobody opens.
+
+**The clock starts when someone reads it**, not when the message arrives. The
+24-hour early warning is counted from the moment MANDEM becomes aware of an
+actively exploited vulnerability, and a mailbox nobody watches makes that moment
+the next working day. Whoever is on call has to read `security@` at least once a
+day; a filter that forwards it to a phone is the difference between a deadline
+met and a deadline missed.
+
 ## The deadlines
 
 From the moment MANDEM becomes aware of an actively exploited vulnerability or

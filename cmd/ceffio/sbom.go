@@ -17,7 +17,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/ceffio-suite/ceffio/internal/k8sapi"
-	"github.com/ceffio-suite/ceffio/internal/module"
 	"github.com/ceffio-suite/ceffio/internal/sbom"
 	"github.com/ceffio-suite/ceffio/internal/version"
 )
@@ -143,33 +142,9 @@ func namespaceSuivi(nom string) bool {
 	return false
 }
 
-// moduleAttendu answers whether the module that deploys a component is part of
-// what this installation is expected to run.
-//
-// A CORE MODULE RUNS ON EVERY INSTALLATION: its absence from the cluster is a
-// difference. An OPTIONAL module that is not installed is the normal state: the
-// document says installed=false, and nothing is reported as an anomaly.
-//
-// THE PACKAGE PATH IS MATCHED ON ITS LAST ELEMENT, hyphen-insensitive
-// ("internal/modules/longhornui" ↔ "longhorn-ui"): a second table of aliases
-// would drift from the first.
-func moduleAttendu(cheminPaquet string) bool {
-	court := cheminPaquet
-	if i := strings.LastIndex(court, "/"); i >= 0 {
-		court = court[i+1:]
-	}
-	court = normaliser(court)
-	for _, m := range module.All() {
-		info := m.Info()
-		if normaliser(info.ID) != court {
-			continue
-		}
-		return info.Kind == module.Core || info.Default
-	}
-	// A MODULE THE REGISTRY DOES NOT KNOW IS NOT "EXPECTED": reporting its
-	// absence would invent an expectation nobody expressed.
-	return false
-}
+// moduleAttendu relays to the shared rule: the console compares with the same
+// package, and a rule duplicated in two frontends drifts.
+func moduleAttendu(cheminPaquet string) bool { return sbom.ModuleAttendu(cheminPaquet) }
 
 func normaliser(s string) string {
 	var b strings.Builder
