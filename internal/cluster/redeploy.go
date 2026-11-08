@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ceffio-suite/ceffio/internal/acme"
+	"github.com/ceffio-suite/ceffio/internal/apps"
 	"github.com/ceffio-suite/ceffio/internal/console"
 	"github.com/ceffio-suite/ceffio/internal/data"
 	"github.com/ceffio-suite/ceffio/internal/files"
@@ -19,6 +20,7 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/publicip"
 	"github.com/ceffio-suite/ceffio/internal/sso"
 	"github.com/ceffio-suite/ceffio/internal/stacks"
+	"github.com/ceffio-suite/ceffio/internal/talk"
 )
 
 // Redeployer replays the full deployment of an existing installation.
@@ -59,6 +61,22 @@ func Redeployer(ctx context.Context, domain string) error {
 
 	// 4. Office: after files (the connector goes through occ).
 	if err := office.Deploy(ctx); err != nil {
+		return err
+	}
+
+	// 4 bis. TALK AND THE NEXTCLOUD APPS: they are CORE layers, not optional
+	// modules, and the module replay leaves them alone for that reason. Without
+	// these two calls an upgrade never touches janus, coturn, the signaling
+	// server or the installed applications — the registry pins moved, the
+	// cluster did not, and the only symptom was a persistent drift the upgrade
+	// itself reported: "janus : still on 1.4.3-1 (target 1.4.3-2)".
+	//
+	// ORDER MATTERS: talk.Deploy enables the Talk application through occ, so it
+	// has to precede the applications layer, exactly as in the install sequence.
+	if err := talk.Deploy(ctx); err != nil {
+		return err
+	}
+	if err := apps.Deploy(ctx); err != nil {
 		return err
 	}
 
