@@ -208,6 +208,10 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg>
       Monitoring
     </div>
+    <div class="nav-item" data-tab="sbom">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h11l5 5v11H4z"/><path d="M15 4v5h5"/><path d="M8 13h8M8 17h5"/></svg>
+      Bill of materials
+    </div>
     <div class="nav-item" data-tab="settings">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2 2 2 0 1 1-4 0 1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 4.6 15a2 2 0 1 1 0-4 1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 11 4.6a2 2 0 1 1 4 0 1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1A1.7 1.7 0 0 0 19.4 11a2 2 0 1 1 0 4z"/></svg>
       Settings
@@ -293,6 +297,31 @@
         uninstall action. While an operation runs, this page re-reads the state
         every 3 seconds and shows the operation journal.</p>
         <div class="grid-services" id="modulesGrid"></div>
+      </section>
+
+      <!-- SBOM -->
+      <section class="section" id="tab-sbom">
+        <h2 class="section-title">Bill of materials</h2>
+        <p class="section-sub">The same document as <span class="mono">ceffio sbom</span>:
+        every component of the version registry, with its image <b>and its digest</b>,
+        its licence and its role — plus the platform components, marked
+        <span class="mono">ceffio:pinned=false</span> because their version belongs
+        to a chart Ceffio does not control.</p>
+
+        <div class="card" style="margin-bottom:14px">
+          <div class="form-row">
+            <button class="btn" onclick="loadSBOM(true)">Compare with the cluster</button>
+            <button class="btn-ghost" onclick="downloadSBOM()">Download JSON</button>
+            <span id="sbomSummary" class="muted"></span>
+          </div>
+        </div>
+
+        <div id="sbomEcarts"></div>
+
+        <table class="table" id="sbomTable">
+          <thead><tr><th>Component</th><th>Version</th><th>Licence</th><th>Pinned</th><th>Image</th></tr></thead>
+          <tbody></tbody>
+        </table>
       </section>
 
       <!-- ADMINISTRATION -->
@@ -448,6 +477,7 @@
     monitoring:['Monitoring', 'the machine: consumption, volumes, storage'],
     modules:   ['Optional modules', 'generated from the registry'],
     settings:  ['Settings', 'declared by each module'],
+    sbom:      ['Bill of materials', 'what runs here, and which bytes it is'],
   };
 
   document.querySelectorAll('.nav-item').forEach(el => el.onclick = () => {
@@ -463,6 +493,7 @@
     if (tab === 'modules') { loadModules(); }
     if (tab === 'settings') { loadSettings(); }
     if (tab === 'monitoring') { loadMonitoring(); }
+    if (tab === 'sbom') { loadSBOM(); }
   });
 
   setInterval(() => { $('clock').textContent = new Date().toLocaleTimeString('en-GB'); }, 1000);
@@ -474,6 +505,12 @@
     $('toasts').appendChild(t);
     setTimeout(() => t.remove(), 3500);
   }
+
+  // LA PAGE EST DANS UNE IIFE : un onclick s'exécute dans le scope global et ne
+  // voit pas ces fonctions. Sans ces deux lignes, les boutons ne font rien —
+  // sans erreur, sans requête, sans message.
+  window.loadSBOM = loadSBOM;
+  window.downloadSBOM = downloadSBOM;
 
   window.openKeyModal = () => { $('keyInput').value = key; $('keyOverlay').classList.add('show'); $('keyInput').focus(); };
   window.saveKey = () => {
@@ -978,6 +1015,61 @@
 
   // ── Optional modules, generated from the registry ────────────────────────
   //
+  // THE BILL OF MATERIALS IS THE DOCUMENT, NOT A SUMMARY OF IT: the table is
+  // the same data the JSON holds, and the download gives the exact file an
+  // auditor asks for.
+  let dernierSBOM = null;
+
+  async function loadSBOM(avecCluster = false) {
+    try {
+      const d = await api('/api/sbom' + (avecCluster ? '?cluster=1' : ''));
+      dernierSBOM = d.sbom;
+      const corps = $('sbomTable').querySelector('tbody');
+      corps.innerHTML = '';
+      for (const c of (d.sbom.components || [])) {
+        const p = (nom) => ((c.properties || []).find(x => x.name === nom) || {}).value || '';
+        const licence = (c.licenses || [])[0] || {};
+        const texteLicence = (licence.license && licence.license.id) || licence.expression || '—';
+        const image = p('ceffio:image');
+        const court = image.includes('@sha256:') ? 'sha256:' + image.split('@sha256:')[1].slice(0, 12) + '…' : (image.split(':').pop() || '—');
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td>' + c.name + '</td><td class="mono">' + (c.version || '—') +
+          '</td><td>' + texteLicence + '</td><td>' + (p('ceffio:pinned') === 'false' ? '<span class="badge mut">not pinned</span>' : 'yes') +
+          '</td><td class="mono" title="' + image + '">' + court + '</td>';
+        corps.appendChild(tr);
+      }
+      $('sbomSummary').textContent = (d.sbom.components || []).length + ' composant(s)';
+
+      const zone = $('sbomEcarts');
+      zone.innerHTML = '';
+      if (d.cluster_error) {
+        zone.innerHTML = '<div class="card"><b>Comparaison impossible.</b> ' + d.cluster_error + '</div>';
+      } else if (d.ecarts) {
+        if (d.ecarts.length === 0) {
+          zone.innerHTML = '<div class="card"><b>The cluster matches the registry.</b> Aucune divergence.</div>';
+        } else {
+          let html = '<div class="card"><b>' + d.ecarts.length + ' divergence(s) avec le cluster</b><table class="table" style="margin-top:10px"><thead><tr><th>Kind</th><th>Name</th><th>Detail</th></tr></thead><tbody>';
+          for (const e of d.ecarts) {
+            html += '<tr><td>' + e.Genre + '</td><td class="mono">' + e.Nom + '</td><td class="muted">' + e.Detail + '</td></tr>';
+          }
+          zone.innerHTML = html + '</tbody></table></div>';
+        }
+      }
+    } catch (e) {
+      toast('SBOM: ' + e.message, 'err');
+    }
+  }
+
+  function downloadSBOM() {
+    if (!dernierSBOM) { toast('SBOM pas encore chargé', 'err'); return; }
+    const blob = new Blob([JSON.stringify(dernierSBOM, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'ceffio-sbom.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
   // ONE page for every optional module: /api/modules carries Info (title,
   // description, resources, warning), the observed state and the blocking
   // reason, so the cards are generated instead of hand-written per feature.

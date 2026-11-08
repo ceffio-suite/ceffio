@@ -47,6 +47,7 @@ var routesAutorisees = map[string]string{
 	"/.well-known/security.txt":          "RFC 9116, and only on the project's own domain",
 	"/api/":                              "404 for unknown API paths",
 	"/api/status":                        "cluster state",
+	"/api/sbom":                          "the installation's bill of materials",
 	"/api/users":                         "account management",
 	"/api/users/":                        "one account",
 	"/api/modules":                       "module list",
