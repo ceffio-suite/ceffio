@@ -420,7 +420,7 @@ spec:
               memory: 1536Mi
               cpu: 250m
             limits:
-              memory: 3Gi
+              memory: 4Gi
       # THE CONFIGMAP IS FLAT; THE THEME IS A TREE. items[].path rebuilds it, and
       # without that Keycloak would find every file at the theme root, look for
       # login/theme.properties, miss it, and render the DEFAULT page with no error
