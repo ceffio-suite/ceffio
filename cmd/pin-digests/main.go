@@ -68,6 +68,15 @@ func main() {
 		}
 		digest, err := digestDe(reference)
 		if err != nil {
+			// UNE VÉRIFICATION QUI ÉCHOUE N'EST PAS UNE ÉPINGLAGE QUI ÉCHOUE.
+			// Le registre peut être injoignable (quota, panne) alors que le
+			// digest déjà écrit est le bon : refuser d'écrire les autres
+			// corrections à cause de cela bloquerait un lot entier pour une
+			// panne passagère. Un NOUVEL épinglage, lui, reste bloquant.
+			if deja != "" {
+				fmt.Printf("  non vérifiée (registre injoignable) : %s : %v\n", image, err)
+				return trouve
+			}
 			echecs++
 			fmt.Printf("  ÉCHEC : %s : %v\n", image, err)
 			return trouve
@@ -108,11 +117,34 @@ func main() {
 // the digest that `@sha256:` must carry — the one a pull resolves per platform.
 // Using the amd64 manifest's digest instead would break arm64 installations.
 func digestDe(image string) (string, error) {
+	digest, err := inspecter(image)
+	if err == nil {
+		return digest, nil
+	}
+	// LE QUOTA DE DOCKER HUB EST UNE PANNE QUOTIDIENNE, PAS UNE ERREUR.
+	//
+	// Docker Hub limite les tirages anonymes par adresse IP, et un maintien de
+	// registre en fait quatorze d'un coup. Le miroir de Google sert les mêmes
+	// manifests, donc les mêmes digests : on y va, et ON LE DIT — un digest
+	// résolu ailleurs n'est pas un digest volé, mais il ne doit pas passer
+	// inaperçu.
+	if strings.HasPrefix(image, "docker.io/") {
+		mire := "mirror.gcr.io/" + strings.TrimPrefix(image, "docker.io/")
+		if d, errMiroir := inspecter(mire); errMiroir == nil {
+			fmt.Printf("  quota Docker Hub atteint : %s résolue via le miroir\n", image)
+			return d, nil
+		}
+	}
+	return "", fmt.Errorf("imagetools inspect : %w", err)
+}
+
+// inspecter resolves one reference through buildx.
+func inspecter(image string) (string, error) {
 	cmd := exec.Command("docker", "buildx", "imagetools", "inspect", image,
 		"--format", "{{json .Manifest.Digest}}")
 	sortie, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("imagetools inspect : %w", err)
+		return "", err
 	}
 	var digest string
 	if err := json.Unmarshal(sortie, &digest); err != nil {
