@@ -19,6 +19,7 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"github.com/ceffio-suite/ceffio/internal/storage"
 	"github.com/ceffio-suite/ceffio/internal/vault"
+	"github.com/ceffio-suite/ceffio/internal/version"
 	"os"
 	"strconv"
 	"strings"
@@ -27,8 +28,7 @@ import (
 
 // Pinned versions (discovered on Docker Hub, not invented).
 const (
-	nextcloudImage = "docker.io/library/nextcloud:34.0.3"
-	ns             = "ceffio-files"
+	ns = "ceffio-files"
 	// PostgreSQL: CNPG pod (to create the role) and rw service (for the connection).
 	pgPod     = "ceffio-pg-1"
 	pgNSPod   = "ceffio-data"
@@ -45,6 +45,10 @@ const (
 	valkeyService = "ceffio-valkey.ceffio-data.svc"
 	valkeyPort    = "6379"
 )
+
+// nextcloudImage: READ FROM THE REGISTRY, not copied — a copy is what let the
+// registry move while the cluster stayed behind.
+var nextcloudImage = version.Image("nextcloud")
 
 // Deploy installs the files layer (Phase 5), idempotently:
 //  1. dedicated PostgreSQL role + password for Nextcloud

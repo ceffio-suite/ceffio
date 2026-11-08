@@ -6,6 +6,7 @@ package ingress
 import (
 	"context"
 	"fmt"
+	"github.com/ceffio-suite/ceffio/internal/version"
 	"strings"
 
 	"github.com/ceffio-suite/ceffio/internal/acme"
@@ -36,7 +37,6 @@ import (
 const (
 	// webhookImage: the libdns solver, published under a name this project
 	// owns (see internal/version).
-	webhookImage = "ghcr.io/ceffio-suite/acme-dns-webhook"
 	// webhookVersion: pinned, never `latest`, and the SAME value in
 	// internal/version (the coherence test would catch a drift).
 	//
@@ -87,6 +87,9 @@ const (
 	cheminCoffreComposant  = "tls"
 	cheminCoffreSousChemin = "dns-provider"
 )
+
+// webhookImage: READ FROM THE REGISTRY, not copied.
+var webhookImage = version.Image("acme-dns-webhook")
 
 // deployerWebhookDNS installs the solver and wires its credentials from OpenBao.
 //
@@ -503,7 +506,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: webhook
-          image: %[3]s:%[4]s
+          image: %[3]s
           # GROUP_NAME IS MANDATORY, and getting it wrong is not a soft
           # failure: measured on the built image,
           #

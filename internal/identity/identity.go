@@ -19,6 +19,7 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"github.com/ceffio-suite/ceffio/internal/sso"
 	"github.com/ceffio-suite/ceffio/internal/vault"
+	"github.com/ceffio-suite/ceffio/internal/version"
 	"os"
 	"strings"
 	"time"
@@ -26,8 +27,7 @@ import (
 
 // Pinned versions (discovered via the Quay API, not invented).
 const (
-	keycloakImage = "quay.io/keycloak/keycloak:26.7.3"
-	ns            = "ceffio-identity"
+	ns = "ceffio-identity"
 	// PostgreSQL: CNPG pod (to create the role) and rw service (to connect).
 	pgPod     = "ceffio-pg-1"
 	pgNSPod   = "ceffio-data"
@@ -41,6 +41,10 @@ const (
 	// namespace.
 	nsFiles = "ceffio-files"
 )
+
+// keycloakImage: READ FROM THE REGISTRY, not copied — a copy is what let the
+// registry move while the cluster stayed behind.
+var keycloakImage = version.Image("keycloak")
 
 // Deploy installs the identity layer (Phase 4), idempotently:
 //  1. dedicated PostgreSQL role + password for Keycloak
