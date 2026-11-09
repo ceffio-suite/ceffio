@@ -22,6 +22,7 @@ func newUpgradeCmd() *cobra.Command {
 	var planSeul bool
 	var dir string
 	var domaine string
+	var migrationMajeure bool
 
 	c := &cobra.Command{
 		Use:   "upgrade",
@@ -191,7 +192,8 @@ canceled — and not pursued without a safety net.
 				// releases behind, two versions of the binary running at once.
 				// Une convergence : même sans dérive de version, les modules
 				// optionnels installés sont rejoués (ils suivent le binaire).
-				ToujoursRejouer: true,
+				ToujoursRejouer:     true,
+				AllowMajorMigration: migrationMajeure,
 				Appliquer: func(ctx context.Context) error {
 					if err := cluster.Redeployer(ctx, domaine); err != nil {
 						return err
@@ -238,6 +240,8 @@ canceled — and not pursued without a safety net.
 	c.Flags().BoolVar(&planSeul, "plan", false, "Show what would change, without modifying anything")
 	c.Flags().StringVar(&dir, "dir", ".", "Directory for the preliminary backup")
 	c.Flags().StringVar(&domaine, "domain", "", "Base domain (deduced when absent)")
+	c.Flags().BoolVar(&migrationMajeure, "allow-major-migration", false,
+		"Confirm that the offline data migration was performed (see docs/stalwart-1.0.md)")
 
 	return c
 }
