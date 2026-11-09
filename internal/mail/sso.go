@@ -246,34 +246,26 @@ func assurerDomaine(ctx context.Context, nom, idAnnuaire string) (string, error)
 
 // assurerAnnuaireOIDC creates or updates the OIDC directory and returns its id.
 //
-// THREE SETTINGS THAT EACH CAUSED A FAILURE:
+// SETTINGS THAT EACH CAUSED A FAILURE:
 //
-//   - requireAudience: its default value is "stalwart". Keycloak never emits
-//     that value, so ALL tokens were rejected and the session fell back to
-//     anonymous. We align it with the client identifier, which an audience
-//     mapper adds to the token on the Keycloak side.
-//   - requireScopes: the WebUI does not send the list expected by default
-//     (openid+email); so we require nothing. The empty value is written as {} —
-//     "null" is refused by the API.
+//   - the audience check: its default value is "stalwart". Keycloak never
+//     emits that value, so ALL tokens were rejected and the session fell back
+//     to anonymous. We align it with the client identifier, which an audience
+//     mapper adds to the token on the Keycloak side. The FIELD NAME CHANGED in
+//     Stalwart 1.0: requireAudience became acceptedAudiences, and
+//     requireScopes disappeared altogether (the server now derives the
+//     expected scopes from the provider's discovery document). 1.0 REJECTS
+//     the old names, so the payload is built for the format of the server in
+//     front of us — see champsAnnuaire.
 //   - usernameDomain: the domain added to the token's username to form the
 //     full account (user@domain).
 func assurerAnnuaireOIDC(ctx context.Context, o SSO) (string, error) {
-	corps := map[string]any{
-		"@type":           "Oidc",
-		"description":     "OIDC directory of the platform",
-		"issuerUrl":       o.Issuer,
-		"requireAudience": o.ClientID,
-		"requireScopes":   map[string]any{},
-		"claimUsername":   "preferred_username",
-		"usernameDomain":  o.DomaineAdmin,
-		"claimName":       "name",
-		"claimGroups":     "groups",
-	}
 	// The directory is recognized by its issuer URL, not by its description.
-	id, err := chercherIDParIssuer(ctx, o.Issuer)
+	id, moderne, err := annuaireParIssuer(ctx, o.Issuer)
 	if err != nil {
 		return "", err
 	}
+	corps := champsAnnuaire(o, moderne)
 	if id == "" {
 		cree, err := creerObjet(ctx, "x:Directory/set", corps)
 		if err != nil {
@@ -286,6 +278,40 @@ func assurerAnnuaireOIDC(ctx context.Context, o SSO) (string, error) {
 		return "", fmt.Errorf("updating the OIDC directory: %w", err)
 	}
 	return id, nil
+}
+
+// champsAnnuaire builds the directory payload for the format of the server.
+//
+// THE FORMAT IS NOT AN AESTHETIC CHOICE: an unknown field in the patch is not
+// ignored, the whole update is refused — "invalidPatch", "Invalid property:
+// requireAudience", measured on 1.0.3 by replaying the pre-1.0 payload. Since
+// the SSO step runs during `ceffio upgrade`, writing the wrong format aborts
+// the upgrade after the new pod is already serving.
+//
+// The modern branch writes the minimum: acceptedAudiences carries the
+// audience check, whether the token is opaque or unscoped is left to the
+// server's defaults (the migration answered "interoperable" for a live
+// store; a fresh install gets the vendor's choice, which is stricter).
+func champsAnnuaire(o SSO, moderne bool) map[string]any {
+	corps := map[string]any{
+		"@type":          "Oidc",
+		"description":    "OIDC directory of the platform",
+		"issuerUrl":      o.Issuer,
+		"claimUsername":  "preferred_username",
+		"usernameDomain": o.DomaineAdmin,
+		"claimName":      "name",
+		"claimGroups":    "groups",
+	}
+	if moderne {
+		// acceptedAudiences is a SET of identifiers: the same value as
+		// requireAudience, expressed as a key of a map.
+		corps["acceptedAudiences"] = map[string]any{o.ClientID: true}
+		return corps
+	}
+	corps["requireAudience"] = o.ClientID
+	// The empty value is written as {} — "null" is refused by the API.
+	corps["requireScopes"] = map[string]any{}
+	return corps
 }
 
 // assurerRoles fills in the four role tables of the Authentication object.
@@ -535,17 +561,26 @@ func lireIDs(ctx context.Context, methode string) ([]string, error) {
 	return ids, nil
 }
 
-// chercherIDParIssuer finds the OIDC directory by its issuer URL.
+// annuaireParIssuer finds the OIDC directory by its issuer URL and reports
+// whether the server stores it in the post-1.0 format.
 //
 // We do not trust the description: it is free-form, and changing it would make
 // us believe a directory is missing — hence a duplicate.
-func chercherIDParIssuer(ctx context.Context, issuer string) (string, error) {
+//
+// WHY THE SHAPE OF THE OBJECT IS THE VERSION DETECTOR: no endpoint exposes the
+// server version (/api/server, /api/version: 404 on 1.0.3), and the two
+// formats do not overlap — acceptedAudiences exists only from 1.0,
+// requireAudience only before it. A server that returns a directory therefore
+// answers the question itself. No directory at all means a fresh installation,
+// which the registry installs in 1.0: the modern format is the right default,
+// and the legacy branch only ever applies to a pre-1.0 store that is about to
+// be migrated (rolling back to the previous binary keeps that path alive).
+func annuaireParIssuer(ctx context.Context, issuer string) (string, bool, error) {
 	corps, err := appelJMAP(ctx, "x:Directory/get", map[string]any{
-		"accountId":  compteGestion,
-		"properties": []string{"id", "issuerUrl"},
+		"accountId": compteGestion,
 	})
 	if err != nil {
-		return "", fmt.Errorf("reading directories: %w", err)
+		return "", false, fmt.Errorf("reading directories: %w", err)
 	}
 	liste, _ := corps["list"].([]any)
 	for _, e := range liste {
@@ -555,10 +590,11 @@ func chercherIDParIssuer(ctx context.Context, issuer string) (string, error) {
 		}
 		if u, _ := m["issuerUrl"].(string); u == issuer {
 			id, _ := m["id"].(string)
-			return id, nil
+			_, moderne := m["acceptedAudiences"]
+			return id, moderne, nil
 		}
 	}
-	return "", nil
+	return "", true, nil
 }
 
 // attendreStabilite gives Stalwart time to reload its configuration.

@@ -39,6 +39,7 @@ Kept for context. **They do not describe the current code.**
 | [plan-capture.md](plan-capture.md) | Feasibility plan: per-participant capture, the `ceffio-capture` image, and its deployment alongside `recording` |
 | [cra-reporting.md](cra-reporting.md) | The 24/72/14-day runbook: the two channels, the SRP account, and what must already exist |
 | [upgrade.md](upgrade.md) | What `ceffio upgrade` replays, what it needs in its environment, and what it does not do |
+| [stalwart-1.0.md](stalwart-1.0.md) | Why Stalwart 1.0 cannot open a 0.16 store, the offline conversion runbook, and how to roll back |
 | [sbom.md](sbom.md) | Where the SBOM of the binary, of the images and of an installation live, and how to read them |
 | [capture-privacy.md](capture-privacy.md) | What the capture processes, where the transcript lives, and what the organisation must do — with a notice template |
 | [history/sso-office-ingress-fixes.md](history/sso-office-ingress-fixes.md) | The note written while fixing the office SSO behind the ingress |

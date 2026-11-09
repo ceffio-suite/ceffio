@@ -4,6 +4,7 @@
 package upgrade
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ceffio-suite/ceffio/internal/version"
@@ -109,6 +110,54 @@ func TestDepotDe(t *testing.T) {
 	for ref, voulu := range cas {
 		if got := depotDe(ref); got != voulu {
 			t.Errorf("depotDe(%q) = %q, want %q", ref, got, voulu)
+		}
+	}
+}
+
+// THE BLOCKER THAT PREVENTS A MAIL OUTAGE. Stalwart 1.0 refuses to open a
+// pre-1.0 store and the pod loops in CrashLoopBackOff. Measured on 1.0.3 with
+// the rehearsal volume: "The data store was created by a Stalwart version
+// prior to 1.0 and cannot be opened by this version". An upgrade must stop
+// BEFORE the backup and the replay, not discover it through a dead pod.
+func TestBlocageMigrationMajeureStalwart(t *testing.T) {
+	pb, bloque := blocageMigrationMajeure(Etat{
+		Nom: "stalwart", Installee: "v0.16.27", Cible: "v1.0.3", Ecart: true,
+	})
+	if !bloque {
+		t.Fatal("a 0.x → 1.x bump of stalwart was not blocked")
+	}
+	for _, attendu := range []string{"stalwart", "docs/stalwart-1.0.md", "--allow-major-migration"} {
+		if !strings.Contains(pb, attendu) {
+			t.Errorf("blocker %q does not mention %q", pb, attendu)
+		}
+	}
+}
+
+func TestBlocageMigrationMajeureNeBloquePasLeReste(t *testing.T) {
+	cas := []struct {
+		nom  string
+		e    Etat
+		quoi string
+	}{
+		{"correctif", Etat{Nom: "stalwart", Installee: "v1.0.2", Cible: "v1.0.3", Ecart: true}, "a patch release"},
+		{"mineure", Etat{Nom: "stalwart", Installee: "v0.15.0", Cible: "v0.16.27", Ecart: true}, "a minor release"},
+		{"autre composant", Etat{Nom: "valkey", Installee: "v9.1", Cible: "v9.2", Ecart: true}, "a component with no migration"},
+		{"sans écart", Etat{Nom: "stalwart", Installee: "v1.0.3", Cible: "v1.0.3"}, "an aligned component"},
+		{"version illisible", Etat{Nom: "stalwart", Installee: "", Cible: "v1.0.3"}, "an unknown installed version"},
+	}
+	for _, c := range cas {
+		if _, bloque := blocageMigrationMajeure(c.e); bloque {
+			t.Errorf("%s (%s) was blocked, it must not be", c.quoi, c.nom)
+		}
+	}
+}
+
+func TestMajeur(t *testing.T) {
+	for tag, attendu := range map[string]int{
+		"v1.0.3": 1, "1.0.3": 1, "v0.16.27": 0, "  v2 ": 2, "": -1, "latest": -1, "v": -1,
+	} {
+		if got := majeur(tag); got != attendu {
+			t.Errorf("majeur(%q) = %d, want %d", tag, got, attendu)
 		}
 	}
 }

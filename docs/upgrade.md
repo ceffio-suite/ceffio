@@ -29,6 +29,27 @@ the backup, and says which one is missing. That is deliberate: an upgrade that
 silently rewrote the ClusterIssuers back to HTTP-01 would lose a DNS-01 wildcard
 at the next renewal.
 
+## When a component needs its data migrated
+
+One refusal is not negotiable by the plan alone: a component whose **major
+version** changes format on disk. Stalwart 1.0 cannot open a store created
+before it, and starting it on one puts the pod in `CrashLoopBackOff` while
+every other layer reports success.
+
+`ceffio upgrade` therefore raises a blocker for a `0.x → 1.x` bump of
+`stalwart`, before the backup and before anything is modified, pointing at the
+conversion runbook. `--allow-major-migration` lifts that blocker — and only
+that one: an unhealthy cluster, a failing backup or an inconsistent registry
+still stops the upgrade.
+
+```bash
+ceffio upgrade --plan                            # shows the blocker
+ceffio upgrade --domain example.org --allow-major-migration
+```
+
+The conversion itself is offline, on a stopped server:
+[stalwart-1.0.md](stalwart-1.0.md).
+
 ## Optional modules are replayed too
 
 An upgrade is a **convergence**, not only a version bump. The core layers are

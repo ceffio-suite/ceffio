@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,6 +47,57 @@ type Plan struct {
 	ClusterOK   bool     `json:"cluster_ok"`
 	NoeudsPrets int      `json:"noeuds_prets"`
 	NoeudsTotal int      `json:"noeuds_total"`
+	// MigrationsMajeures names the components blocked by an offline migration
+	// (see blocageMigrationMajeure). Empty in the normal case; filled, it is
+	// what `--allow-major-migration` lifts — and nothing else.
+	MigrationsMajeures []string `json:"migrations_majeures,omitempty"`
+}
+
+// migrationsImposees lists the components whose MAJOR version bump cannot be
+// applied as-is, with the document that describes the data migration.
+//
+// ONLY STALWART IS LISTED, for a measured reason: 1.0 refuses to open a store
+// created before it ("The data store was created by a Stalwart version prior
+// to 1.0 and cannot be opened by this version") and the pod loops in
+// CrashLoopBackOff. An upgrade going straight through would take mail down
+// while reporting success on every other layer. The other components either
+// have not left 0.x or migrate their schema on startup.
+var migrationsImposees = map[string]string{
+	"stalwart": "docs/stalwart-1.0.md",
+}
+
+// blocageMigrationMajeure reports whether this change crosses a major version
+// of a component that requires an offline migration, and returns the blocker.
+//
+// It is a PURE function of the three strings, so the rule is testable without
+// a cluster: the versions come from the registry and from Kubernetes, never
+// from a file.
+func blocageMigrationMajeure(e Etat) (string, bool) {
+	doc, suivi := migrationsImposees[e.Nom]
+	if !suivi || !e.Ecart {
+		return "", false
+	}
+	avant, apres := majeur(e.Installee), majeur(e.Cible)
+	// An unknown version (unreadable image, "-1") does not authorize anything:
+	// we do not know what is in the store, so we do not overwrite it silently.
+	if avant < 0 || apres < 0 || avant == apres {
+		return "", false
+	}
+	return fmt.Sprintf("%s %s → %s crosses a major version whose data store is "+
+		"incompatible: migrate the data offline first (%s), then re-run the "+
+		"upgrade with --allow-major-migration.", e.Nom, e.Installee, e.Cible, doc), true
+}
+
+// majeur extracts the major number of a tag: "v1.0.3" and "1.0.3" give 1,
+// "v0.16.27" gives 0, anything unreadable gives -1.
+func majeur(tag string) int {
+	tag = strings.TrimPrefix(strings.TrimSpace(tag), "v")
+	avant, _, _ := strings.Cut(tag, ".")
+	n, err := strconv.Atoi(avant)
+	if err != nil {
+		return -1
+	}
+	return n
 }
 
 // Preparer builds the upgrade plan.
@@ -53,7 +105,20 @@ type Plan struct {
 // It modifies NOTHING: it is a diagnostic. `upgrade` must never touch an
 // installation before showing what it will do.
 func Preparer(ctx context.Context, cible []version.Composant) *Plan {
-	p := &Plan{Etats: []Etat{}, Changements: []Etat{}, Blocages: []string{}, Alertes: []string{}}
+	return preparer(ctx, cible, false)
+}
+
+// preparerSansMajeures is the same preflight with the major-version migration
+// blockers lifted — and ONLY those. The other refusals (degraded cluster,
+// inconsistent registry, missing pin) stay absolute: the flag authorizes a
+// data migration, it does not authorize upgrading an unhealthy installation.
+func preparerSansMajeures(ctx context.Context, cible []version.Composant) *Plan {
+	return preparer(ctx, cible, true)
+}
+
+func preparer(ctx context.Context, cible []version.Composant, ignorerMajeures bool) *Plan {
+	p := &Plan{Etats: []Etat{}, Changements: []Etat{}, Blocages: []string{}, Alertes: []string{},
+		MigrationsMajeures: []string{}}
 
 	// 1. Does the cluster respond, and is it healthy? Upgrading a version on
 	//    a degraded cluster makes it impossible to tell the original outage
@@ -109,6 +174,12 @@ func Preparer(ctx context.Context, cible []version.Composant) *Plan {
 		} else if e.Installee != e.Cible {
 			e.Ecart = true
 			p.Changements = append(p.Changements, e)
+			// A MAJOR BUMP IS NOT AN ORDINARY UPGRADE when the data store
+			// format changed: see migrationsImposees.
+			if pb, ok := blocageMigrationMajeure(e); ok && !ignorerMajeures {
+				p.Blocages = append(p.Blocages, pb)
+				p.MigrationsMajeures = append(p.MigrationsMajeures, e.Nom)
+			}
 		}
 		p.Etats = append(p.Etats, e)
 	}

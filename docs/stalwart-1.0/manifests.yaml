@@ -1,0 +1,167 @@
+# Volumes and pods for the offline conversion of a Stalwart 0.16 store to 1.0.
+#
+# Applied in one go, but used in three moments — see docs/stalwart-1.0.md:
+#   stalwart-copy    runs once, then completes: it copies the live volume onto
+#                    stalwart-src, which the tool reads and never writes.
+#   stalwart-migrate stays up between the runs: `prepare`, `run` and `verify`
+#                    are separate execs into the same pod.
+#   stalwart-swap    runs once, at the very end: it lays the converted store
+#                    over the live volume.
+#
+# Nothing here is part of an installation; every object is deleted after the
+# window, except stalwart-v1 and stalwart-state, kept as evidence.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: stalwart-src
+  namespace: ceffio-mail
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 2Gi
+---
+# The copy must happen while the server is stopped (RWO volume, and a
+# file-level copy of a live RocksDB is not a consistent image).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: stalwart-copy
+  namespace: ceffio-mail
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsUser: 2000
+    runAsGroup: 2000
+    fsGroup: 2000
+  containers:
+    - name: copy
+      image: docker.io/library/alpine:3.22
+      command: ["sh", "-c", "cp -a /live/. /src/ && du -sh /src"]
+      volumeMounts:
+        - {name: live, mountPath: /live, readOnly: true}
+        - {name: src, mountPath: /src}
+  volumes:
+    - name: live
+      persistentVolumeClaim:
+        claimName: stalwart-data
+        readOnly: true
+    - name: src
+      persistentVolumeClaim:
+        claimName: stalwart-src
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: stalwart-v1
+  namespace: ceffio-mail
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 2Gi
+---
+# The state directory holds answers.toml and the progress of each run. It must
+# outlive the pod: a restarted pod that lost it would redo the copy from zero
+# and, worse, would ask the questions again with no terminal to answer them.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: stalwart-state
+  namespace: ceffio-mail
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: stalwart-migrate
+  namespace: ceffio-mail
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsUser: 2000
+    runAsGroup: 2000
+    fsGroup: 2000
+  initContainers:
+    # `cp -n`: the first start seeds the answers, a later start must not
+    # overwrite a file the operator edited.
+    - name: answers
+      image: docker.io/library/alpine:3.22
+      command: ["sh", "-c", "cp -n /answers/answers.toml /state/answers.toml || true"]
+      volumeMounts:
+        - {name: answers, mountPath: /answers, readOnly: true}
+        - {name: state, mountPath: /state}
+  containers:
+    - name: migrate
+      image: docker.io/stalwartlabs/stalwart-migrate:1.0.7@sha256:368725b2d5e0ff2ea673e51d5c39cddc7cc8bfbc6c88cb46b9d627039862f27b
+      command: ["sleep", "86400"]
+      volumeMounts:
+        - {name: src, mountPath: /src, readOnly: true}
+        - {name: dst, mountPath: /dst}
+        - {name: state, mountPath: /state}
+        - {name: cfg, mountPath: /etc/stalwart, readOnly: true}
+  volumes:
+    - name: src
+      persistentVolumeClaim:
+        claimName: stalwart-src
+        readOnly: true
+    - name: dst
+      persistentVolumeClaim:
+        claimName: stalwart-v1
+    - name: state
+      persistentVolumeClaim:
+        claimName: stalwart-state
+    - name: answers
+      configMap:
+        name: stalwart-migrate-answers
+    # The very config map the running server uses: the tool finds the store
+    # through it, and the two path maps rewrite /var/lib/stalwart to /src and
+    # to /dst.
+    - name: cfg
+      configMap:
+        name: stalwart-config
+---
+# The live volume root IS the store: nothing can be renamed inside it, so it
+# is emptied and refilled. Run as the owner (2000), which has group write on
+# the root: no ownership change is needed afterwards.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: stalwart-swap
+  namespace: ceffio-mail
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsUser: 2000
+    runAsGroup: 2000
+    fsGroup: 2000
+  containers:
+    - name: swap
+      image: docker.io/library/alpine:3.22
+      command:
+        - sh
+        - -c
+        - >-
+          rm -rf /live/* /live/.[!.]* ;
+          cp -a /new/. /live/ ;
+          echo "converted store in place:" ;
+          ls -la /live | head -5
+      volumeMounts:
+        - {name: live, mountPath: /live}
+        - {name: new, mountPath: /new, readOnly: true}
+  volumes:
+    - name: live
+      persistentVolumeClaim:
+        claimName: stalwart-data
+    - name: new
+      persistentVolumeClaim:
+        claimName: stalwart-v1
+        readOnly: true
