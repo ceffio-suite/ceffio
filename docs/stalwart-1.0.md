@@ -34,6 +34,10 @@ the release that carries it — not an option.
   ("crosses a major version whose data store is incompatible"), and
   `--allow-major-migration` is the only thing that lifts it. The refusal
   happens at preflight, before the backup and before anything is modified.
+  It only fires for a component that is **running**: follow this runbook and
+  mail is at zero replicas when the upgrade runs, so the blocker is not
+  reached — the flag is for an installation that still serves 0.16 while the
+  new binary is deployed (step 6).
 
 ## Before you start
 
@@ -66,8 +70,13 @@ replay.
 ```sh
 sudo -n kubectl --kubeconfig $K -n $NS scale deploy/stalwart --replicas=0
 sudo -n kubectl --kubeconfig $K -n $NS wait --for=delete pod \
-  -l app.kubernetes.io/name=stalwart --timeout=300s
+  -l app=stalwart --timeout=300s
 ```
+
+The selector is `app=stalwart`: the pods of the deployment carry
+`app: stalwart`, not `app.kubernetes.io/name`. The wrong selector matches
+nothing and the `wait` returns immediately — it looks like the store is
+closed when the pod is still writing to it.
 
 A file-level copy of a running RocksDB is not a backup: the store is closed
 before anything is touched.
@@ -99,7 +108,9 @@ tar tzf /home/ubuntu/stalwart-0.16-$STAMP.tar.gz | wc -l     # not 0
 ```
 
 This archive is the rollback: it is the only copy of the 0.16 store once the
-volume is converted.
+volume is converted. Restoring it was replayed end to end — untar into the
+volume, then compare every file against the archive: 36 files, identical
+SHA-256 for all of them.
 
 ### 3. Copy, convert into a new volume, keep the state
 
@@ -120,7 +131,7 @@ sudo -n kubectl --kubeconfig $K -n $NS wait --for=jsonpath='{.status.phase}'=Suc
 sudo -n kubectl --kubeconfig $K -n $NS logs stalwart-copy     # "N.NM /src"
 ```
 
-`manifests.yaml` creates three volumes and three pods:
+`manifests.yaml` creates three volumes and two pods:
 
 - `stalwart-src`, filled by `stalwart-copy` from `stalwart-data` (read-only);
 - `stalwart-v1`, the **empty** target — 1.0 refuses to convert onto a store
@@ -158,68 +169,170 @@ half-copied store without complaining.
 
 The volume root **is** the store: there is no directory to rename inside it.
 
-`stalwart-swap` (in the same `manifests.yaml`) empties `stalwart-data` and
-copies `stalwart-v1` over it, as the volume owner:
+> `swap.yaml` is a **separate file** for a reason: it empties the live volume
+> as soon as it is applied. Applied with the rest, before the conversion, it
+> destroys the 0.16 store. Apply it here, and nowhere else.
+
+`swap.yaml` empties `stalwart-data` and copies `stalwart-v1` over it, as the
+volume owner, then compares the two trees:
 
 ```sh
+sudo -n kubectl --kubeconfig $K -n $NS apply -f docs/stalwart-1.0/swap.yaml
 sudo -n kubectl --kubeconfig $K -n $NS wait --for=jsonpath='{.status.phase}'=Succeeded \
-  pod/stalwart-swap --timeout=300s
+  pod/stalwart-swap --timeout=600s
 sudo -n kubectl --kubeconfig $K -n $NS logs stalwart-swap
 ```
 
-It must print the store listing, not an error: that output is the only
-confirmation that the conversion landed where the server will look.
+The log must contain `SWAP_IDENTICAL` — that is `diff -r` over the whole
+store, and the only confirmation that what the server will open is what
+`verify` approved. Without it, stop: the archive from step 2 is the way back.
 
 The archive from step 2 is now the rollback.
 
-### 6. Install the release that pins 1.0.3
+### 6. Install the release that pins 1.0.3, and start mail again
 
-Install the **binary only** — the conversion is done, the deployment is still
-scaled to zero:
+Install the **binary only** first:
 
 ```sh
 sudo -n install -m 0755 ceffio /usr/local/bin/ceffio
+```
+
+**`ceffio upgrade` will not start mail here, and will not say so.** The
+upgrade compares the registry with the images of the **running pods**
+(`internal/upgrade/plan.go`, `imagesEnService`). A deployment scaled to zero
+has no pod, so the component is reported `stalwart — not deployed` and
+`upgrade` leaves it alone — measured on this installation: the plan printed
+`not deployed` and the deployment stayed at 0 replicas while every other
+component was upgraded. The `0.x → 1.x` blocker does not even fire, because a
+component that runs nowhere is not compared.
+
+Two ways to bring it back, in this order.
+
+**a. `ceffio mail`** reinstalls the mail layer from the registry — it is the
+supported path, and the one that also re-applies the SSO directory:
+
+```sh
+sudo -n env KUBECONFIG=$K BAO_ADDR=http://127.0.0.1:32334 BAO_TOKEN=… \
+  /usr/local/bin/ceffio mail --domain <domain>
+```
+
+It needs the **outbound relay** credentials (vault `ceffio/smtp/relais` keys
+`relais`, `username`, `password`, or the Secret `ceffio-files/nextcloud-smtp`).
+When neither exists it stops before touching anything, with
+`ceffio: outbound relay user not found: exit status 1` — the relay then only
+lives in the old store, and the command has nothing to write.
+
+**b. Without the relay entry**, take the image from the SBOM — it is the
+registry reference, digest included — and put it on the deployment:
+
+```sh
+sudo -n /usr/local/bin/ceffio sbom -o /tmp/sbom.json
+IMG=$(python3 - <<'PY'
+import json
+d = json.load(open("/tmp/sbom.json"))
+for c in d["components"]:
+    if c["name"] == "stalwart":
+        print(next(p["value"] for p in c["properties"]
+                   if p["name"] == "ceffio:image"))
+PY
+)
+sudo -n kubectl --kubeconfig $K -n $NS set image deploy/stalwart stalwart="$IMG"
+sudo -n kubectl --kubeconfig $K -n $NS scale deploy/stalwart --replicas=1
+sudo -n kubectl --kubeconfig $K -n $NS rollout status deploy/stalwart --timeout=300s
+```
+
+Then run the full upgrade, relay or not: now that the pod runs, `upgrade`
+sees the component, reasserts the registry image and replays the other
+layers (backup, ACME, DNS, SSO):
+
+```sh
 sudo -n env KUBECONFIG=$K BAO_ADDR=http://127.0.0.1:32334 BAO_TOKEN=… \
   CEFFIO_ACME_EMAIL=admin@ceffio.org CEFFIO_ACME_CHALLENGE=dns01 \
   CEFFIO_DNS_PROVIDER=cloudflare CEFFIO_DNS_ZONE=ceffio.org \
-  /usr/local/bin/ceffio upgrade --domain ceffio.org --allow-major-migration
+  /usr/local/bin/ceffio upgrade --domain <domain>
 ```
 
-`--allow-major-migration` is the attestation the preflight asks for: it lifts
-the `0.x → 1.x` blocker and **nothing else**. Without it the preflight
-refuses before taking the backup.
+`BAO_TOKEN` is not optional: with `BAO_ADDR` alone the run stops at
+`vault unreadable for keycloak/db: vault refused (HTTP 403)`; the token is
+`kubectl -n ceffio-vault get secret openbao-token -o jsonpath='{.data.token}' | base64 -d`.
+
+> Before reading `ceffio upgrade --plan`, delete every throwaway pod: the plan
+> takes the image of **any** pod in a `ceffio-*` namespace whose repository
+> matches a component, and picks the most frequent one. A single test pod
+> running 1.0.3 made the plan report `stalwart v1.0.3` while the deployment was
+> still pinning 0.16.27, which is exactly the drift the plan exists to catch.
+> Same cause, same blind spot for a component at zero replicas: #167.
 
 ### 7. Prove it
 
 ```sh
+NS=ceffio-mail
 sudo -n kubectl --kubeconfig $K -n $NS get pods                       # 1/1 Running
 sudo -n kubectl --kubeconfig $K -n $NS exec deploy/stalwart -- \
   /usr/local/bin/stalwart --version                                   # 1.0.3
 sudo -n kubectl --kubeconfig $K -n $NS exec deploy/stalwart -- \
-  curl -fsS http://localhost:8080/healthz/live                         # 200
-ceffio sbom --cluster   # no drift
-ceffio status           # every layer Ready
+  curl -fsS http://localhost:8080/healthz/live                        # 200
+sudo -n kubectl --kubeconfig $K -n $NS exec deploy/stalwart -- \
+  curl -fsS -u "$STALWART_RECOVERY_ADMIN" http://localhost:8080/api/account  # 200
+sudo -n env KUBECONFIG=$K /usr/local/bin/ceffio sbom --cluster       # exit 0, "The cluster matches the registry."
+sudo -n env KUBECONFIG=$K /usr/local/bin/ceffio doctor               # no problem detected
+sudo -n env KUBECONFIG=$K /usr/local/bin/ceffio status               # 45/45 ready
+sudo -n env KUBECONFIG=$K /usr/local/bin/ceffio mail sso             # sign-in goes through the IdP
 ```
 
-Then the mail itself, which is what the owner sees:
+`ceffio upgrade --plan` must then print `=` for every component and
+`✓ No version drift: nothing to upgrade.` — that is the proof the deployment
+carries the registry digest, not just a tag.
 
-- the admin account and the domains are listed by the management API
-  (`x:Account/get`, `x:Domain/get` with `-u "$STALWART_RECOVERY_ADMIN"`);
-- `/api/discover/<account>@<domain>` still points at the Keycloak issuer — the
-  module's final check;
-- a message delivered to the admin address over SMTP is visible over IMAP
-  (`Mailbox/get` on the account), and a message sent from the WebUI arrives.
+Then the mail itself, which is what the owner sees. Over the management API
+(same basic auth as above):
+
+- `x:Domain/get` lists both domains, each bound to the OIDC directory
+  (`directoryId`), with the DKIM settings (`Dkim1Ed25519Sha256`,
+  `Dkim1RsaSha256`, same selector template);
+- `x:Account/get` lists the admin account with its `emailAddress` and its
+  `createdAt` unchanged by the migration.
+
+Delivery, end to end, without needing the account password:
+
+```sh
+# inject a message on the inbound listener, STARTTLS on 25
+sudo -n kubectl --kubeconfig $K -n $NS exec deploy/stalwart -- sh -c '
+  printf "From: sender@example.net\nTo: adminceffio@ceffio.local\nSubject: round-trip\n\nbody\n" > /tmp/in.eml
+  curl -sk --url smtp://localhost:25 --ssl-reqd --mail-from sender@example.net \
+    --mail-rcpt adminceffio@ceffio.local -T /tmp/in.eml'          # 250 2.0.0 Message queued with id …
+# read it back
+sudo -n kubectl --kubeconfig $K -n $NS exec deploy/stalwart -- sh -c '
+  set -a; . /secrets/env; set +a
+  curl -s -u "$STALWART_RECOVERY_ADMIN" -H "Content-Type: application/json" \
+    -d "{\"using\":[\"urn:ietf:params:jmap:core\",\"urn:ietf:params:jmap:mail\"],\"methodCalls\":[[\"Email/query\",{\"accountId\":\"<account id>\"},\"q\"]]}" \
+    http://localhost:8080/jmap'                                  # the message id is listed
+```
+
+IMAP is reachable on 993 (`LIST`, `SELECT INBOX` with the recovery admin).
+
+> Submission on 465 is **not** verified by the runbook, and this installation
+> cannot verify it: the account has no known password (the vault secret
+> authenticates the server-level `admin`, whose login answers `454 4.7.0
+> Temporary authentication failure`, and the same login submitting as
+> `adminceffio@ceffio.local` answers `501 5.5.4 You are not allowed to send
+> from this address`). Rehearse submission with the owner's own credentials
+> before announcing the window: a 0.16 install answering the same 501 proves
+> this is a property of the account, not of the migration.
 
 ### 8. Clean up
 
 ```sh
 sudo -n kubectl --kubeconfig $K -n $NS delete pod \
   stalwart-save stalwart-copy stalwart-swap stalwart-migrate
-sudo -n kubectl --kubeconfig $K -n $NS delete pvc stalwart-src
 sudo -n kubectl --kubeconfig $K -n $NS delete configmap stalwart-migrate-answers
-# keep stalwart-v1 and stalwart-state for a few days: they are the evidence,
-# and the source of a second attempt if the first one has to be redone.
+sudo -n kubectl --kubeconfig $K -n $NS delete pvc \
+  stalwart-src stalwart-v1 stalwart-state
 ```
+
+`stalwart-v1` and `stalwart-state` are evidence, not a backup: delete them
+once `--plan` reports no drift and `sbom --cluster` matches. The archive from
+step 2 is the only copy worth keeping, and it is the rollback.
 
 ## Rollback
 
@@ -253,6 +366,35 @@ conversion from the restored store.
 - OIDC audiences are enforced against `acceptedAudiences` = the WebUI client
   identifier, as before.
 
+## What the production window measured
+
+The same procedure, run on the live installation on 2026-11-09 (Stalwart
+`v0.16.27` → `v1.0.3`, registry `v0.10.19`):
+
+| Step | Result |
+|---|---|
+| store archived (step 2) | 36 files, 2.7 MB; copy on the server, `SERVER_COPY_OK` |
+| copy pod | 36 files / 2.7 MB into `stalwart-src` |
+| `prepare --non-interactive` | 2741 objects, 12 dropped, 60 warnings, **0 errors** |
+| `run` then `run --final --yes` | `run 1: ok` (2741 objects written), then final pass |
+| `verify --full` | `1 accounts checked, 0 mismatches` |
+| `report --severity warning` | 102 rows |
+| `swap.yaml` | `SWAP_IDENTICAL`; `/live` = 25 entries, 1.3 MB, all `2000:2000` |
+| boot of `v1.0.3` | pod `1/1 Running`, `--version` → `1.0.3`, `/healthz/live` 200, `/api/account` 200 |
+| listeners | 25, 443, 465, 993, 995, 4190, 8080 (no 587, no 143) |
+| inventory | domains `ceffio.org` (`b`) and `ceffio.local` (`c`), both on the OIDC directory, DKIM Ed25519+RSA kept; account `adminceffio` (`b`, Admin) with its `createdAt` |
+| SSO | `ceffio mail sso` → `✓ the sign-in goes through the identity provider`, issuer `https://keycloak.ceffio.org/realms/ceffio` |
+| delivery | `250 2.0.0 Message queued with id 4b64bca50000002`, visible over JMAP (`Email/get`: subject, sender, `receivedAt`) and IMAP |
+| drift | `ceffio upgrade --plan` → `✓ No version drift: nothing to upgrade.` |
+| SBOM | `sbom --cluster` exit 0, 34 components, `The cluster matches the registry.` |
+| health | `doctor` → no problem detected; `status` → 45/45 ready |
+
+Two things went wrong, and the runbook now prevents them: the swap pod was
+applied with the rest of the manifests, before the conversion (it emptied the
+live volume — restored from the step 2 archive, byte-for-byte identical), and
+`ceffio upgrade` cannot restart a component whose deployment is at zero
+replicas (step 6).
+
 ## What the rehearsal measured
 
 Run against a byte-for-byte copy of the production store, on a scratch volume:
@@ -267,7 +409,7 @@ Run against a byte-for-byte copy of the production store, on a scratch volume:
 | inventory on 1.0.3 | account `b` (`adminceffio`, Admin, same `createdAt`), domains `ceffio.org` (id `b`) and `ceffio.local` (id `c`) attached to the OIDC directory, four roles, `Application` `jkewme17aaab` (`oauthClientId stalwart-webui`), `x:AllowedIp` `10.42.0.0/16` |
 | SSO check | `/api/discover/adminceffio@ceffio.local` returns the Keycloak issuer |
 | writes replayed | `x:Authentication/set`, `x:SystemSettings/set`, `x:Domain/set`, `x:Account/set`, `x:Application/set` → `updated`; `x:Directory/set` with `requireAudience` → **refused** (`invalidPatch`), with `acceptedAudiences` → `updated` |
-| mail round-trip | message accepted over SMTP (`220 mail.ceffio.org Stalwart ESMTP`) and visible over JMAP (`Mailbox/get`), filed in Junk (no SPF/DKIM on the injected message) |
+| mail round-trip | injected on the inbound listener (`smtp://localhost:25`, STARTTLS) → `250 2.0.0 Message queued with id …`, then read back over JMAP (`Email/query` + `Email/get`) and over IMAP (993). Submission (465) needs the account's own password: the recovery admin's login answers `454`, and it owns no address (`501`) |
 
 The rehearsal is why the payload decision in `sso.go` is not a guess, and why
 the blocker in `ceffio upgrade` exists.

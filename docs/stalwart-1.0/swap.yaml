@@ -1,0 +1,43 @@
+# Lays the converted store over the LIVE volume. Apply this file only once
+# `stalwart-migrate verify` is green, and only after this very store has been
+# archived: the pod empties `stalwart-data` before filling it.
+#
+# See docs/stalwart-1.0.md.
+---
+# The live volume root IS the store: nothing can be renamed inside it, so it
+# is emptied and refilled. Run as the owner (2000), which has group write on
+# the root: no ownership change is needed afterwards.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: stalwart-swap
+  namespace: ceffio-mail
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsUser: 2000
+    runAsGroup: 2000
+    fsGroup: 2000
+  containers:
+    - name: swap
+      image: docker.io/library/alpine:3.22
+      command:
+        - sh
+        - -c
+        - >-
+          rm -rf /live/* /live/.[!.]* ;
+          cp -a /new/. /live/ ;
+          diff -r /new /live && echo SWAP_IDENTICAL ;
+          echo "converted store in place:" ;
+          ls -la /live | head -5
+      volumeMounts:
+        - {name: live, mountPath: /live}
+        - {name: new, mountPath: /new, readOnly: true}
+  volumes:
+    - name: live
+      persistentVolumeClaim:
+        claimName: stalwart-data
+    - name: new
+      persistentVolumeClaim:
+        claimName: stalwart-v1
+        readOnly: true
