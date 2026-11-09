@@ -84,9 +84,10 @@ account come from the vault, and the pod reads them through the injector.`,
 // domaineDeLaPlateforme reads the installation's domain from the ingress layer's own
 // configuration, so `ceffio identity` has no second --domain flag.
 //
-// AN EMPTY ANSWER IS NOT FATAL: Deploy then skips the OIDC clients rather than writing
-// return addresses built from a guess. The rest of the identity layer — the realm, the
-// theme, the administrator — needs no domain.
+// AN EMPTY ANSWER IS NOT HARMLESS, and the comment here used to say Deploy "skips the
+// OIDC clients" — it does not: EnsureOIDCClients refuses an empty domain, so Deploy
+// stops at the SSO phase instead of writing return addresses built from a guess. The
+// refusal is the safer failure, and it is the true one.
 func domaineDeLaPlateforme(ctx context.Context) string {
 	cli, err := k8sapi.Nouveau()
 	if err != nil {
