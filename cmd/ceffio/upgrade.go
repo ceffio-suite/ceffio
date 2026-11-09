@@ -114,6 +114,13 @@ canceled — and not pursued without a safety net.
 					marque = "→"
 					detail = e.Installee + "  →  " + e.Cible
 				}
+				// ARRÊTÉ N'EST PAS ABSENT : le composant est installé, son
+				// image est connue, mais rien ne tourne. Le dire ici plutôt que
+				// de laisser lire « not deployed » (mesuré pendant la bascule
+				// Stalwart, workload à zéro réplica).
+				if e.Arrete {
+					detail += "  (stopped: 0 replicas)"
+				}
 				fmt.Printf("  %s %-*s  %s\n", marque, largeur, e.Nom, detail)
 			}
 
@@ -148,7 +155,11 @@ canceled — and not pursued without a safety net.
 			fmt.Println()
 			fmt.Printf("%d component(s) to upgrade.\n", len(plan.Changements))
 			for _, c := range plan.Changements {
-				fmt.Printf("  %s : %s → %s\n", c.Nom, c.Installee, c.Cible)
+				arrete := ""
+				if c.Arrete {
+					arrete = "  (stopped: the replay starts it again)"
+				}
+				fmt.Printf("  %s : %s → %s%s\n", c.Nom, c.Installee, c.Cible, arrete)
 			}
 
 			if planSeul {
