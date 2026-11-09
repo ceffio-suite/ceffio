@@ -33,6 +33,16 @@ type Options struct {
 	// the replay runs. Without this flag, a fully up-to-date core answers
 	// "nothing to do" while a relay stays three releases behind.
 	ToujoursRejouer bool
+
+	// AllowMajorMigration lifts the blocker raised by a component crossing a
+	// major version whose data store must be migrated offline (Stalwart 1.0).
+	//
+	// WHY AN EXPLICIT OPT-IN AND NOT AN AUTOMATIC MIGRATION: the conversion
+	// runs against a STOPPED server and rewrites the volume. It cannot be
+	// inferred from a version string, and a wrong guess destroys the mailbox.
+	// The operator attests it with this flag, after the documented runbook has
+	// converted and verified the store.
+	AllowMajorMigration bool
 }
 
 // Resultat reports what happened, including on failure.
@@ -67,6 +77,12 @@ func Executer(ctx context.Context, cible []version.Composant, o Options) (*Resul
 	// 1. Fresh plan.
 	o.Progress("preflight")
 	plan := Preparer(ctx, cible)
+	// The major-version blockers are the only ones this flag may lift: every
+	// other refusal (degraded cluster, unusable backup, inconsistent registry)
+	// stays absolute.
+	if o.AllowMajorMigration {
+		plan = preparerSansMajeures(ctx, cible)
+	}
 	if !plan.Pret {
 		res.Erreurs = append(res.Erreurs, plan.Blocages...)
 		return res, fmt.Errorf("preflight refused: %s", strings.Join(plan.Blocages, " ; "))
