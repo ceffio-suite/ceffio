@@ -35,6 +35,11 @@ type Etat struct {
 	Cible     string `json:"cible"`
 	Ecart     bool   `json:"ecart"`
 	Depuis    string `json:"depuis,omitempty"` // image actually in service
+	// Arrete says the component is INSTALLED but runs nothing: its workload is
+	// scaled to zero. Its image is still read (from the workload, since no pod
+	// carries it) and compared, and the replay starts it again — see
+	// imagesDesWorkloads.
+	Arrete bool `json:"arrete,omitempty"`
 }
 
 // Plan is the result of the preflight: what would change, and the blockers.
@@ -127,7 +132,7 @@ func preparer(ctx context.Context, cible []version.Composant, ignorerMajeures bo
 	// de l'installation (console, relais, rapporteur d'IP), et l'oublier ici est
 	// ce qui fait répondre « rien à faire » à une installation qui tourne en
 	// 0.8.4.
-	nodes := imagesEnService(ctx, cible)
+	enService := imagesEnService(ctx, cible)
 	p.NoeudsTotal, p.NoeudsPrets = noeuds(ctx)
 	if p.NoeudsTotal == 0 {
 		p.Blocages = append(p.Blocages, "Cluster unreachable: cannot prepare an upgrade.")
@@ -157,9 +162,10 @@ func preparer(ctx context.Context, cible []version.Composant, ignorerMajeures bo
 	// 4. Component-by-component comparison: what is running vs the target.
 	for _, c := range cible {
 		e := Etat{Nom: c.Nom, Cible: c.Version}
-		if img, ok := nodes[c.Nom]; ok {
+		if img, ok := enService.images[c.Nom]; ok {
 			e.Installee = version.TagDe(img)
 			e.Depuis = img
+			e.Arrete = enService.arretes[c.Nom]
 		}
 		// A missing component is not a drift: it is an uninstalled layer
 		// (video without --video). Report it without blocking — but ALWAYS
@@ -171,7 +177,18 @@ func preparer(ctx context.Context, cible []version.Composant, ignorerMajeures bo
 			// installation without Talk, for instance). Naming the repository
 			// says what was looked for, which a bare "not deployed" does not.
 			p.Alertes = append(p.Alertes, fmt.Sprintf("%s : no running image from %s", c.Nom, depotDe(c.Image)))
-		} else if e.Installee != e.Cible {
+		}
+		// UN COMPOSANT ARRÊTÉ N'EST PAS UN COMPOSANT ABSENT, et le taire est
+		// exactement ce qui s'est produit pendant la bascule Stalwart : le plan
+		// affichait « not deployed » alors que le Deployment existait, à zéro
+		// réplica. Le rejeu, lui, applique `replicas: 1` sur chaque couche :
+		// il le redémarre. Le plan doit le dire AVANT, pas l'apprendre après.
+		if e.Arrete {
+			p.Alertes = append(p.Alertes, fmt.Sprintf(
+				"%s : stopped (its workload is at 0 replicas, image %s) — "+
+					"the replay will start it again at %s", e.Nom, e.Depuis, e.Cible))
+		}
+		if e.Installee != "" && e.Installee != e.Cible {
 			e.Ecart = true
 			p.Changements = append(p.Changements, e)
 			// A MAJOR BUMP IS NOT AN ORDINARY UPGRADE when the data store
@@ -189,8 +206,22 @@ func preparer(ctx context.Context, cible []version.Composant, ignorerMajeures bo
 	return p
 }
 
-// imagesEnService reads, for each registry component, the image actually used
-// by the running pods.
+// enService is what the cluster says about the installation: the image of each
+// component, and whether that component is stopped.
+type enService struct {
+	images  map[string]versionImage
+	arretes map[string]bool
+}
+
+// imagesEnService reads, for each registry component, the image the
+// installation uses.
+//
+// TWO SOURCES, IN THIS ORDER. The WORKLOAD (deployment, statefulset) comes
+// first: its spec is what the installation declares, it survives a scale to
+// zero, and a stray pod cannot overwrite it. The PODS come second, as a
+// fallback for components that Kubernetes deploys through something else (the
+// operators behind cnpg-system and cert-manager, a daemonset — those have no
+// replica count to read).
 //
 // WHY BY REPOSITORY AND NOT BY SUBSTRING. The first version matched a
 // hand-written fragment against every running image ("nextcloud", "redis:").
@@ -204,11 +235,77 @@ func preparer(ctx context.Context, cible []version.Composant, ignorerMajeures bo
 // The registry already carries the answer: every component pins a FULL image
 // reference. Two images belong to the same component when their REPOSITORY is
 // the same, whatever the tag — the tag is precisely what is being compared.
-func imagesEnService(ctx context.Context, composants []version.Composant) map[string]versionImage {
+//
+// MEASURED FAILURES THIS ORDER FIXES (2026-11-09, Stalwart 1.0 window): a
+// throwaway pod labelled app=stalwart running 1.0.3 made the plan report
+// `= stalwart v1.0.3` while the deployment still pinned 0.16.27 — the exact
+// drift the plan exists to catch; and a deployment scaled to zero (the
+// migration procedure does that) made it report "not deployed", which also
+// meant the major-version blocker could not fire: it needs a version to
+// compare. Reading the workload first answers both.
+func imagesEnService(ctx context.Context, composants []version.Composant) enService {
+	specs, arretes := imagesDesWorkloads(ctx)
+	return associerTout(specs, imagesDesPods(ctx), arretes, composants)
+}
+
+// imagesDesWorkloads reads the image each deployment or statefulset DECLARES,
+// and remembers the ones scaled to zero.
+//
+// Daemonsets are left to the pod scan on purpose: they have no replica count,
+// so "stopped" is not a state they can be in.
+func imagesDesWorkloads(ctx context.Context) (images []string, arretes map[string]bool) {
+	arretes = map[string]bool{}
+	raw, err := kubectl(ctx, "get", "deploy,statefulset", "-A", "-o", "json")
+	if err != nil {
+		return nil, arretes
+	}
+	var doc struct {
+		Items []struct {
+			Metadata struct {
+				Namespace string `json:"namespace"`
+				Name      string `json:"name"`
+			} `json:"metadata"`
+			Spec struct {
+				Replicas *int `json:"replicas"`
+				Template struct {
+					Spec struct {
+						Containers []struct {
+							Image string `json:"image"`
+						} `json:"containers"`
+					} `json:"spec"`
+				} `json:"template"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+	if json.Unmarshal([]byte(raw), &doc) != nil {
+		return nil, arretes
+	}
+	for _, w := range doc.Items {
+		if !namespaceSuivi(w.Metadata.Namespace) {
+			continue
+		}
+		// nil means "not set", which the API defaults to 1: only an explicit
+		// zero means the operator stopped this workload.
+		arrete := w.Spec.Replicas != nil && *w.Spec.Replicas == 0
+		for _, c := range w.Spec.Template.Spec.Containers {
+			if c.Image == "" {
+				continue
+			}
+			images = append(images, c.Image)
+			if arrete {
+				arretes[depotDe(c.Image)] = true
+			}
+		}
+	}
+	return images, arretes
+}
+
+// imagesDesPods reads the image carried by every pod of the installation.
+func imagesDesPods(ctx context.Context) []string {
 	var images []string
 	raw, err := kubectl(ctx, "get", "pods", "-A", "-o", "json")
 	if err != nil {
-		return map[string]versionImage{}
+		return nil
 	}
 	var doc struct {
 		Items []struct {
@@ -223,11 +320,10 @@ func imagesEnService(ctx context.Context, composants []version.Composant) map[st
 		} `json:"items"`
 	}
 	if json.Unmarshal([]byte(raw), &doc) != nil {
-		return map[string]versionImage{}
+		return nil
 	}
 	for _, p := range doc.Items {
-		ns := p.Metadata.Namespace
-		if !strings.HasPrefix(ns, "ceffio-") && ns != "cnpg-system" && ns != "cert-manager" {
+		if !namespaceSuivi(p.Metadata.Namespace) {
 			continue
 		}
 		for _, c := range p.Spec.Containers {
@@ -236,7 +332,12 @@ func imagesEnService(ctx context.Context, composants []version.Composant) map[st
 			}
 		}
 	}
-	return associer(images, composants)
+	return images
+}
+
+// namespaceSuivi decides which namespaces belong to the installation.
+func namespaceSuivi(ns string) bool {
+	return strings.HasPrefix(ns, "ceffio-") || ns == "cnpg-system" || ns == "cert-manager"
 }
 
 // depotsAlias lists, per component, the repositories a PREVIOUS version of the
@@ -247,27 +348,60 @@ var depotsAlias = map[string][]string{
 	"valkey": {"docker.io/valkey/valkey", "docker.io/library/redis"},
 }
 
-// associer maps each component to a running image of the same repository.
+// associerTout maps each component to an image of the same repository,
+// preferring what the workloads declare over what the pods carry.
+//
 // It is pure, so the rule is testable without a cluster.
+func associerTout(specs, pods []string, arretes map[string]bool, composants []version.Composant) enService {
+	parDepotSpecs := indexer(specs)
+	parDepotPods := indexer(pods)
+
+	out := enService{images: map[string]versionImage{}, arretes: map[string]bool{}}
+	for _, c := range composants {
+		depots := append([]string{depotDe(c.Image)}, depotsAlias[c.Nom]...)
+
+		img := ""
+		// THE WORKLOAD FIRST: its spec is the installation's declared state.
+		for _, d := range depots {
+			if img = plusFrequent(parDepotSpecs[d]); img != "" {
+				break
+			}
+		}
+		if img == "" {
+			// No workload to read (a pod deployed by an operator, a daemonset):
+			// fall back to what is running.
+			for _, d := range depots {
+				if img = plusFrequent(parDepotPods[d]); img != "" {
+					break
+				}
+			}
+		}
+		if img == "" {
+			continue
+		}
+		out.images[c.Nom] = img
+		// The stopped state belongs to the workload the image came from: a
+		// pod cannot come from a deployment at zero replicas.
+		out.arretes[c.Nom] = arretes[depotDe(img)]
+	}
+	return out
+}
+
+// associer keeps the pod-only mapping, for the callers and tests that only
+// care about "which image carries this repository".
 func associer(images []string, composants []version.Composant) map[string]versionImage {
+	return associerTout(nil, images, nil, composants).images
+}
+
+// indexer groups image references by repository.
+func indexer(images []string) map[string][]string {
 	parDepot := map[string][]string{}
 	for _, img := range images {
 		if d := depotDe(img); d != "" {
 			parDepot[d] = append(parDepot[d], img)
 		}
 	}
-
-	trouvees := map[string]versionImage{}
-	for _, c := range composants {
-		candidats := append([]string(nil), parDepot[depotDe(c.Image)]...)
-		for _, d := range depotsAlias[c.Nom] {
-			candidats = append(candidats, parDepot[d]...)
-		}
-		if img := plusFrequent(candidats); img != "" {
-			trouvees[c.Nom] = img
-		}
-	}
-	return trouvees
+	return parDepot
 }
 
 // plusFrequent picks the image carried by the most pods. During a rollout two

@@ -34,10 +34,10 @@ the release that carries it — not an option.
   ("crosses a major version whose data store is incompatible"), and
   `--allow-major-migration` is the only thing that lifts it. The refusal
   happens at preflight, before the backup and before anything is modified.
-  It only fires for a component that is **running**: follow this runbook and
-  mail is at zero replicas when the upgrade runs, so the blocker is not
-  reached — the flag is for an installation that still serves 0.16 while the
-  new binary is deployed (step 6).
+  It fires whenever the plan can read a version to compare: for a running
+  component, and — since 0.10.20 — for one whose deployment is scaled to zero,
+  because the image is then read from the workload (step 6). Releases before
+  0.10.20 read the pods only and let a stopped component pass unchallenged.
 
 ## Before you start
 
@@ -197,16 +197,26 @@ Install the **binary only** first:
 sudo -n install -m 0755 ceffio /usr/local/bin/ceffio
 ```
 
-**`ceffio upgrade` will not start mail here, and will not say so.** The
-upgrade compares the registry with the images of the **running pods**
-(`internal/upgrade/plan.go`, `imagesEnService`). A deployment scaled to zero
-has no pod, so the component is reported `stalwart — not deployed` and
-`upgrade` leaves it alone — measured on this installation: the plan printed
-`not deployed` and the deployment stayed at 0 replicas while every other
-component was upgraded. The `0.x → 1.x` blocker does not even fire, because a
-component that runs nowhere is not compared.
+**Mail runs nowhere at this point, and the plan must say so.** The image the
+plan compares comes from the workload's spec first (`internal/upgrade/plan.go`,
+`imagesDesWorkloads`), the pods second. A deployment scaled to zero is
+therefore reported `stalwart v0.16.27 → v1.0.3 (stopped: 0 replicas)`, and
+because it now has a version to compare, the `0.x → 1.x` blocker **fires**:
+`--plan` refuses until `--allow-major-migration` is passed — that flag is your
+confirmation that step 3's migration is done. The full upgrade then restarts
+mail: `mail.Deploy` applies the deployment with `replicas: 1` and waits for its
+rollout, so the layer comes back on 1.0.3, over the store step 3 converted.
 
-Two ways to bring it back, in this order.
+**Measured in this window (binary 0.10.19, before that reading existed).** The
+plan printed `stalwart — not deployed`, said nothing about the pending bump,
+and the deployment stayed at 0 replicas: the plan read the pods only, so the
+component had no version at all and the `0.x → 1.x` blocker could not fire. The
+full upgrade never reached the mail layer either — it was refused at preflight
+(`CEFFIO_ACME_EMAIL is required`), and mail stayed down until the manual path
+(b) below. The reading is what changed; the replay itself always applied
+`replicas: 1`.
+
+Two manual ways to bring it back, in this order.
 
 **a. `ceffio mail`** reinstalls the mail layer from the registry — it is the
 supported path, and the one that also re-applies the SSO directory:
@@ -256,12 +266,13 @@ sudo -n env KUBECONFIG=$K BAO_ADDR=http://127.0.0.1:32334 BAO_TOKEN=… \
 `vault unreadable for keycloak/db: vault refused (HTTP 403)`; the token is
 `kubectl -n ceffio-vault get secret openbao-token -o jsonpath='{.data.token}' | base64 -d`.
 
-> Before reading `ceffio upgrade --plan`, delete every throwaway pod: the plan
-> takes the image of **any** pod in a `ceffio-*` namespace whose repository
-> matches a component, and picks the most frequent one. A single test pod
-> running 1.0.3 made the plan report `stalwart v1.0.3` while the deployment was
-> still pinning 0.16.27, which is exactly the drift the plan exists to catch.
-> Same cause, same blind spot for a component at zero replicas: #167.
+> Before reading `ceffio upgrade --plan`, delete every throwaway pod anyway:
+> the plan now prefers the workload's declared image, but a component deployed
+> by an operator (cnpg, cert-manager) has no workload of ours to read and
+> still falls back to the pods. Measured on this installation: a single test
+> pod running 1.0.3 made the plan report `stalwart v1.0.3` while the deployment
+> still pinned 0.16.27 — the drift the plan exists to catch. Fixed for
+> workloads in 0.10.20: #167.
 
 ### 7. Prove it
 

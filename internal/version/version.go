@@ -174,9 +174,11 @@ var Registry = []Composant{
 	{
 		// 1.0 CANNOT OPEN A PRE-1.0 STORE: it answers "The data store was
 		// created by a Stalwart version prior to 1.0 and cannot be opened by
-		// this version". The migration is a separate, offline step —
-		// `ceffio migrate-stalwart`, see docs/stalwart-1.0.md. Bumping this
-		// pin without migrating first leaves the mail pod in CrashLoopBackOff.
+		// this version". The migration is a separate, offline step with no
+		// subcommand of its own: the manifests and the window are described in
+		// docs/stalwart-1.0.md, and the plan refuses the bump for a RUNNING
+		// component until --allow-major-migration is passed. Bumping this pin
+		// without migrating first leaves the mail pod in CrashLoopBackOff.
 		Nom: "stalwart", Image: "docker.io/stalwartlabs/stalwart:v1.0.3@sha256:73c684a84c24f5b4206ec266a8deb8986fe44a9f623997e07f084388d943c8bd",
 		Module: "internal/mail", Role: "mail: inbound SMTP, IMAP, filters", Licence: "AGPL-3.0-only",
 	},

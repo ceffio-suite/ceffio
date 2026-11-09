@@ -46,6 +46,66 @@ func TestAssocierAccepteLaFormeCourte(t *testing.T) {
 	}
 }
 
+// LE POD JETABLE NE MASQUE PLUS LA DÉRIVE. Mesuré le 2026-11-09 : un pod de
+// test portant app=stalwart en 1.0.3 faisait afficher `= stalwart v1.0.3` au
+// plan alors que le Deployment pinn ait encore 0.16.27 — précisément la dérive
+// que le plan doit voir. Le workload fait foi ; le pod majoritaire ne sert plus
+// que de repli.
+func TestAssocierPrefereLeWorkloadAuPod(t *testing.T) {
+	got := associerTout(
+		[]string{"docker.io/stalwartlabs/stalwart:v0.16.27"},
+		[]string{
+			"docker.io/stalwartlabs/stalwart:v1.0.3",
+			"docker.io/stalwartlabs/stalwart:v1.0.3",
+		},
+		nil,
+		[]version.Composant{{Nom: "stalwart", Image: "docker.io/stalwartlabs/stalwart:v1.0.3"}},
+	)
+	if got.images["stalwart"] != "docker.io/stalwartlabs/stalwart:v0.16.27" {
+		t.Fatalf("stalwart = %q, want the deployment's image, not the stray pod's", got.images["stalwart"])
+	}
+}
+
+// UN COMPOSANT À ZÉRO RÉPLICA N'EST PAS ABSENT. Sans cette lecture, le plan
+// répondait « not deployed » et le blocage de migration majeure ne pouvait pas
+// se déclencher : il compare deux versions, et il n'y en avait plus qu'une.
+func TestAssocierLitLeWorkloadArrete(t *testing.T) {
+	got := associerTout(
+		[]string{"docker.io/stalwartlabs/stalwart:v0.16.27"},
+		nil,
+		map[string]bool{"docker.io/stalwartlabs/stalwart": true},
+		[]version.Composant{{Nom: "stalwart", Image: "docker.io/stalwartlabs/stalwart:v1.0.3"}},
+	)
+	if got.images["stalwart"] != "docker.io/stalwartlabs/stalwart:v0.16.27" {
+		t.Fatalf("a stopped component lost its image: %+v", got.images)
+	}
+	if !got.arretes["stalwart"] {
+		t.Fatal("a zero-replica workload was reported as running")
+	}
+	// Et donc l'écart, et donc le blocage.
+	e := Etat{Nom: "stalwart", Installee: "v0.16.27", Cible: "v1.0.3", Ecart: true, Arrete: true}
+	if _, bloque := blocageMigrationMajeure(e); !bloque {
+		t.Fatal("the major-migration blocker does not fire for a stopped component")
+	}
+}
+
+// Sans workload lisible (un pod géré par un opérateur, un daemonset), le pod
+// reste la source : ne pas retomber sur « absent ».
+func TestAssocierRetombeSurLesPods(t *testing.T) {
+	got := associerTout(
+		nil,
+		[]string{"ghcr.io/ceffio-suite/janus-gateway:1.4.3-2"},
+		nil,
+		[]version.Composant{{Nom: "janus", Image: "ghcr.io/ceffio-suite/janus-gateway:1.4.3-2"}},
+	)
+	if got.images["janus"] != "ghcr.io/ceffio-suite/janus-gateway:1.4.3-2" {
+		t.Fatalf("the pod fallback was lost: %+v", got)
+	}
+	if got.arretes["janus"] {
+		t.Fatal("a pod was reported stopped")
+	}
+}
+
 // A digest-pinned pod has no tag to compare, but its repository still
 // identifies the component: losing it would report the layer as absent.
 func TestAssocierIgnoreLeDigest(t *testing.T) {
