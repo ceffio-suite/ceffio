@@ -1,0 +1,105 @@
+# Answers for stalwart-migrate and cli-plan/convert_plan.py.
+# Written by `prepare`; it can be edited by hand. Fields left out take the
+# recommended value shown in the comments. Secrets are stored in clear.
+
+version = 1
+
+# ==== Data categories ====
+
+# Data categories to migrate
+# v0.16: Every category below exists in the source.
+# v1: Every category is selected by default. Categories can also be changed
+#   per run with --include and --exclude. The MTA queue and scheduled tasks
+#   are only copied by the final run, once v0.16 is stopped, so nothing is
+#   delivered or run twice.
+#   include: Categories (settings, principals, mail, calendars, contacts, files, sieve, identities, push_subscriptions, spam_samples, reports, archive, spam_model, queue, tasks, telemetry); recommended ["settings","principals","mail","calendars","contacts","files","sieve","identities","push_subscriptions","spam_samples","reports","archive","spam_model","queue","tasks","telemetry"]
+[global.categories]
+include = ["settings", "principals", "mail", "calendars", "contacts", "files", "sieve", "identities", "push_subscriptions", "spam_samples", "reports", "archive", "spam_model", "queue", "tasks", "telemetry"]
+
+# ==== Authentication ====
+
+# OpenID Connect directory
+# v0.16: v0.16 accepted any validly signed JWT whose audience matched
+#   `requireAudience` (any audience when it was empty) and which carried the
+#   scopes in `requireScopes` (default openid and email). Opaque tokens were
+#   validated through the UserInfo endpoint.
+# v1: v1 checks the token audience against this server's resource identifiers
+#   and `acceptedAudiences` unless audience validation is skipped, requires
+#   the Stalwart scopes (mail, contacts, calendars, files) or applies the
+#   unscoped token policy, and rejects opaque tokens unless UserInfo or
+#   introspection validation is enabled. `requireScopes` no longer exists.
+# Recommendation: Keep the audience you configured. If tokens from your
+#   provider carry no Stalwart scopes, choose `interoperable` (IMAP, SMTP,
+#   DAV and JMAP mail access) rather than `full`, which grants everything the
+#   token holder could do in v0.16.
+# Source issuerUrl: "https://keycloak.ceffio.org/realms/ceffio"
+# Source requireAudience: "stalwart-webui"
+# Source requireScopes: {}
+# Source claimName: "name"
+#   accepted_audiences: Accepted audiences; recommended ["stalwart-webui"]
+#   skip_audience_validation: Accept tokens for any audience (v0.16 behaviour without requireAudience); recommended false
+#   opaque_token_validation: Opaque (non-JWT) tokens (none, userInfo, introspection); recommended "userInfo"
+#   introspection_client_id: Introspection client id
+#   introspection_client_secret: Introspection client secret
+#   introspection_auth_method: Introspection authentication (clientSecretBasic, clientSecretPost, none); recommended "clientSecretBasic"
+#   unscoped_tokens: Tokens without Stalwart scopes (reject, interoperable, full); recommended "interoperable"
+#   allow_id_token_claims: Accept access tokens that are copies of the ID token; recommended false
+#   lenient_issuer_match: Ignore a trailing slash difference in the issuer; recommended false
+#   allow_invalid_certs: Accept invalid TLS certificates from the provider; recommended false
+#   claim_name: Display name claim (empty to disable); recommended "name"
+[instance.oidc_directory."x:Directory/jkewnup3ksqa"]
+accepted_audiences = ["stalwart-webui"]
+skip_audience_validation = false
+opaque_token_validation = "userInfo"
+unscoped_tokens = "interoperable"
+allow_id_token_claims = false
+lenient_issuer_match = false
+allow_invalid_certs = false
+claim_name = "name"
+
+# OAuth client registration
+# v0.16: With requireClientRegistration off (the default), v0.16 accepted any
+#   client_id at the authorization endpoint without a registration. With it
+#   on, only registered clients worked, and anonymousClientRegistration
+#   controlled whether anyone could register one.
+# v1: v1 rejects a client_id that is neither registered, a stateless id
+#   issued by its RFC 7591 registration endpoint, nor a Client ID Metadata
+#   Document URL. Applications that used an arbitrary unregistered client_id
+#   stop working after cutover until they are registered as OAuthClient
+#   objects. At the same time, v1 always accepts RFC 7591 registration of
+#   public clients under the anonymous HTTP rate limit (confidential clients
+#   need sysOAuthClientCreate), so a v0.16 restriction on registration cannot
+#   be kept.
+# Source anonymousClientRegistration: true
+# Source requireClientRegistration: false
+#   action: Client registration (accept, abort); recommended "accept"
+[instance.oauth_registration."x:OidcProvider"]
+action = "accept"
+
+# New permissions
+# v0.16: Roles listed the permissions they grant; 37 permissions no longer
+#   exist in v1 and are removed.
+# v1: v1 adds permissions for IMAP and JMAP metadata, the metadata settings,
+#   the encryption settings, connected OAuth applications, the search index
+#   queue and share cleanup tasks. Custom roles do not get them
+#   automatically; the default roles and every role that allows sign-in get
+#   their v1 defaults whatever the answer.
+#   action: New permissions (grant, none); recommended "grant"
+[global.new_permissions]
+action = "grant"
+
+# ==== Other settings ====
+
+# Changed defaults
+# v0.16: Some settings still have their v0.16 default value.
+# v1: v1 changed these defaults (cache sizes, report domain expressions,
+#   Pyzor, the SQL login query, the NATS port, connection pool sizes and
+#   others). Pinning keeps the v0.16 behaviour; inheriting adopts the v1
+#   default.
+# Recommendation: The recommended policy pins defaults whose change would
+#   alter behaviour (Pyzor, SQL login query, Redis user name, NATS port, log
+#   file prefix, OIDC display name claim) and inherits the rest.
+#   policy: Policy (recommended, pin, inherit); recommended "recommended"
+#   overrides: Per setting overrides; recommended {}
+[global.changed_defaults]
+policy = "recommended"
