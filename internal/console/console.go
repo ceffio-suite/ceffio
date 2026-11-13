@@ -52,6 +52,11 @@ type Server struct {
 	ncPass string
 	kcBase string // Keycloak API base URL (resolved Service ClusterIP)
 
+	// mailBase overrides the mail server's public URL. Empty in production
+	// (baseMessagerie derives https://mail.<domain>); set by tests so the
+	// rotation checks run against an httptest server instead of the network.
+	mailBase string
+
 	// ops tracks the asynchronous module operations (one at a time per
 	// module, with the in-memory journal). See module_ops.go.
 	ops *opsManager

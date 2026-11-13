@@ -374,6 +374,14 @@ conversion from the restored store.
   25, 443, 465, 993, 995, 4190 and 8080 — submission on 587 and IMAP on 143
   are **not** listening. A client configured for 587/143 keeps failing
   until it is moved to 465/993 (or the listeners are re-added).
+- **The console's password rotation no longer reports a mail failure.** The
+  mail administrator (`adminceffio@ceffio.local`) has no local password: its
+  domain is attached to the OIDC directory, and `x:AccountPassword/set`
+  answers `forbidden` ("Your account does not support password changes") for
+  such an account. Since 0.10.21 the step verifies with
+  `/api/discover/<account>` that mail delegates to Keycloak and reports SSO;
+  before, it PATCHed `/api/principal/{name}`, an endpoint removed in Stalwart
+  0.16 that answered 404.
 - OIDC audiences are enforced against `acceptedAudiences` = the WebUI client
   identifier, as before.
 
