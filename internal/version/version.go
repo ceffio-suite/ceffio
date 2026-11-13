@@ -139,7 +139,9 @@ var Registry = []Composant{
 		// says which bytes. A tag can be moved on the registry; a digest cannot, and
 		// this image is the one that validates the room token — the reference has to
 		// be as immutable as the guarantee it carries.
-		Nom: "ceffio-capture", Image: "ghcr.io/ceffio-suite/ceffio-capture:v0.8.3@sha256:08a4fb37d5c0aa7116e7972303cb611cf99fabc15f462424c7d06841b2355ce8",
+		// v0.8.5 and not v0.8.4: the scan refused v0.8.4, whose base image carried
+		// the Python 3.12.15 of CVE-2026-115557. v0.8.5 ships 3.12.16 and passes.
+		Nom: "ceffio-capture", Image: "ghcr.io/ceffio-suite/ceffio-capture:v0.8.5@sha256:f94074f8d4b87633dcb3dde212cd54414f9f209f9316d9e7f5ca967dc4a9a9fb",
 		Module: "internal/capture", Role: "per-participant audio capture and CPU transcription", Licence: "AGPL-3.0-or-later",
 	},
 	{
