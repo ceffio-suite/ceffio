@@ -17,6 +17,12 @@
 // ORDER MATTERS: Keycloak first. If a later step fails, the SSO password is
 // already up to date and you can still sign in; the reverse would leave you
 // with an account whose password you don't know.
+//
+// STALWART IS NOT WRITTEN TO, and that is not a gap: the mail administrator
+// has no local password. It belongs to a domain attached to the OIDC
+// directory, and Stalwart refuses to give such an account one (see
+// rotStalwart). Its password IS the Keycloak one, so the step verifies that
+// the delegation is in place instead of writing anything.
 package console
 
 import (
@@ -185,29 +191,33 @@ func (s *Server) handleAdminRotate(w http.ResponseWriter, r *http.Request) {
 		Message string `json:"message,omitempty"`
 	}
 	var etapes []etape
-	ajouter := func(sys string, err error) bool {
+	// note is shown on SUCCESS, not only on failure: a step that deliberately
+	// writes nothing has to say so, otherwise "✓" suggests a write that never
+	// happened.
+	ajouter := func(sys string, err error, note string) bool {
 		if err != nil {
 			etapes = append(etapes, etape{sys, false, err.Error()})
 			return false
 		}
-		etapes = append(etapes, etape{sys, true, ""})
+		etapes = append(etapes, etape{sys, true, note})
 		return true
 	}
 
 	// 1. KEYCLOAK FIRST: it is the source of identity. Once this step
 	//    is done, the SSO password is valid even if the rest fails.
-	okKC := ajouter("Keycloak (SSO)", s.rotKeycloak(r, mdp))
+	okKC := ajouter("Keycloak (SSO)", s.rotKeycloak(r, mdp), "")
 
 	// 2. Nextcloud: the local account must accept the same password, otherwise
 	//    direct sign-in (fallback if SSO goes down) fails.
 	if okKC {
-		ajouter("Nextcloud", s.rotNextcloud(r, mdp))
+		ajouter("Nextcloud", s.rotNextcloud(r, mdp), "")
 	}
 
 	// 3. Stalwart only if deployed: otherwise we would report a failure where
 	//    there is simply nothing to do.
 	if okKC && s.stalwartJoignable(r) {
-		ajouter("Stalwart (mail)", s.rotStalwart(r, mdp))
+		ajouter("Stalwart (mail)", s.rotStalwart(r),
+			"same password as the directory (SSO)")
 	}
 
 	rep := map[string]any{"etapes": etapes, "ok": okKC}
@@ -417,6 +427,17 @@ func (s *Server) rotNextcloud(r *http.Request, mdp string) error {
 // Stalwart
 // ---------------------------------------------------------------------------
 
+// baseMessagerie returns the mail server's public base URL.
+//
+// It is read from a field so a test can substitute an httptest server, exactly
+// like kcBase: these checks must be exercised without DNS or a live cluster.
+func (s *Server) baseMessagerie() string {
+	if s.mailBase != "" {
+		return s.mailBase
+	}
+	return "https://mail." + s.Domain
+}
+
 // stalwartJoignable reports whether the Stalwart admin responds.
 //
 // We query /healthz/live: the endpoint Stalwart exposes without
@@ -425,7 +446,7 @@ func (s *Server) rotNextcloud(r *http.Request, mdp string) error {
 // (401) — both would make the service look absent when it is healthy.
 func (s *Server) stalwartJoignable(r *http.Request) bool {
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet,
-		"https://mail."+s.Domain+"/healthz/live", nil)
+		s.baseMessagerie()+"/healthz/live", nil)
 	if err != nil {
 		return false
 	}
@@ -462,19 +483,35 @@ func (s *Server) coffreJoignable(r *http.Request) bool {
 	return true
 }
 
-// rotStalwart changes the mail administrator's password.
+// rotStalwart verifies that the mail administrator signs in through the
+// directory — and therefore uses the password rotation has just written.
 //
-// Stalwart exposes a REST administration API. The call is only made if the
-// service responds: otherwise rotation would be degraded for a nonexistent
-// service.
-func (s *Server) rotStalwart(r *http.Request, mdp string) error {
-	corps, _ := json.Marshal(map[string]any{"password": mdp})
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPatch,
-		"https://mail."+s.Domain+"/api/principal/"+compteAdmin, strings.NewReader(string(corps)))
+// NOTHING IS WRITTEN IN STALWART, and that is a property of the server, not an
+// oversight:
+//
+//   - the endpoint used until 0.10.20, PATCH /api/principal/{name}, was
+//     removed in Stalwart 0.16. On 1.0.3 it answers 404 with an RFC 9457 body
+//     ({"type":"about:blank","status":404,...}) — the failure the console
+//     showed. It had never worked against a 0.16 server;
+//   - its replacement, the JMAP method x:AccountPassword/set, REFUSES an
+//     account attached to an external directory. Measured on 1.0.3 with a
+//     throwaway account in the same domain as adminceffio: {"type":
+//     "forbidden","description":"Your account does not support password
+//     changes"}.
+//
+// So the mail password IS the directory password: one identity, one secret.
+// Rotation writes it in Keycloak (step 1); this step checks that the mail
+// server really delegates to that directory, with the endpoint a mail client
+// itself consults — /api/discover/<account> — which needs no credentials.
+func (s *Server) rotStalwart(r *http.Request) error {
+	compte := compteAdmin + "@ceffio.local"
+	attendu := "https://keycloak." + s.Domain + "/realms/" + realm
+
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet,
+		s.baseMessagerie()+"/api/discover/"+url.PathEscape(compte), nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
 	rep, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
@@ -482,7 +519,19 @@ func (s *Server) rotStalwart(r *http.Request, mdp string) error {
 	defer rep.Body.Close()
 	if rep.StatusCode >= 300 {
 		b, _ := io.ReadAll(rep.Body)
-		return fmt.Errorf("Stalwart refused (%d): %s", rep.StatusCode, tronquer(string(b), 160))
+		return fmt.Errorf("discovery refused (%d): %s", rep.StatusCode, tronquer(string(b), 160))
+	}
+	var decouverte struct {
+		Issuer string `json:"issuer"`
+	}
+	if err := json.NewDecoder(rep.Body).Decode(&decouverte); err != nil {
+		return fmt.Errorf("discovery returned no OIDC provider: %v", err)
+	}
+	if decouverte.Issuer == "" {
+		return fmt.Errorf("mail does not delegate to a directory: no OIDC issuer")
+	}
+	if decouverte.Issuer != attendu {
+		return fmt.Errorf("mail delegates to %s, not to %s", decouverte.Issuer, attendu)
 	}
 	return nil
 }
