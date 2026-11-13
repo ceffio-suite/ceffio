@@ -89,6 +89,15 @@ The administration account's password is rotated from the console: it is generat
 applied to Keycloak and to Nextcloud, and **shown only once**. No system can read it back
 afterwards; only an irreversible fingerprint is kept.
 
+The mail server is covered **through that directory** rather than written to, and that is
+deliberate: `adminceffio@ceffio.local` has no local Stalwart password. It belongs to a
+domain attached to the OIDC directory, and Stalwart 1.0 refuses to give it one
+(`x:AccountPassword/set` answers `forbidden`, "Your account does not support password
+changes" — measured on 1.0.3 with an account in the same domain). The rotation checks with
+`/api/discover/<account>` that mail delegates to the platform's Keycloak realm, and reports
+the step as SSO. The endpoint it used before 0.10.21, `PATCH /api/principal/{name}`, was
+removed in Stalwart 0.16 and could only answer 404.
+
 Every other secret is generated at installation and **reused** on every subsequent run.
 Regenerating one silently would break the pair that depends on it — a database password
 the database no longer accepts, or an OIDC client secret Keycloak no longer knows — with a

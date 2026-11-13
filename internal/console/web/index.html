@@ -959,7 +959,8 @@
   // it is the price of a secret stored only as a fingerprint.
   window.tournerMdp = async () => {
     if (!confirm('Regenerate the administrator account password?\n\n' +
-                 'It will be applied to the directory, to Nextcloud and to the mail server.\n' +
+                 'It will be applied to the directory (and therefore to the mail server,\n' +
+                 'which signs in through it) and to Nextcloud.\n' +
                  'You will have to sign in everywhere with the new one.')) return;
 
     const b = $('btnRotate');
