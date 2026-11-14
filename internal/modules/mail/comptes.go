@@ -585,8 +585,18 @@ func (m *mailModule) reprendreCompteBoite(ctx context.Context, env module.Env, u
 // THE BOUND IS CHECKED AGAIN, and not only at creation: the volume can have
 // been shrunk by an operator, and a quota the disk cannot hold would make the
 // server refuse mail in a way nobody asked for.
+//
+// ONLY THE ACTION'S OWN FIELDS ARE VALIDATED. The page and the CLI send exactly
+// the fields the action declares — the new quota — so validating the creation
+// group here would demand `boite`, which no quota form carries, and every quota
+// change would be refused with "comptes.boite ... is required". Found live in
+// §8.2 step 10.
 func (m *mailModule) changerQuota(ctx context.Context, env module.Env, u module.User, v module.Values) error {
-	if err := module.Validate(m.groupeCompte(), v); err != nil {
+	if err := module.Validate(module.Group{
+		ID:     groupeComptes,
+		Title:  "Mailbox",
+		Fields: actionQuotaMail().Fields,
+	}, v); err != nil {
 		return err
 	}
 	quota, err := m.quotaDemandee(ctx, env, v)

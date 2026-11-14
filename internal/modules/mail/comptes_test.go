@@ -640,6 +640,10 @@ func TestActionSuspendPuisReprend(t *testing.T) {
 
 // TestActionQuotaBorneEtApplique: the quota action re-checks the volume bound
 // and writes the new value.
+//
+// THE VALUES ARE THE ACTION'S, not the creation form's: the page and the CLI
+// only send the fields the action declares, so `boite` is absent — passing it
+// here would hide the fact that the action must not require it (§8.2 step 10).
 func TestActionQuotaBorneEtApplique(t *testing.T) {
 	f := nouveauFauxBoites()
 	f.comptes = []mailcore.CompteCourriel{{ID: "u1", Nom: "alice", Adresse: "alice@example.com"}}
@@ -647,7 +651,7 @@ func TestActionQuotaBorneEtApplique(t *testing.T) {
 	env := envCompte(&strings.Builder{})
 	u := utilisateur("1", "alice", "")
 
-	if err := (&mailModule{}).AccountAction(context.Background(), env, u, "quota", module.Values{cleBoite: "true", cleQuotaGio: "4"}); err != nil {
+	if err := (&mailModule{}).AccountAction(context.Background(), env, u, "quota", module.Values{cleQuotaGio: "4"}); err != nil {
 		t.Fatalf("quota: %v", err)
 	}
 	if strings.Join(f.appels, ",") != "reglerQuotaCompte:alice:4" {
@@ -655,11 +659,22 @@ func TestActionQuotaBorneEtApplique(t *testing.T) {
 	}
 
 	f.appels = nil
-	if err := (&mailModule{}).AccountAction(context.Background(), env, u, "quota", module.Values{cleBoite: "true", cleQuotaGio: "21"}); err == nil {
+	if err := (&mailModule{}).AccountAction(context.Background(), env, u, "quota", module.Values{cleQuotaGio: "21"}); err == nil {
 		t.Fatal("a quota above the volume was accepted")
 	}
 	if len(f.appels) != 0 {
 		t.Errorf("the server was called with an out-of-bound quota: %v", f.appels)
+	}
+
+	// A MISSING QUOTA IS THE ACTION'S ERROR, and it must name the field the
+	// action asked for: naming `boite` would send the operator to a form that
+	// has nothing to do with the action.
+	err := (&mailModule{}).AccountAction(context.Background(), env, u, "quota", module.Values{})
+	if err == nil || !strings.Contains(err.Error(), cleQuotaGio) {
+		t.Fatalf("a quota change without a quota was accepted or misnamed: %v", err)
+	}
+	if strings.Contains(err.Error(), cleBoite) {
+		t.Errorf("the quota action complains about %s: %v", cleBoite, err)
 	}
 }
 
