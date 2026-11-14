@@ -120,6 +120,13 @@ func chargeKeycloak(s *Sender) map[string]string {
 
 // ecrireSmtpServerKeycloak sends the payload to kcadm.
 //
+// THE DOCUMENT IS A REALM REPRESENTATION THAT CARRIES `smtpServer`, not the bare
+// map. `kcadm update realms/<realm> -f` decodes its file into a
+// RealmRepresentation and rejects every unknown field, so sending the map itself
+// fails with `Unrecognized field "auth"` — the realm then keeps no sender at all,
+// which is the silent drop this function exists to prevent. (Found by the live
+// upgrade to 0.11.0-rc.1, not by the tests: they read the map's fields directly.)
+//
 // THE DOCUMENT GOES THROUGH A TEMPORARY FILE, NOT THROUGH `-s`. A `-s` argument puts
 // the SMTP password in kcadm's command line, which every process in the pod can read
 // (/proc/<pid>/cmdline) for as long as the call lasts; the codebase refuses that
@@ -127,7 +134,9 @@ func chargeKeycloak(s *Sender) map[string]string {
 // 0600 and removed in the same shell, and `-f` accepts a partial representation
 // exactly like `-s` does.
 func ecrireSmtpServerKeycloak(ctx context.Context, charge map[string]string) error {
-	doc, err := json.Marshal(charge)
+	doc, err := json.Marshal(struct {
+		SmtpServer map[string]string `json:"smtpServer"`
+	}{SmtpServer: charge})
 	if err != nil {
 		return fmt.Errorf("encoding the SMTP settings: %w", err)
 	}
