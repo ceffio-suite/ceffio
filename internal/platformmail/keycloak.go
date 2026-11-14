@@ -151,15 +151,23 @@ func ecrireSmtpServerKeycloak(ctx context.Context, charge map[string]string) err
 
 // lireSmtpServerKeycloak reads the realm's SMTP settings back.
 //
-// IT ASKS FOR ONE FIELD. `kcadm get realms/ceffio` without `--fields` returns the
-// whole realm, including its clients and their secrets; the read-back needs nine
-// strings and nothing else.
+// THE WHOLE REALM IS READ, WITHOUT `--fields`. Keycloak 26.8 answers
+// `?fields=smtpServer` with `{"smtpServer": {}}`: the server-side field filter
+// empties the map it just selected, so the read-back compared "no sender" against a
+// realm that had one and every install reported a mismatch it had itself invented.
+// Measured on the live demo, 2026-11-14: the same realm answers `--fields
+// smtpServer` with `{}` and the plain document with all nine values.
+//
+// THE FULL DOCUMENT IS SMALL AND CARRIES NO SECRETS: 5 877 bytes on the demo, zero
+// `secret` keys, zero `clientId` entries — the realm representation does not expand
+// its clients. The only credential in it is `smtpServer.password`, which Keycloak
+// masks as `**********`.
 //
 // A REALM WITH NO SETTINGS ANSWERS `{}` (the field is absent), which decodes to an
 // empty map — the same value as an emptied one. Both mean "no sender", which is
 // exactly the comparison the caller needs.
 func lireSmtpServerKeycloak(ctx context.Context) (map[string]string, error) {
-	out, err := executerKcadm(ctx, nsIdentity, "", `/opt/keycloak/bin/kcadm.sh get realms/`+identity.RealmCeffio+` --fields smtpServer`)
+	out, err := executerKcadm(ctx, nsIdentity, "", `/opt/keycloak/bin/kcadm.sh get realms/`+identity.RealmCeffio)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +176,9 @@ func lireSmtpServerKeycloak(ctx context.Context) (map[string]string, error) {
 	}
 	corps := identity.CorpsJSON(out)
 	if strings.TrimSpace(corps) == "" {
-		return nil, fmt.Errorf("the realm read-back returned no JSON document: %q", strings.TrimSpace(out))
+		// BOUNDED: the document is small but it is not quoted back in full — the
+		// caller's error travels into install logs.
+		return nil, fmt.Errorf("the realm read-back returned no JSON document: %.200q", strings.TrimSpace(out))
 	}
 	if err := json.Unmarshal([]byte(corps), &doc); err != nil {
 		return nil, fmt.Errorf("decoding the realm's SMTP settings: %w", err)
