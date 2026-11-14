@@ -145,6 +145,13 @@ func occDansPod(ctx context.Context, entree, script string) (string, error) {
 // ---------------------------------------------------------------------------
 // Keycloak operations
 
+// champsCompte is the field filter both account reads use. THE BRACKETS AND THE
+// QUOTES ARE BOTH LOAD-BEARING: `attributes` without `(*)` comes back as an empty
+// map (Keycloak's documented filter rule), and the parentheses reach a shell, so
+// an unquoted `attributes(*)` is a syntax error — `sh: syntax error near
+// unexpected token '('` — which is how this fix first landed and failed.
+const champsCompte = `"id,username,email,enabled,attributes(*)"`
+
 // listerComptesKeycloak returns every platform account, pages included.
 //
 // briefRepresentation=false is what makes Keycloak return the attributes: with
@@ -170,8 +177,8 @@ func listerComptesKeycloak(ctx context.Context) ([]comptePlateforme, error) {
 	var comptes []comptePlateforme
 	for decalage := 0; ; decalage += page {
 		sortie, err := executerKcadm(ctx, "", fmt.Sprintf(
-			"%s get users -r %s -q briefRepresentation=false --fields id,username,email,enabled,attributes(*) --offset %d --limit %d",
-			kcadmBin, realmCeffio, decalage, page))
+			"%s get users -r %s -q briefRepresentation=false --fields %s --offset %d --limit %d",
+			kcadmBin, realmCeffio, champsCompte, decalage, page))
 		if err != nil {
 			return nil, fmt.Errorf("listing the platform accounts: %w", err)
 		}
@@ -196,7 +203,7 @@ func listerComptesKeycloak(ctx context.Context) ([]comptePlateforme, error) {
 func trouverCompteKeycloak(ctx context.Context, nom string) (comptePlateforme, bool, error) {
 	sortie, err := executerKcadm(ctx, "", kcadmBin+" get users -r "+realmCeffio+
 		" -q briefRepresentation=false -q username="+entreGuillemets(nom)+" -q exact=true"+
-		" --fields id,username,email,enabled,attributes(*)")
+		" --fields "+champsCompte)
 	if err != nil {
 		return comptePlateforme{}, false, fmt.Errorf("looking up %q in Keycloak: %w", nom, err)
 	}

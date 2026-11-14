@@ -17,11 +17,19 @@
 // 1.0.3 answers `notDestroyed` for an object that is gone) asks for the raw
 // form explicitly.
 //
-// THE ENVELOPE IS THE SIMPLE ONE: `{"using":[],"methodCalls":[[method,args,
-// "c1"]]}`. Stalwart 1.0.3 answers it, and the standard `urn:ietf:params:jmap:
-// core` capability is not requested because none of the calls used here needs
-// it. Verified on the live server: a bare `using` list returns the full
-// `x:Account/get` list instead of an `unknownCapability` error.
+// THE ENVELOPE IS `{"using":[…],"methodCalls":[[method,args,"c1"]]}`, AND THE
+// LIST DEPENDS ON THE METHOD:
+//
+//   - management calls (`x:…`) get an EMPTY list. Stalwart 1.0.3 answers them,
+//     and requesting `urn:ietf:params:jmap:core` is not needed (verified on the
+//     live server: a bare `using` list returns the full `x:Account/get` list
+//     instead of an `unknownCapability` error).
+//   - RFC 8621 methods (`Mailbox/get`, `Email/query`, `Email/get`) get their
+//     capabilities. Without them Stalwart refuses with `unknownMethod` and the
+//     body says why ("requires capability urn:ietf:params:jmap:mail which is not
+//     present in the \"using\" property") — measured on the live demo,
+//     2026-11-14, after the method names had been fixed and the check still
+//     failed for a different reason.
 package jmap
 
 import (
@@ -122,7 +130,7 @@ func Nouveau(t Transport, compte string) *Client {
 // caller of the brut form decides — and it decides on the read-back.
 func (c *Client) AppelBrut(ctx context.Context, methode string, args map[string]any) (string, map[string]any, error) {
 	enveloppe := map[string]any{
-		"using":       []string{},
+		"using":       capacites(methode),
 		"methodCalls": []any{[]any{methode, c.avecCompte(args), "c1"}},
 	}
 	brut, err := json.Marshal(enveloppe)
@@ -154,6 +162,18 @@ func (c *Client) AppelBrut(ctx context.Context, methode string, args map[string]
 		return "", nil, fmt.Errorf("unreadable JMAP body: %w", err)
 	}
 	return nom, corps, nil
+}
+
+// capacites returns the JMAP capabilities one method needs.
+//
+// THE NAMESPACE DECIDES, and the split is not cosmetic: the `x:` methods are
+// Stalwart's own management API, the others are RFC 8621 mail data. Capabilities
+// are declared per request in JMAP, so a single envelope cannot serve both.
+func capacites(methode string) []string {
+	if strings.HasPrefix(methode, "x:") {
+		return []string{}
+	}
+	return []string{"urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"}
 }
 
 // Appel sends one method call and turns every refusal into a *Refus.

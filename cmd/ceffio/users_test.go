@@ -1094,7 +1094,9 @@ func TestEcrireCompteKeycloakSansRienAFaireNInterrogeRien(t *testing.T) {
 // attributes — the documented filter rule returns an empty object for a map whose
 // children are not requested with brackets — so the module markers
 // (`ceffio_kind`) would vanish from accounts that carry them and a marked account
-// would be read as external.
+// would be read as external. The filter must also be QUOTED, because the command
+// runs through `sh -c`: the first version of the fix passed `attributes(*)` bare
+// and kcadm never started (`syntax error near unexpected token '('`).
 func TestListerComptesKeycloakPagineEtLitLesAttributs(t *testing.T) {
 	var commandes []string
 	ancien := executerKcadm
@@ -1128,9 +1130,10 @@ func TestListerComptesKeycloakPagineEtLitLesAttributs(t *testing.T) {
 		if strings.Contains(commande, "--first") {
 			t.Fatalf("call %d still passes --first, which kcadm 26.8 refuses: %s", i, commande)
 		}
-		if !strings.Contains(commande, "attributes(*)") {
-			t.Fatalf("call %d filters the attributes without their children, "+
-				"which Keycloak answers with an empty map: %s", i, commande)
+		if !strings.Contains(commande, `--fields "id,username,email,enabled,attributes(*)"`) {
+			t.Fatalf("call %d does not pass the quoted, bracketed field filter "+
+				"(unquoted, the parentheses are a shell syntax error; unbracketed, "+
+				"Keycloak answers an empty map): %s", i, commande)
 		}
 	}
 	if !strings.Contains(commandes[1], "--offset 100") {
