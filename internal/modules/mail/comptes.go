@@ -200,12 +200,23 @@ func (m *mailModule) ValidateAccount(ctx context.Context, env module.Env, u modu
 	// THE ADDRESS MUST BE FREE, as an account address AND as an alias (AdressePrise
 	// looks at both): an address that only exists as an alias already receives
 	// somebody's mail.
+	//
+	// EXCEPT WHEN THE MAILBOX IS THIS USER'S OWN. The platform account exists
+	// before this module is called, and every step of a creation is idempotent,
+	// so a creation stopped half-way — the mailbox there, its credential not —
+	// must CONVERGE on the retry the CLI and the page advertise
+	// (`cmd/ceffio/users.go`: "run the same command again"). Refusing here would
+	// leave a mailbox with no credential and no way to finish it, which is the
+	// jail the account contract's ordering exists to prevent. A mailbox bearing
+	// the very name we are creating is that user's mailbox — this module names
+	// mailboxes after the platform username and nothing else — so completing it
+	// duplicates no object and takes nothing from anybody else.
 	for _, adresse := range adressesDuNom(nom, env.Domain) {
 		titulaire, prise, err := adressePriseCourriel(ctx, adresse)
 		if err != nil {
 			return fmt.Errorf("checking that the address %s is free: %w", adresse, err)
 		}
-		if prise {
+		if prise && !strings.EqualFold(titulaire, nom) {
 			return fmt.Errorf("%w: %s: the address %s is already used by the mailbox %q",
 				module.ErrInvalidSettings, cleBoite, adresse, titulaire)
 		}

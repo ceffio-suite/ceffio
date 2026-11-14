@@ -283,6 +283,64 @@ func TestValidationRefuseUneAdresseDejaPrise(t *testing.T) {
 	}
 }
 
+// TestValidationAdopteLaBoiteDuMemeNom: a creation that stopped between the
+// mailbox and its credential leaves the address taken BY THE USER'S OWN
+// ACCOUNT. The retry the CLI advertises ("run the same command again") must
+// complete that mailbox instead of refusing the address: refusing leaves an
+// account nobody can use and no gesture to finish it.
+func TestValidationAdopteLaBoiteDuMemeNom(t *testing.T) {
+	f := nouveauFauxBoites()
+	// Both addresses the name would take are already held by a mailbox bearing
+	// that name: the state a half-finished creation leaves behind.
+	f.pris["alice@example.com"] = "alice"
+	f.pris["alice@ceffio.local"] = "alice"
+	installerBoites(t, f)
+	err := (&mailModule{}).ValidateAccount(context.Background(), envCompte(&strings.Builder{}),
+		utilisateur("id", "alice", ""), module.Values{cleBoite: "true", cleQuotaGio: "1"})
+	if err != nil {
+		t.Fatalf("the retry was refused on the user's own mailbox: %v", err)
+	}
+
+	// And the retry CONVERGES: the module completes the existing mailbox, its
+	// credential and its Nextcloud Mail account, and creates no second account.
+	res, err := (&mailModule{}).EnsureAccount(context.Background(), envCompte(&strings.Builder{}),
+		utilisateur("id", "alice", ""), module.Values{cleBoite: "true", cleQuotaGio: "1"})
+	if err != nil {
+		t.Fatalf("completing the mailbox failed: %v", err)
+	}
+	if res.Email != "alice@example.com" {
+		t.Errorf("the result advertises %q, expected alice@example.com", res.Email)
+	}
+	if res.Attributes[attributInterne] != valeurInterne {
+		t.Errorf("the result does not mark the user internal: %v", res.Attributes)
+	}
+	for _, prefixe := range []string{"assurerCompteCourriel:alice", "assurerMotDePasseCompte:alice", "assurerMailNextcloud:alice"} {
+		trouve := false
+		for _, appel := range f.appels {
+			if strings.HasPrefix(appel, prefixe) {
+				trouve = true
+				break
+			}
+		}
+		if !trouve {
+			t.Errorf("the retry did not converge through %q: %v", prefixe, f.appels)
+		}
+	}
+}
+
+// TestValidationRefuseLaBoiteDUnAutreNom: adoption is limited to the mailbox of
+// the user being created; an address held by SOMEBODY ELSE stays a refusal.
+func TestValidationRefuseLaBoiteDUnAutreNom(t *testing.T) {
+	f := nouveauFauxBoites()
+	f.pris["alice@ceffio.local"] = "bob"
+	installerBoites(t, f)
+	err := (&mailModule{}).ValidateAccount(context.Background(), envCompte(&strings.Builder{}),
+		utilisateur("id", "alice", ""), module.Values{cleBoite: "true", cleQuotaGio: "1"})
+	if err == nil || !strings.Contains(err.Error(), "bob") {
+		t.Fatalf("an address held by another mailbox was accepted: %v", err)
+	}
+}
+
 // TestValidationRefuseUnCheckBloquant: a blocking deployment problem (no MX,
 // port 25 closed) is a reason NOT to create a mailbox, and the error lists the
 // checks so the operator does not have to open the checks tab to know why.
