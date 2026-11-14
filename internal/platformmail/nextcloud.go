@@ -55,18 +55,61 @@ func ApplyNextcloud(ctx context.Context, s *Sender) error {
 		etiquetteNextcloud, conteneurNextcloud, hote); err != nil {
 		return fmt.Errorf("applying the platform sender to Nextcloud: %w", err)
 	}
-	pod, err := cli.PodDuDeploiement(ctx, nsFiles, deploiementNextcloud, etiquetteNextcloud)
-	if err != nil {
-		return fmt.Errorf("applying the platform sender to Nextcloud: %w", err)
-	}
-	occ := func(args ...string) (string, error) {
-		return cli.Executer(ctx, nsFiles, pod, conteneurNextcloud,
-			append([]string{"php", "occ"}, args...)...)
-	}
+	// THE POD IS RESOLVED ON FIRST USE AND AGAIN IF AN EXEC FAILS: the alias step
+	// above restarts the application, and the rollout can replace the pod under a
+	// sequence of writes even after it was waited for. See occAvecReprise.
+	occ := occAvecReprise(ctx, cli)
 	if s == nil {
 		return effacerNextcloud(occ)
 	}
 	return ecrireNextcloud(s, occ)
+}
+
+// occAvecReprise returns a `php occ` runner that survives its pod being replaced.
+//
+// WHY THIS EXISTS: the caller may have just restarted the application to install
+// the alias, and the pod the API hands back can then be replaced WHILE the values
+// are being written. One exec fails, the read-back finds nothing, and the upgrade
+// stops with "mail_smtpauth reads back \"\", expected \"1\"" — a message that
+// blames a value for what was a target that moved. That is exactly what happened
+// on 0.11.0-rc.5.
+//
+// THE RULE IS: an exec that fails is retried ONCE against the pod resolved again.
+// A genuine refusal from occ comes back the same way and is still reported by the
+// read-back, so this can hide a moved target but not a wrong value.
+func occAvecReprise(ctx context.Context, cli clientCluster) occDans {
+	pod := ""
+	resoudre := func() (string, error) {
+		if pod != "" {
+			return pod, nil
+		}
+		trouve, err := cli.PodDuDeploiement(ctx, nsFiles, deploiementNextcloud, etiquetteNextcloud)
+		if err != nil {
+			return "", fmt.Errorf("applying the platform sender to Nextcloud: %w", err)
+		}
+		pod = trouve
+		return pod, nil
+	}
+	return func(args ...string) (string, error) {
+		cible, err := resoudre()
+		if err != nil {
+			return "", err
+		}
+		lancer := func(dans string) (string, error) {
+			return cli.Executer(ctx, nsFiles, dans, conteneurNextcloud,
+				append([]string{"php", "occ"}, args...)...)
+		}
+		sortie, err := lancer(cible)
+		if err == nil {
+			return sortie, nil
+		}
+		suivant, errPod := cli.PodDuDeploiement(ctx, nsFiles, deploiementNextcloud, etiquetteNextcloud)
+		if errPod != nil {
+			return "", fmt.Errorf("%w (and no pod to retry on: %v)", err, errPod)
+		}
+		pod = suivant
+		return lancer(suivant)
+	}
 }
 
 // reglagesNextcloud is the translation table, kept pure so a test can read it.
