@@ -36,7 +36,7 @@ func equalStrings(a, b []string) bool {
 }
 
 // TestSelectedOptionalModulesDefaut: with no flag, the Default Optional
-// modules are selected (recording today) and nothing else.
+// modules are selected (recording and mail today) and nothing else.
 func TestSelectedOptionalModulesDefaut(t *testing.T) {
 	got, err := selectedOptionalModules(&installOptions{})
 	if err != nil {
@@ -47,10 +47,19 @@ func TestSelectedOptionalModulesDefaut(t *testing.T) {
 	// Deriving it (walking module.All() for Optional+Default) made the test
 	// unable to fail: flipping a module's Default changed the code AND the
 	// expectation in the same move, so the assertion held either way. A
-	// default install is a promise to the operator — recording is part of
-	// it, HaRP and live transcription are not — and a promise is verified
-	// against what was promised, not against what the code happens to do.
-	want := []string{"recording"}
+	// default install is a promise to the operator — recording and the mail
+	// server are part of it, HaRP and live transcription are not — and a
+	// promise is verified against what was promised, not against what the
+	// code happens to do.
+	//
+	// MAIL IS IN THIS LIST SINCE THE MAIL PLAN: every installation had a mail
+	// server before, and the module being Optional does not make it opt-in by
+	// default — Default: true is exactly that promise kept.
+	//
+	// THE LIST IS ALSO A CHECK ON THE DEPENDENCY RULE: mail requires identity,
+	// ingress and files, which are Core modules the sequence installs. None of
+	// them may appear here.
+	want := []string{"recording", "mail"}
 	if !equalStrings(idsOf(got), want) {
 		t.Errorf("default selection = %v, want %v: this list is what `ceffio install` promises to deploy", idsOf(got), want)
 	}
@@ -71,10 +80,12 @@ func TestSelectedOptionalModulesSans(t *testing.T) {
 			t.Error("--without recording still selected recording")
 		}
 	}
-	if len(got) != 0 {
-		t.Errorf("--without recording selected %v: recording is the only default optional module, "+
-			"so excluding it must leave nothing — a non-empty list here means a module became "+
-			"default without this test being updated", idsOf(got))
+	// MAIL MUST REMAIN: it is the other default Optional module, and dropping
+	// it would be the opposite error — an exclusion silently turning into a
+	// wider one.
+	if !equalStrings(idsOf(got), []string{"mail"}) {
+		t.Errorf("--without recording selected %v, want [mail]: excluding one default module "+
+			"must leave the others in place", idsOf(got))
 	}
 }
 

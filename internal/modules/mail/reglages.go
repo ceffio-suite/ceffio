@@ -41,6 +41,9 @@ import (
 	"strconv"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	mailcore "github.com/ceffio-suite/ceffio/internal/mail"
 	"github.com/ceffio-suite/ceffio/internal/module"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
@@ -389,7 +392,32 @@ func (m *mailModule) ConfigurerRelaisInstallation(ctx context.Context, env modul
 	}
 	fmt.Printf("  ∙ outgoing mail: through the relay %s:%d (stored in the mail settings)\n",
 		v["hote"], port)
+
+	// THE VALUES ARE STORED, NOT APPLIED, WHEN THE SERVER DOES NOT EXIST YET.
+	// Since the mail server became an optional module, the installation writes
+	// the relay BEFORE the optional phase — that is what lets mailcore.Deploy
+	// read it — so there is no Deployment to re-apply to at this point. Applying
+	// anyway would fail on a missing pod and abort an installation for a server
+	// that is about to be deployed a few seconds later. Deploy applies the
+	// stored values itself, and §4.2 rule 6 keeps them applied afterwards.
+	if deploiementAbsent(ctx, env) {
+		fmt.Println("  ∙ the mail server is not deployed yet: these values will be applied when it is")
+		return nil
+	}
 	return m.reappliquerServeur(ctx)
+}
+
+// deploiementAbsent says whether the mail Deployment is KNOWN to be missing.
+//
+// WHY "KNOWN": a nil client cannot answer the question, and guessing "absent"
+// would skip an application the caller expected. The default is therefore the
+// historical behaviour (apply), and only a positive NotFound skips it.
+func deploiementAbsent(ctx context.Context, env module.Env) bool {
+	if env.Kube == nil {
+		return false
+	}
+	_, err := env.Kube.AppsV1().Deployments(nsMail).Get(ctx, "stalwart", metav1.GetOptions{})
+	return apierrors.IsNotFound(err)
 }
 
 // forcerModeEnvoi records the send mode WITHOUT touching the other server

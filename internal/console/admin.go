@@ -35,6 +35,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/ceffio-suite/ceffio/internal/module"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -132,9 +133,17 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Stalwart: a SEPARATE admin, we just take you there — and only if
-	// the service responds, otherwise we would send you to a dead page.
-	etat.StalwartPresent = s.stalwartJoignable(r)
+	// Stalwart: a SEPARATE admin, we just take you there — and only if the
+	// MODULE IS INSTALLED and the service responds.
+	//
+	// ASKING THE REGISTRY IS NOT REDUNDANT WITH THE PING. An uninstalled mail
+	// module leaves an Ingress-less host: Traefik answers 404, which is below
+	// 500, so the health check alone would call it present and offer a link to
+	// a mail server that does not exist. The module's state is the authority on
+	// whether there is anything to administer.
+	if s.mailEstInstalle(r.Context()) {
+		etat.StalwartPresent = s.stalwartJoignable(r)
+	}
 	if etat.StalwartPresent {
 		etat.UrlAdminStalwart = "https://mail." + s.Domain + "/admin"
 	} else {
@@ -215,7 +224,7 @@ func (s *Server) handleAdminRotate(w http.ResponseWriter, r *http.Request) {
 
 	// 3. Stalwart only if deployed: otherwise we would report a failure where
 	//    there is simply nothing to do.
-	if okKC && s.stalwartJoignable(r) {
+	if okKC && s.mailEstInstalle(r.Context()) && s.stalwartJoignable(r) {
 		ajouter("Stalwart (mail)", s.rotStalwart(r),
 			"same password as the directory (SSO)")
 	}
@@ -426,6 +435,29 @@ func (s *Server) rotNextcloud(r *http.Request, mdp string) error {
 // ---------------------------------------------------------------------------
 // Stalwart
 // ---------------------------------------------------------------------------
+
+// mailEstInstalle asks the registry whether the mail module is installed.
+//
+// WHY THROUGH THE CONTRACT AND NOT A HARDCODED DEPLOYMENT NAME: the module owns
+// the answer to "am I installed" — it knows which Deployment, Service and
+// Ingress it creates, and on which namespace. Reading `ceffio-mail/stalwart`
+// here would hardcode one module's internals in the console: the day the module
+// renames something, the console would quietly show a mail server that no
+// longer exists.
+//
+// DEGRADED COUNTS AS INSTALLED, deliberately: a mail server that is starting or
+// whose checks fail is still a server with an administration page, and hiding
+// the link would be the one moment the operator needs it.
+func (s *Server) mailEstInstalle(ctx context.Context) bool {
+	m, ok := moduleByID("mail")
+	if !ok {
+		return false
+	}
+	env := s.moduleEnv(io.Discard)
+	env.ModuleID = "mail"
+	etat := m.State(ctx, env)
+	return etat.Status == module.Installed || etat.Status == module.Degraded
+}
 
 // baseMessagerie returns the mail server's public base URL.
 //

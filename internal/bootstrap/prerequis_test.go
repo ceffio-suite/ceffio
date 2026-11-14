@@ -64,13 +64,11 @@ func TestVerifierResoutUnNomReel(t *testing.T) {
 	}
 }
 
-// The list must cover every host the deployment serves: a name missing here
-// means a certificate that never gets issued, discovered much later.
-func TestNomsAttendusCouvreLesSeptHotes(t *testing.T) {
-	// nomsAttendus lives in cmd/ceffio; this asserts the count the ingress
-	// package will serve, so a new route without a DNS entry is noticed.
-	const attendu = 7
-	if attendu != 7 {
-		t.Fatal("mettre à jour ce test avec la nouvelle surface")
-	}
-}
+// THE HOST-COUNT TEST THAT USED TO CLOSE THIS FILE IS GONE, not merely updated.
+//
+// It read `const attendu = 7; if attendu != 7 { t.Fatal(...) }` — a constant
+// compared to itself, which could not fail whatever the deployment served. Its
+// intent was real (a host without a DNS record is a certificate that never gets
+// issued, discovered much later), so the assertion now lives WHERE THE LIST IS:
+// TestNomsAttendusSuitLaSelection in cmd/ceffio, which calls nomsAttendus for
+// real, with and without the mail module.
