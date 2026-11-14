@@ -27,13 +27,16 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
 	"net/smtp"
 	"strings"
 	"time"
 
 	"github.com/ceffio-suite/ceffio/internal/module"
+	"github.com/ceffio-suite/ceffio/internal/platformmail"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
+	"github.com/ceffio-suite/ceffio/internal/settings"
 )
 
 const (
@@ -149,10 +152,24 @@ func (m *filesModule) CurrentSmtp(ctx context.Context, env module.Env, groupe st
 		"mail_smtpsecure":   "securite",
 		"mail_smtpname":     "utilisateur",
 		"mail_from_address": "expediteur",
-		"mail_domain":       "nom_expediteur",
 	} {
 		if v := lireOcc(ctx, env, "config:system:get", cle); v != "" {
 			out[cible] = v
+		}
+	}
+	// NEXTCLOUD IS NOT ASKED FOR THE SENDER NAME ANYMORE: its `mail_domain` now
+	// carries the sender's DOMAIN (the address is composed from local part plus
+	// domain), so reading it back as a display name would show "example.com" in
+	// a field labelled "Sender name". The stored group is where the operator's
+	// name survives, and it is read tolerantly — the form must still draw on an
+	// installation whose settings store is unreachable.
+	if env.Settings != nil && env.ModuleID != "" {
+		if g, ok := m.groupeDeSmtp(groupe); ok {
+			if vals, err := settings.Load(ctx, env, g); err == nil {
+				if n := strings.TrimSpace(vals["nom_expediteur"]); n != "" {
+					out["nom_expediteur"] = n
+				}
+			}
 		}
 	}
 	// Nextcloud writes an empty secure value for "none", and the form expects
@@ -171,12 +188,24 @@ func (m *filesModule) CurrentSmtp(ctx context.Context, env module.Env, groupe st
 	return out, nil
 }
 
-// Apply validates, stores and makes the change effective.
+// Apply stores the settings, then hands the write to the ONE writer of the
+// platform sender.
 //
-// TWO DESTINATIONS: the vault (the credential, where it already lives) and
-// Nextcloud's own configuration (everything, through occ — the only supported
-// path). The password is written to Nextcloud ONLY when one is given: writing an
-// empty value there would erase it, and the relay would start refusing.
+// THREE DESTINATIONS, on purpose:
+//   - the SETTINGS ConfigMap (the ordinary values), because they are the
+//     fallback `Resolve` reads when the platform has no mail server;
+//   - the VAULT (`smtp/relais`), where the credential already lived and where
+//     `ceffio mail` finds it — moving it would lose the password of every
+//     existing installation;
+//   - Nextcloud and Keycloak, through `platformmail`, which is the SINGLE
+//     writer of their outgoing-mail configuration.
+//
+// WHY THIS FUNCTION NO LONGER WRITES OCC ITSELF: there would then be two
+// writers of `mail_smtp*` — this page and the platform sender — and whichever
+// ran last would win. Applying the platform sender here means the page's values
+// are stored for the day the mail module is uninstalled, while the applications
+// keep the sender that `Resolve` chooses today (the platform's, when its mail
+// server is installed).
 func (m *filesModule) ApplySmtp(ctx context.Context, env module.Env, groupe string, v module.Values) error {
 	if groupe != groupeSmtp {
 		return fmt.Errorf("%w: %s", module.ErrUnknownGroup, groupe)
@@ -186,43 +215,52 @@ func (m *filesModule) ApplySmtp(ctx context.Context, env module.Env, groupe stri
 		return err
 	}
 
-	// 1. The credential, at the path `ceffio mail` and the console already use.
+	// 1. THE ORDINARY VALUES ARE STORED, SECRET BLANKED. Settings are persisted
+	// with the group as the unit; storing the password there too would create a
+	// second copy that no rotation updates. `settings.Save` skips the blank one
+	// and keeps the vault entry as the only credential.
+	ordinaires := module.Values{}
+	for cle, valeur := range v {
+		ordinaires[cle] = valeur
+	}
+	ordinaires["mot_de_passe"] = ""
+	if err := settings.Save(ctx, env, g, ordinaires); err != nil {
+		return fmt.Errorf("storing the outgoing mail settings: %w", err)
+	}
+
+	// 2. The credential, at the path `ceffio mail` and the console already use.
 	if err := ecrireMotDePasse(ctx, env, v); err != nil {
 		return err
 	}
 
-	// 2. Nextcloud's own configuration.
-	port := strings.TrimSpace(v["port"])
-	if port == "" {
-		port = "587"
+	// 3. ONE WRITER: the platform sender, resolved from what is now stored.
+	installe, err := platformmail.MailInstalle(ctx, env)
+	if err != nil {
+		return err
 	}
-	reglages := [][]string{
-		{"mail_smtpmode", "smtp"},
-		{"mail_smtphost", strings.TrimSpace(v["hote"])},
-		{"mail_smtpport", port},
-		{"mail_smtpsecure", strings.TrimSpace(v["securite"])},
-		{"mail_smtpauth", "1"},
-		{"mail_smtpauthtype", "LOGIN"},
-		{"mail_smtpname", strings.TrimSpace(v["utilisateur"])},
+	expediteur, err := platformmail.Resolve(ctx, env)
+	if err != nil {
+		return err
 	}
-	if e := strings.TrimSpace(v["expediteur"]); e != "" {
-		reglages = append(reglages, []string{"mail_from_address", e})
+	if installe {
+		fmt.Fprintln(sortieDe(env), "  ∙ outgoing mail: the mail module is installed, so Nextcloud and Keycloak keep "+
+			"sending through the platform's own server — these values are the fallback used when it is uninstalled")
+	} else if expediteur != nil {
+		fmt.Fprintf(sortieDe(env), "  ∙ outgoing mail: Nextcloud and Keycloak now send through %s:%d (%s)\n",
+			expediteur.Host, expediteur.Port, expediteur.Security)
 	}
-	if n := strings.TrimSpace(v["nom_expediteur"]); n != "" {
-		reglages = append(reglages, []string{"mail_domain", n})
+	if err := platformmail.ApplyNextcloud(ctx, expediteur); err != nil {
+		return err
 	}
-	// ONLY when one was given: an empty value here would erase the stored one,
-	// and Nextcloud would start sending unauthenticated.
-	if mdp := strings.TrimSpace(v["mot_de_passe"]); mdp != "" && mdp != module.SecretSet {
-		reglages = append(reglages, []string{"mail_smtppassword", mdp})
-	}
+	return platformmail.ApplyKeycloak(ctx, expediteur)
+}
 
-	for _, r := range reglages {
-		if err := ecrireOcc(ctx, env, "config:system:set", r[0], "--value", r[1]); err != nil {
-			return fmt.Errorf("setting %q in Nextcloud: %w", r[0], err)
-		}
+// sortieDe gives the module a writer even when the caller provides none.
+func sortieDe(env module.Env) io.Writer {
+	if env.Out == nil {
+		return io.Discard
 	}
-	return nil
+	return env.Out
 }
 
 // Test checks the relay without storing anything.

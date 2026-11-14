@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/ceffio-suite/ceffio/internal/module"
+	"github.com/ceffio-suite/ceffio/internal/platformmail"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -37,9 +38,48 @@ func clusterComplet() *fake.Clientset {
 	)
 }
 
+// expeFaux stands in for `platformmail` in the uninstall guard.
+//
+// WHY IT EXISTS: the real appliers connect to the cluster and exec into pods,
+// which a fake clientset cannot answer. The seam lets the test assert the part
+// that belongs to Uninstall — that the applications are REPOINTED, with the
+// sender Resolve chose — without pretending to be Kubernetes.
+type expeFaux struct {
+	poses []*platformmail.Sender
+}
+
+// resoudre answers "no sender": the test's cluster stores no relay settings, so
+// the applications are CLEARED rather than pointed at a server that is gone.
+func (e *expeFaux) resoudre(context.Context, module.Env) (*platformmail.Sender, error) {
+	return nil, nil
+}
+
+func (e *expeFaux) appliquer(_ context.Context, s *platformmail.Sender) error {
+	e.poses = append(e.poses, s)
+	return nil
+}
+
+// poserExpediteurFaux installs the fake and restores the real seams after the
+// test, so no other test in this package sees it.
+func poserExpediteurFaux(t *testing.T) *expeFaux {
+	t.Helper()
+	faux := &expeFaux{}
+	anciens := []any{resoudreExpediteur, appliquerNextcloud, appliquerKeycloak}
+	resoudreExpediteur = faux.resoudre
+	appliquerNextcloud = faux.appliquer
+	appliquerKeycloak = faux.appliquer
+	t.Cleanup(func() {
+		resoudreExpediteur = anciens[0].(func(context.Context, module.Env) (*platformmail.Sender, error))
+		appliquerNextcloud = anciens[1].(func(context.Context, *platformmail.Sender) error)
+		appliquerKeycloak = anciens[2].(func(context.Context, *platformmail.Sender) error)
+	})
+	return faux
+}
+
 // TestLaDesinstallationEnleveLeServiceEtGardeLeVolume: the public side and the
 // workload go, the mailboxes stay.
 func TestLaDesinstallationEnleveLeServiceEtGardeLeVolume(t *testing.T) {
+	expe := poserExpediteurFaux(t)
 	cs := clusterComplet()
 	var sortie bytes.Buffer
 	env := module.Env{Domain: "example.com", Kube: cs, Out: &sortie}
@@ -84,10 +124,25 @@ func TestLaDesinstallationEnleveLeServiceEtGardeLeVolume(t *testing.T) {
 		t.Errorf("the mail volume was deleted: %v — a reinstall would start empty", err)
 	}
 
+	// THE APPLICATIONS ARE REPOINTED, not left on the deleted server: both are
+	// applied, and the sender is nil because no relay is stored — "clear" is the
+	// honest answer, not a pointer to `mail.<domain>` that no longer answers.
+	if len(expe.poses) != 2 {
+		t.Fatalf("the platform sender was applied %d time(s); Nextcloud AND Keycloak must "+
+			"both be repointed when the server goes", len(expe.poses))
+	}
+	for i, pose := range expe.poses {
+		if pose != nil {
+			t.Fatalf("application %d was pointed at %q although no relay is stored; it must "+
+				"be cleared", i, pose.Host)
+		}
+	}
+
 	texte := sortie.String()
 	for _, attendu := range []struct{ motif, pourquoi string }{
 		{"kept: the volume stalwart-data", "the operator must read that the mailboxes are still there"},
 		{"kept: the Nextcloud Mail accounts", "the accounts stay, and the operator must know"},
+		{"no external relay stored", "the operator must read where mail now goes"},
 	} {
 		if !strings.Contains(texte, attendu.motif) {
 			t.Errorf("the output does not say %q (%s): %q", attendu.motif, attendu.pourquoi, texte)
