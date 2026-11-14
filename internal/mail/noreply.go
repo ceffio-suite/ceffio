@@ -367,28 +367,42 @@ func permissionsNoreplyConformes(brut any) bool {
 // poserMotDePassePlateforme destroys the sender's stale app passwords and
 // creates a fresh one, returning its secret.
 //
+// It is `poserMotDePasse` with the sender's description: the mailbox accounts
+// created for internal users need exactly the same dance with their own
+// description (`nextcloud-mail`, comptes.go), and duplicating the cap
+// handling twice is how one copy ends up without the read-back.
+//
 // THE DESTRUCTION COMES FIRST, and it is not hygiene: the account is capped at
 // five app passwords (§9.A), so a rotation that created before destroying would
 // fail as soon as an operator's own passwords fill the remaining slots. Only
 // the ones carrying our description are touched.
 func poserMotDePassePlateforme(ctx context.Context, idCompte string) (string, error) {
-	perimes, err := appPasswordsPlateforme(ctx, idCompte)
+	return poserMotDePasse(ctx, idCompte, descriptionMotDePasse)
+}
+
+// poserMotDePasse destroys the app passwords carrying `description` and
+// creates a fresh one, returning its secret.
+//
+// THE DESCRIPTION IS THE OWNERSHIP MARKER: it is how a stale credential is
+// told from one the user created in the WebUI, and only ours are destroyed.
+func poserMotDePasse(ctx context.Context, idCompte, description string) (string, error) {
+	perimes, err := appPasswordsDescription(ctx, idCompte, description)
 	if err != nil {
 		return "", err
 	}
 	if len(perimes) > 0 {
-		if err := detruireAppPasswords(ctx, idCompte, perimes); err != nil {
+		if err := detruireAppPasswords(ctx, idCompte, perimes, description); err != nil {
 			return "", err
 		}
 		// THE READ-BACK IS THE AUTHORITY (§9.I): 1.0.3 sometimes answers
 		// `notDestroyed:notFound` for an object that is already gone, so the
 		// destroy response cannot decide whether the cap was freed.
-		restants, err := appPasswordsPlateforme(ctx, idCompte)
+		restants, err := appPasswordsDescription(ctx, idCompte, description)
 		if err != nil {
 			return "", err
 		}
 		if len(restants) > 0 {
-			return "", fmt.Errorf("the %d stale platform sender app passwords are still present after their deletion", len(restants))
+			return "", fmt.Errorf("the %d stale app password(s) %q are still present after their deletion", len(restants), description)
 		}
 	}
 
@@ -398,11 +412,11 @@ func poserMotDePassePlateforme(ctx context.Context, idCompte string) (string, er
 		// password belongs to the account that will authenticate with it.
 		"accountId": idCompte,
 		"create": map[string]any{
-			"p1": map[string]any{"description": descriptionMotDePasse},
+			"p1": map[string]any{"description": description},
 		},
 	})
 	if err != nil {
-		return "", fmt.Errorf("creating the platform sender app password: %w", err)
+		return "", fmt.Errorf("creating the app password %q: %w", description, err)
 	}
 	crees, _ := corps["created"].(map[string]any)
 	cree, _ := crees["p1"].(map[string]any)
@@ -412,31 +426,31 @@ func poserMotDePassePlateforme(ctx context.Context, idCompte string) (string, er
 		// password exists but can never be used. It is left in place on
 		// purpose — the next run recognises it by its description and destroys
 		// it before creating a usable one.
-		return "", fmt.Errorf("the server created the app password %q but returned no secret: it is returned only once, so the credential cannot be stored", descriptionMotDePasse)
+		return "", fmt.Errorf("the server created the app password %q but returned no secret: it is returned only once, so the credential cannot be stored", description)
 	}
 	return secret, nil
 }
 
-// appPasswordsPlateforme lists the sender's stale app passwords.
+// appPasswordsDescription lists an account's app passwords carrying `description`.
 //
 // THE accountId IS EXPLICIT HERE: `jmap.Client.Get` injects the MANAGEMENT
 // account, and a `x:AppPassword/get` sent with it lists another account's
 // passwords — or answers `accountNotFound`. The request-level field is the only
 // way to address the user account (§9.A).
-func appPasswordsPlateforme(ctx context.Context, idCompte string) ([]string, error) {
+func appPasswordsDescription(ctx context.Context, idCompte, description string) ([]string, error) {
 	corps, err := clientJMAP().Appel(ctx, "x:AppPassword/get", map[string]any{
 		"accountId":  idCompte,
 		"ids":        nil,
 		"properties": []string{"id", "description"},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("reading the platform sender app passwords: %w", err)
+		return nil, fmt.Errorf("reading the app passwords %q: %w", description, err)
 	}
 	liste, _ := corps["list"].([]any)
 	var ids []string
 	for _, element := range liste {
 		motDePasse, ok := element.(map[string]any)
-		if !ok || valeurChaine(motDePasse["description"]) != descriptionMotDePasse {
+		if !ok || valeurChaine(motDePasse["description"]) != description {
 			continue
 		}
 		if id := valeurChaine(motDePasse["id"]); id != "" {
@@ -451,12 +465,12 @@ func appPasswordsPlateforme(ctx context.Context, idCompte string) ([]string, err
 // BRUT ON PURPOSE: the refusal of a destroy is not judged here, because the
 // caller decides on the read-back (§9.I). A transport failure is still an
 // error: it says nothing about the server's state.
-func detruireAppPasswords(ctx context.Context, idCompte string, ids []string) error {
+func detruireAppPasswords(ctx context.Context, idCompte string, ids []string, description string) error {
 	if _, _, err := clientJMAP().AppelBrut(ctx, "x:AppPassword/set", map[string]any{
 		"accountId": idCompte,
 		"destroy":   ids,
 	}); err != nil {
-		return fmt.Errorf("deleting the stale platform sender app passwords: %w", err)
+		return fmt.Errorf("deleting the stale app passwords %q: %w", description, err)
 	}
 	return nil
 }
