@@ -6,12 +6,11 @@ package main
 import (
 	"context"
 	"fmt"
-	"net"
 	"os"
 	"sort"
 	"strings"
-	"time"
 
+	"github.com/ceffio-suite/ceffio/internal/dnscheck"
 	"github.com/ceffio-suite/ceffio/internal/module"
 	"github.com/spf13/cobra"
 )
@@ -21,29 +20,36 @@ func newDNSCmd() *cobra.Command {
 
 	c := &cobra.Command{
 		Use:   "dns",
-		Short: "Check the DNS configuration (A, AAAA, MX, SPF, DKIM, DMARC, PTR)",
+		Short: "Resolve the hosts the modules declare",
 	}
 	status := &cobra.Command{
 		Use:   "status",
-		Short: "Check that every host the installed modules expose resolves",
-		Long: `Resolves each host declared by the INSTALLED modules and reports what came back.
+		Short: "Check that every host the modules declare resolves",
+		Long: `Resolves each host the modules declare and reports what came back.
 
-THE HOST LIST COMES FROM THE REGISTRY, not from a table in this file. A module that
-declares a Service declares its subdomain, so a module installed tomorrow is checked
-without anyone editing this command — and a module that is NOT installed is not
-checked, so the output does not send the operator to create a DNS record for a host
-nothing serves.
+THE HOST LIST COMES FROM THE REGISTRY, not from a table in this file: a module
+declares its subdomain through Info().Services, so a module added tomorrow is
+checked without editing this command. A module OBSERVED as absent or being
+removed is skipped — its subdomain is free on purpose — so the output does not
+send the operator to create a record for a host nothing serves. When the cluster
+cannot be read, every state is "unknown" and every declared host is kept: an
+empty list would look like a success.
 
-Each host is resolved with the system resolver, which is what the browser ultimately
-uses. A record that resolves to the machine's own public address is right; one that
-resolves elsewhere is reported with the address it found, because "it resolves" and
-"it resolves to us" are two different answers and only one of them works.`,
+THE LOOKUPS GO TO PUBLIC RESOLVERS (1.1.1.1 and 9.9.9.9 by default, overridable
+through CEFFIO_DNS_SERVERS): a public record is what the outside world sees, and
+the resolver of a freshly built host often knows a name the Internet does not.
+
+WHAT IS CHECKED HERE IS ONLY THAT THE NAME RESOLVES. The mail-specific records
+(MX, SPF, DKIM, DMARC, reverse DNS) and the mail ports are checks declared by
+the modules themselves: they are printed below, for each installed module that
+declares any. Fixing a missing A record is this command's business; choosing an
+MX target is not.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if domaine == "" {
 				return fmt.Errorf("--domain is required: the hosts are built from it")
 			}
 			useRegistryLayers()
-			return verifierDNS(domaine)
+			return verifierDNS(cmd.Context(), domaine)
 		},
 	}
 	status.Flags().StringVar(&domaine, "domain", "", "Base domain (e.g. company.fr)")
@@ -51,7 +57,7 @@ resolves elsewhere is reported with the address it found, because "it resolves" 
 	return c
 }
 
-// hoteOS is a host the platform should answer on, and what declared it.
+// hoteDNS is a host the platform should answer on, and what declared it.
 type hoteDNS struct {
 	Hote      string
 	Declare   string
@@ -60,10 +66,10 @@ type hoteDNS struct {
 
 // hotesDeclares builds the host list from the modules.
 //
-// ONLY THE INSTALLED OR THE DEFAULT ONES: a module that is optional and not installed
-// keeps its subdomain free, and checking it would report a missing record for a host
-// that is not meant to exist. The state is read from the cluster, which is the only
-// honest source — a stored flag can be stale after a `module remove`.
+// EVERY DECLARED SUBDOMAIN, without looking at any state: this is the registry's
+// answer to "which names does the suite claim". Deciding which of them are
+// supposed to exist is the caller's job (see filtrerAbsents), because that
+// question needs the cluster and this one does not.
 func hotesDeclares(domaine string) []hoteDNS {
 	var out []hoteDNS
 	for _, m := range module.All() {
@@ -83,16 +89,41 @@ func hotesDeclares(domaine string) []hoteDNS {
 	return out
 }
 
-// verifierDNS resolves each declared host and reports the answer.
+// filtrerAbsents drops the hosts whose module is observed as absent.
 //
-// THE EXIT CODE IS THE VERDICT: 1 when a host does not resolve, 0 when every host
-// does. A command that always succeeds is a command nobody can put in a script.
-func verifierDNS(domaine string) error {
-	hotess := hotesDeclares(domaine)
+// THE STATE IS THE ONLY HONEST SOURCE: a stored flag can be stale after a
+// `module remove`, and a module that is not installed keeps its subdomain free —
+// reporting a missing record for a host nothing serves would send the operator
+// to create a name that should not exist.
+func filtrerAbsents(hotess []hoteDNS, etats map[string]module.State) []hoteDNS {
+	out := make([]hoteDNS, 0, len(hotess))
+	for _, h := range hotess {
+		if st, ok := etats[h.Declare]; ok && !estPresenteObserve(st) {
+			continue
+		}
+		out = append(out, h)
+	}
+	return out
+}
+
+// verifierDNS resolves each declared host and reports the answer, then prints
+// the checks the installed modules declare.
+//
+// THE EXIT CODE IS THE VERDICT for the resolution part: 1 when a host does not
+// resolve, 0 when every host does. The module checks below are INFORMATIONAL
+// here — `module check <id>` is the command that owns their exit code, and
+// printing them after a failing resolution would otherwise mix two verdicts in
+// one exit code.
+func verifierDNS(ctx context.Context, domaine string) error {
+	env := moduleEnv(domaine)
+	etats := etatsDesModules(ctx, env)
+	hotess := filtrerAbsents(hotesDeclares(domaine), etats)
 	if len(hotess) == 0 {
 		return fmt.Errorf("no module declares a host on %s: nothing to check. A module "+
 			"declares its subdomain through Info().Services", domaine)
 	}
+
+	client := dnscheck.Nouveau()
 
 	fmt.Printf("Hosts declared by the modules on %s:\n\n", domaine)
 	manquants := 0
@@ -103,7 +134,7 @@ func verifierDNS(domaine string) error {
 			techniques = append(techniques, h)
 			continue
 		}
-		if err := verifierUnHote(h); err != nil {
+		if err := verifierUnHote(ctx, client, h); err != nil {
 			manquants++
 			fmt.Printf("  ✗ %-32s %v\n     declared by %s\n", h.Hote, err, h.Declare)
 			continue
@@ -116,13 +147,15 @@ func verifierDNS(domaine string) error {
 	if len(techniques) > 0 {
 		fmt.Println("\nTechnical hosts (machines, not browsers):")
 		for _, h := range techniques {
-			if err := verifierUnHote(h); err != nil {
+			if err := verifierUnHote(ctx, client, h); err != nil {
 				manquants++
 				fmt.Printf("  ✗ %-32s %v\n     declared by %s\n", h.Hote, err, h.Declare)
 				continue
 			}
 		}
 	}
+
+	afficherChecksDesModules(ctx, env, etats)
 
 	if manquants > 0 {
 		fmt.Printf("\n%d host(s) do not resolve. Create the missing records, or remove the "+
@@ -133,17 +166,35 @@ func verifierDNS(domaine string) error {
 	return nil
 }
 
-// verifierUnHote resolves one host, with a short timeout.
+// afficherChecksDesModules prints the checks of every module observed as
+// present that declares any.
 //
-// THE TIMEOUT IS SHORT ON PURPOSE — two seconds: a wrong record answers immediately,
-// and waiting the resolver's default would make a broken installation take minutes to
-// diagnose.
-func verifierUnHote(h hoteDNS) error {
-	c := net.Resolver{}
-	ctx, annuler := context.WithTimeout(context.Background(), 2*time.Second)
-	defer annuler()
+// WHY HERE: the records that matter for mail are known by the mail module, not
+// by this command, and asking the operator to remember which module to query is
+// how a mail server ends up with no reverse DNS. A module that is not installed
+// declares nothing to print — its checks would measure a service that does not
+// exist.
+func afficherChecksDesModules(ctx context.Context, env module.Env, etats map[string]module.State) {
+	for _, m := range module.All() {
+		chk, ok := m.(module.Checker)
+		if !ok {
+			continue
+		}
+		if st, ok := etats[m.Info().ID]; ok && !estPresenteObserve(st) {
+			continue
+		}
+		checks := chk.Checks(ctx, env)
+		if len(checks) == 0 {
+			continue
+		}
+		fmt.Printf("\nChecks declared by %s (%s):\n\n", m.Info().ID, m.Info().Title)
+		afficherChecks(os.Stdout, checks)
+	}
+}
 
-	addrs, err := c.LookupHost(ctx, h.Hote)
+// verifierUnHote resolves one host through the public resolver.
+func verifierUnHote(ctx context.Context, client *dnscheck.Client, h hoteDNS) error {
+	addrs, err := client.Adresses(ctx, h.Hote)
 	if err != nil {
 		return fmt.Errorf("does not resolve: %s", court(err.Error()))
 	}
@@ -154,7 +205,7 @@ func verifierUnHote(h hoteDNS) error {
 	return nil
 }
 
-// court keeps a resolver error readable on one line: the system resolver's messages
+// court keeps a resolver error readable on one line: the resolvers' messages
 // carry trailing detail that is useful once and noise in a table.
 func court(s string) string {
 	if i := strings.IndexAny(s, "\n"); i >= 0 {

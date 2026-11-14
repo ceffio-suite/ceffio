@@ -183,6 +183,46 @@ func (c *client) Lister(ctx context.Context, composant string) ([]string, error)
 	return corps.Data.Keys, nil
 }
 
+// SupprimerEntree removes an entry and ALL its versions.
+//
+// WHY THE METADATA PATH AND NOT THE DATA ONE: on a versioned KV engine, sending
+// DELETE to `data/<path>` only deletes the latest version — the older versions
+// stay readable, so an entry "deleted" that way still hands out the previous
+// password to anyone who asks for it by version. It is `metadata/<path>` that
+// removes the entry and its history, and that is what a revoked credential
+// requires: a mailbox being deleted must not leave its app password in the
+// vault.
+//
+// A 404 IS A SUCCESS: the goal is "the entry is gone", and an entry that is
+// already absent satisfies it. Failing here would make a retried deletion —
+// the exact situation a failed mailbox removal leaves behind — impossible to
+// finish.
+func (c *client) SupprimerEntree(ctx context.Context, composant, nom string) error {
+	chemin := fmt.Sprintf("%s/v1/%s/metadata/%s",
+		strings.TrimRight(c.cfg.Adresse, "/"), c.cfg.Moteur,
+		c.cfg.Chemin(composant, nom))
+
+	req, err := http.NewRequestWithContext(ctx, "DELETE", chemin, nil)
+	if err != nil {
+		return err
+	}
+	c.entetes(req)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	brut, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusNoContent ||
+		resp.StatusCode == http.StatusOK {
+		return nil
+	}
+	return fmt.Errorf("vault refused the deletion (HTTP %d): %.150s",
+		resp.StatusCode, string(brut))
+}
+
 // ---------------------------------------------------------------------------
 // Access with fallback
 // ---------------------------------------------------------------------------
@@ -240,6 +280,26 @@ func LireEntreeCoffre(ctx context.Context, cfg *Coffre, composant, nom string) (
 // EntreeAbsente says whether the error means "this entry does not exist yet".
 func EntreeAbsente(err error) bool {
 	return errors.Is(err, ErrEntreeAbsente)
+}
+
+// SupprimerEntreeCoffre removes an entry, and falls back on NOTHING.
+//
+// A DELETION WHOSE FAILURE IS IGNORED IS A DELETION THAT DOES NOT HAPPEN: a
+// revoked credential — the app password of a deleted mailbox, for instance —
+// must disappear from the vault, so an unreachable vault is an error here.
+// The callers that can live without a vault (an installation without OpenBao
+// keeps its secrets in Kubernetes) check `Dispo()` themselves and skip the
+// call; this function is only for "the entry must be gone".
+func SupprimerEntreeCoffre(ctx context.Context, cfg *Coffre, composant, nom string) error {
+	if cfg == nil || !cfg.Dispo() {
+		return fmt.Errorf("no vault configured: cannot delete %s/%s", composant, nom)
+	}
+	if err := nouveauClient(cfg).SupprimerEntree(ctx, composant, nom); err != nil {
+		return fmt.Errorf("cannot delete from vault (%s/%s): %w", composant, nom, err)
+	}
+	// Only the path: the entry is gone, and the values never existed in a log.
+	fmt.Printf("  ∙ vault: %s deleted\n", cfg.Chemin(composant, nom))
+	return nil
 }
 
 // EcrireDansCoffre puts a secret in the vault, if configured.

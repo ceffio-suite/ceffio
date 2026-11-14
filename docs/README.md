@@ -15,9 +15,10 @@ the two drift apart.
 
 | Document | What it answers |
 |---|---|
-| [secrets.md](secrets.md) | The vault, the injector, and the four Secrets that exist anyway |
+| [secrets.md](secrets.md) | The vault, the injector, and the two Secrets that exist anyway |
 | [tls.md](tls.md) | HTTP-01 or DNS-01, the providers, and when a renewal really happens |
 | [media-and-firewall.md](media-and-firewall.md) | Talk's ports, the firewall traps, and the one third-party lookup |
+| [mail.md](mail.md) | The mail module: Stalwart, the eleven checks, the DNS records, the relay, backup, and the limits |
 | [sign-in-page.md](sign-in-page.md) | The login theme, and how to go back to Keycloak's |
 | [console-image.md](console-image.md) | How the console is built, published, and what it may do in the cluster |
 | [keycloak-production.md](keycloak-production.md) | Keycloak in production mode: options, hostname, and what was measured |
@@ -36,6 +37,7 @@ Kept for context. **They do not describe the current code.**
 | Document | What it was |
 |---|---|
 | [history/plan-talk-hpb.md](history/plan-talk-hpb.md) | The working note for moving from Matrix/Element to Talk + HPB |
+| [plan-mail.md](plan-mail.md) | The working note for mail as an optional module, internal users and platform mail (0.11.0): POC results, contracts, and the PR chain |
 | [plan-capture.md](plan-capture.md) | Feasibility plan: per-participant capture, the `ceffio-capture` image, and its deployment alongside `recording` |
 | [cra-reporting.md](cra-reporting.md) | The 24/72/14-day runbook: the two channels, the SRP account, and what must already exist |
 | [upgrade.md](upgrade.md) | What `ceffio upgrade` replays, what it needs in its environment, and what it does not do |

@@ -649,6 +649,13 @@ func (c *Client) AttendrePodInstalle(ctx context.Context, ns, pod string, limite
 //
 // We select on the same label the Deployment uses, and require the pod to be
 // Running: a Pending pod would accept nothing and the error would be obscure.
+//
+// A POD BEING DELETED IS NOT A TARGET, even though it still reports Running and
+// can still be Ready: its containers are being stopped, so a SEQUENCE of execs
+// against it fails in the middle instead of at the start. That is not
+// hypothetical — restarting an application and immediately configuring it picks
+// this pod up, and the failure then points at whatever the first lost command
+// was about. A Ready pod is preferred; an incomplete one is only the fallback.
 func (c *Client) PodDuDeploiement(ctx context.Context, ns, nom, etiquette string) (string, error) {
 	pods, err := c.cs.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: "app=" + etiquette,
@@ -656,12 +663,32 @@ func (c *Client) PodDuDeploiement(ctx context.Context, ns, nom, etiquette string
 	if err != nil {
 		return "", fmt.Errorf("listing pods in %s: %w", ns, err)
 	}
+	repli := ""
 	for _, p := range pods.Items {
-		if p.Status.Phase == corev1.PodRunning {
+		if p.Status.Phase != corev1.PodRunning || p.DeletionTimestamp != nil {
+			continue
+		}
+		if podPret(p) {
 			return p.Name, nil
 		}
+		if repli == "" {
+			repli = p.Name
+		}
+	}
+	if repli != "" {
+		return repli, nil
 	}
 	return "", fmt.Errorf("no %s pod in service in %s (deployment %s)", etiquette, ns, nom)
+}
+
+// podPret reports whether the pod's Ready condition is true.
+func podPret(p corev1.Pod) bool {
+	for _, condition := range p.Status.Conditions {
+		if condition.Type == corev1.PodReady {
+			return condition.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
 
 // DeploiementPret reports whether a Deployment has at least one Ready replica.
@@ -743,6 +770,93 @@ func (c *Client) DeploiementPret(ctx context.Context, ns, nom string) bool {
 		return false
 	}
 	return d.Status.ReadyReplicas > 0
+}
+
+// etiquetteRedemarrage is the pod-template annotation this package changes to
+// trigger a rollout.
+//
+// OUR OWN KEY, not kubectl's `kubectl.kubernetes.io/restartedAt`: writing the
+// last one from the API would pretend that `kubectl rollout restart` ran, and
+// the next real `kubectl rollout undo` would try to honour a revision that was
+// never recorded as a restart.
+const etiquetteRedemarrage = "ceffio.io/redemarre-le"
+
+// intervalleSonde is how often a wait re-reads the object it waits on. A
+// variable so a test can prove the wait itself without spending the real
+// interval: the behaviour under test is the condition, not the cadence.
+var intervalleSonde = 2 * time.Second
+
+// RedemarrerDeploiement restarts a Deployment by changing a pod-template
+// annotation, exactly like `kubectl rollout restart` does.
+//
+// WHY IT EXISTS: Stalwart reads its directories and role tables ONCE at
+// startup, so half of the mail configuration is only applied by a restart. The
+// console image is built `FROM scratch` and ships no kubectl; the module must
+// therefore be able to restart the server through the API alone.
+//
+// THE VALUE IS A TIMESTAMP, NOT A COUNTER, and it is written in RFC 3339 with
+// nanoseconds: two restarts in the same second must produce two different
+// annotations, otherwise the second one changes nothing and the caller waits
+// for a rollout that never starts.
+func (c *Client) RedemarrerDeploiement(ctx context.Context, ns, nom string) error {
+	d, err := c.cs.AppsV1().Deployments(ns).Get(ctx, nom, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("reading deployment %s/%s: %w", ns, nom, err)
+	}
+	if d.Spec.Template.Annotations == nil {
+		d.Spec.Template.Annotations = map[string]string{}
+	}
+	d.Spec.Template.Annotations[etiquetteRedemarrage] = time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := c.cs.AppsV1().Deployments(ns).Update(ctx, d, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("restarting deployment %s/%s: %w", ns, nom, err)
+	}
+	return nil
+}
+
+// AttendreDeploiement waits for a Deployment rollout to FINISH.
+//
+// WHY NOT AttendrePret: that one waits for a NAMESPACE to be Active, which is
+// true the whole time. Waiting on it after a restart returns immediately, the
+// next `exec` lands on the pod that is about to be deleted (or on none at all),
+// and the failure reads like an authentication problem. This one waits on the
+// rollout itself: the controller has observed the new generation, every replica
+// is updated, and every replica is available.
+//
+// A Deployment scaled to zero is considered ready immediately: there is no
+// replica to wait for, and waiting forever would be the only alternative.
+func (c *Client) AttendreDeploiement(ctx context.Context, ns, nom string, limite time.Duration) error {
+	fin := time.Now().Add(limite)
+	var dernier string
+	for {
+		d, err := c.cs.AppsV1().Deployments(ns).Get(ctx, nom, metav1.GetOptions{})
+		if err != nil {
+			dernier = err.Error()
+		} else {
+			voulues := int32(1)
+			if d.Spec.Replicas != nil {
+				voulues = *d.Spec.Replicas
+			}
+			dernier = fmt.Sprintf("generation %d (observed %d), %d/%d updated, %d/%d available",
+				d.Generation, d.Status.ObservedGeneration,
+				d.Status.UpdatedReplicas, voulues,
+				d.Status.AvailableReplicas, voulues)
+			if d.Status.ObservedGeneration >= d.Generation &&
+				d.Status.UpdatedReplicas == voulues &&
+				d.Status.Replicas == voulues &&
+				d.Status.AvailableReplicas == voulues {
+				return nil
+			}
+		}
+		if time.Now().After(fin) {
+			return fmt.Errorf("deployment %s/%s did not finish rolling out within %s: %s",
+				ns, nom, limite, dernier)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(intervalleSonde):
+		}
+	}
 }
 
 // IPLocaleNoeud returns the LAN address of the node, with a fallback.

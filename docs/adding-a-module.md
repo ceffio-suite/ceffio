@@ -565,6 +565,201 @@ CONTRACT** — declared in `internal/module`, drawn once by the console — neve
 section written for your module. That is the rule these tests enforce, and the
 reason the seventh feature costs as little as the first.
 
+## 10. Checks: what the outside world looks like
+
+`State` answers "did my resources get created". It cannot answer "will mail
+arrive": a mail server can be perfectly created and still receive nothing
+because the MX record is wrong, port 25 is closed at the provider, or the
+reverse DNS of the host names another domain. Those failures live **outside the
+cluster**, and until this contract each one was rediscovered by hand.
+
+A module may now **declare checks**. The contract is `internal/module/checks.go`;
+it has no dependency on any module, so a module can implement it without the
+registry knowing what is being measured.
+
+### The contract
+
+```go
+func (m *yourModule) Checks(ctx context.Context, env module.Env) []module.Check {
+    return []module.Check{{
+        ID:     "mx",                                    // stable, unique in the module
+        Label:  "MX record",                             // what is measured, never a sentence
+        Level:  module.CheckOK,                          // ok | warning | blocking | not_applicable
+        Detail: "mail.example.com (priority 10)",        // ONLY what was observed
+        Fix:    "example.com. IN MX 10 mail.example.com.", // copyable: a record or a command
+    }}
+}
+```
+
+`Level` is the whole vocabulary, and it is deliberately small:
+
+| level | meaning | effect |
+| --- | --- | --- |
+| `CheckOK` | measured, and it is right | printed `✓` |
+| `CheckWarning` | measured, not what it should be, but the service still works | printed `⚠`, does not fail `module check` |
+| `CheckBlocking` | measured, and the service cannot work | printed `✗`, `module check` exits 1 |
+| `CheckNotApplicable` | not measurable here (private domain, relay mode) | printed `·`, never hidden |
+
+Never return a level you did not measure. A check that cannot run **is not**
+`ok`: an unresolvable query is `warning` when the service can live without it
+and `blocking` otherwise, and a check that does not apply in this configuration
+is `not_applicable` with a `Detail` saying why. `module.Bloquants(checks)` is the
+helper the CLI and the console use to count the failing ones.
+
+### The rules that carry the design
+
+1. **`Detail` is a measurement, `Fix` is an action.** The page renders them
+   differently (text, then a copyable block) and the CLI indents the fix under
+   the check. Merging the two makes every fix carry an observation, and the
+   operator pastes the wrong paragraph into a zone file.
+2. **Checks never mutate.** They run from `GET /api/modules/{id}/checks` and
+   from read-only commands; a check that repairs something is an installer
+   step, not a check. Nothing a check does may reach the operation journal.
+3. **Never lie by omission.** A module that declares checks must return one for
+   every prerequisite it claims (`mail`: MX, A, PTR, port 25 out, relay, TLS,
+   records, inbound 25, inbound test, DNSBL, volume). The console draws whatever
+   the list contains — it cannot notice a missing entry.
+4. **No network in unit tests.** Every check takes its resolver, dialer or JMAP
+   client from an injectable seam (a package-level `var` replaced by the test, or
+   a field on the module set through the test), so the test suite is
+   deterministic and works air-gapped. `internal/dnscheck` is the model: the
+   public resolvers are a `Resolveur` interface, and the tests use a fake map.
+5. **Every check has a test proving it can fail.** A test that only asserts `ok`
+   proves the happy path, not the check: pass a bad fixture (wrong MX, closed
+   port, self-signed certificate) and assert the level and `Detail`. The mail
+   module's checks each have such a test; the plan's §4.4 rule is the same one.
+
+### What it gives you for free
+
+Once the interface is implemented, nothing else is edited:
+
+- `GET /api/modules/{id}/checks` returns `{"module": "<id>", "checks": [...]}`,
+  and answers **404** when the module does not implement `Checker` (404, not an
+  empty list: "this module has no checks" and "this module has no failing
+  checks" are different answers). `moduleView.Checkable` lets the page ask only
+  when it is useful, and the page renders the levels, `Detail` and `Fix`
+  generically — no module name appears in `web/index.html`.
+- `ceffio module check <id>` prints the list and **exits 1 when at least one
+  check is blocking**. Warnings do not fail: they describe a decision the
+  operator still has to make.
+- `ceffio dns status` prints the checks of every installed module on top of the
+  resolution report. It does not take their exit code — `module check` owns it —
+  so the two verdicts never mix.
+
+The checks route is on its own (not inside `GET /api/modules`) on purpose: the
+Modules page polls every 3 s while an operation runs, and a check does DNS
+lookups and port dials. Cheap status, expensive checks, two endpoints.
+
+### Tests expected
+
+Following §7: a test that each check fails on a bad fixture, a test that a
+private domain (or a relay-only setup) yields `not_applicable` for the
+internet-facing checks rather than a false failure, and a test that the list is
+stable and complete for a healthy fixture. The console's own tests already pin
+the generic behaviour (`TestLesChecksSontServisSansNomDeModule`,
+`TestUnModuleSansChecksRepond404`), so a module only tests what it measures.
+
+The worked example is `mail`: eleven top-level checks over DNS, ports,
+certificates and the server's own state, with the `records` one expanding into
+seven children. What it produces for an operator is in [mail.md](mail.md).
+
+## 11. User accounts: the `Accounts` contract
+
+A module that owns a per-user object — a mailbox is the first one — implements
+`module.Accounts`. The Users page then grows the module's creation inputs, its
+account column and its actions **without the page, the handlers or the route
+list changing**: the console asks every *installed* module implementing the
+interface and renders what it is given. This is why a module ID must never
+appear in `internal/console/web/index.html`; a test enforces it
+(`TestLaPageNAppelleAucunModuleEnDur`).
+
+### The contract, method by method
+
+| Method | When it runs | What it must do |
+|---|---|---|
+| `AccountFields` | every render of the page | declare the creation inputs, cheap and side-effect free |
+| `ValidateAccount` | **before anything is created**, Keycloak included | refuse an impossible creation with an actionable message |
+| `EnsureAccount` | once the platform account exists | provision what the module owns; **idempotent** |
+| `AccountInfos` | page load, once for the whole list | report every user's account in one call |
+| `AccountAction` | operator clicks one of `AccountInfo.Actions` | run that action, no-op never |
+| `SuspendAccount` / `ResumeAccount` | user deactivated / reactivated | follow the platform account's `enabled` flag |
+| `DeleteAccount` | user deleted, **before** the platform account | remove what the module owns |
+
+`module.AccountsOf(m)` is the type assertion both frontends use; do not write
+your own.
+
+### The order, and why it is the contract's
+
+The console implements this sequence **once** for every module:
+
+1. `ValidateAccount` of **every** module — before Keycloak is touched. A refusal
+   arriving after the account exists leaves a half-created user to clean up by
+   hand;
+2. the Keycloak user, then the Nextcloud account (what the page has always
+   done);
+3. `EnsureAccount` of every module;
+4. write-back of each `AccountResult` (email and attributes).
+
+Platform account first, module objects second, is also what makes a **retry
+converge**: both steps are idempotent, and the account the operator can see and
+delete is the one that already exists. A creation that partially failed says
+what exists and tells the operator to send the same request again.
+
+### Fields: reuse `module.Field`
+
+`AccountField` embeds `module.Field` (`Key`, `Label`, `Help`, `Type`,
+`Options`, `Default`, `Required`, `Pattern`, `ShowWhen`), so the page renders
+the creation form with the same rules as the settings forms, and every field
+type (`text`, `number`, `bool`, `choice`, `secret`) arrives typed. Values come
+back as `module.Values` (a `map[string]string`): the console applies each
+field's `Default` before calling you, and refuses a key no field declares
+instead of dropping the typo.
+
+`AccountField.ReplacesEmail` exists for one case: a `bool` field that, when
+`true`, makes the email input meaningless because the module computes the
+address (`<username>@<domain>`). The console then hides the input *and* creates
+the platform account without an email; the address is written back in step 4.
+Use it only when the address really is yours to choose.
+
+### Result: state it, do not write it
+
+`EnsureAccount` returns an `AccountResult` — an address and attributes — and
+does **not** write the Keycloak user itself. One writer per object: the console
+owns the platform account, so the module states the outcome and the page applies
+it (email + `emailVerified`, then the Nextcloud address). Attributes are how a
+module recognizes its own users later (`User.Attributes`, read from Keycloak
+with the user list).
+
+### Inform, act, confirm
+
+`AccountInfos` returns one `AccountInfo` per user, keyed by `User.ID`:
+`Present`, `Suspended`, a human `Summary` (e.g. `312 MiB / 1 GiB`), and the
+`Actions` this user has. An action declares its `ID`, a `Label`, optional
+`Fields` (reusing `module.Field`), and `Confirm`: when non-empty, the operator
+must type that string (the username, for an irreversible action) and the console
+enforces it server-side. An action ID that `AccountInfos` did not declare for
+that user is refused with 404 — the page and the module disagreeing is a bug,
+not a no-op.
+
+### Lifecycle
+
+`SuspendAccount` / `ResumeAccount` follow the platform account's `enabled` flag
+(Keycloak first, then the modules); both must be idempotent. `DeleteAccount`
+runs **before** Nextcloud and Keycloak are deleted: module objects are the ones
+no page can reach once the account is gone, so a failure there stops the
+deletion while it can still be retried from the page.
+
+### Tests expected
+
+No network, no cluster: the console's tests use a fake registry, a fake module
+and an `httptest` Keycloak, so a module tests **its own** logic (validation
+rules, idempotence, lifecycle) directly against its seams — see
+`internal/modules/mail` for a module that implements the full contract, and
+[mail.md](mail.md) for the mailbox it produces. The
+console's generic behaviour is already pinned
+(`internal/console/users_accounts_test.go`: validation before creation, order,
+write-back, typed confirmations, protection of the administration account).
+
 ## Checklist
 
 1. New package under `internal/modules/<name>/`, SPDX header, comments in
@@ -579,14 +774,23 @@ reason the seventh feature costs as little as the first.
    `Current`, `Apply`), and `Testable` when the group can genuinely be checked.
    Declare the groups and their fields; do NOT add a console route, a console
    section or a CLI subcommand — they are served by the contract.
-5. `func init() { module.Register(&yourModule{}) }`.
-6. One blank-import line in `internal/modules/all.go`.
-7. Tests: `Info` validity, (if the module installs resources itself) the
-   fake-clientset contract tests, and the settings round trip
-   (`Current` → `Apply` → `Current`) when it has settings.
-8. `gofmt -l .`, `go build ./...`, `go vet ./...`, `make test`,
+5. **If the feature has external prerequisites** (a DNS record, a port, a
+   certificate): implement `Checker` (`Checks`) — see §10 — and a test per check
+   proving it can fail. Do NOT add a console route or a CLI subcommand: the
+   page renders the list generically and `module check` runs it.
+6. **If the feature has per-user objects**: implement `Accounts` (§11) —
+   fields, validation, provisioning, per-user state, actions, lifecycle. Do NOT
+   add a console route, a Users-page section or a CLI subcommand: the page and
+   `ceffio users` serve the contract generically.
+7. `func init() { module.Register(&yourModule{}) }`.
+8. One blank-import line in `internal/modules/all.go`.
+9. Tests: `Info` validity, (if the module installs resources itself) the
+   fake-clientset contract tests, the settings round trip
+   (`Current` → `Apply` → `Current`) when it has settings, and the check tests
+   of §10 when it has checks.
+10. `gofmt -l .`, `go build ./...`, `go vet ./...`, `make test`,
    `go test -tags demo ./...` — all green.
-9. **Nothing else.** If anything else changed, you changed too much — and the
+11. **Nothing else.** If anything else changed, you changed too much — and the
    test of the demo module's settings checks exactly that for its own package.
    A console route, a page in `web/index.html` or a CLI subcommand named after
    your feature means the contract was not extended where it should have been.

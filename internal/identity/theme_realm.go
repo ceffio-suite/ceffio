@@ -15,7 +15,7 @@ import (
 // realm à thémer. Le realm `master` n'est JAMAIS touché : sa page de connexion sert
 // à l'administration de Keycloak et doit rester reconnaissable — un administrateur
 // qui se trompe de porte doit le voir.
-const realmCeffio = "ceffio"
+const RealmCeffio = "ceffio"
 
 // DisplayNameHTML is the header above the sign-in card.
 //
@@ -88,7 +88,7 @@ func appliquerThemeRealm(ctx context.Context, ns string, r ReglagesRealm) error 
 	// needed beyond doubling an apostrophe. displayNameHtml carries no apostrophe;
 	// the slogan does not either.
 	script := kcadmConnecte() +
-		`/opt/keycloak/bin/kcadm.sh update realms/` + realmCeffio +
+		`/opt/keycloak/bin/kcadm.sh update realms/` + RealmCeffio +
 		` -s loginTheme=` + shellQuote(r.Theme) + " " +
 		` -s displayName=` + shellQuote(r.DisplayName) + " " +
 		` -s displayNameHtml=` + shellQuote(DisplayNameHTML) + " " +
@@ -153,6 +153,46 @@ func kcadmExec(ctx context.Context, ns, script string, args ...string) error {
 	return nil
 }
 
+// ExecuterKcadm runs an authenticated kcadm command in the keycloak pod and
+// returns its output, unparsed.
+//
+// WHY IT IS EXPORTED: another package (internal/platformmail) must write the
+// realm's SMTP settings, and the ADMIN ACCESS IS THE SAME ONE the login page
+// already uses — same pod selection, same /secrets/env sourcing, same JVM
+// memory cap. A second copy of that script would drift, and the drift would show
+// up as an authentication failure nobody can reproduce (the cap is the field
+// that turns a working call into exit 137).
+//
+// THE CALLER OWNS THE OUTPUT: kcadm prints its progress on the same stream as
+// the document, so a caller that expects JSON goes through CorpsJSON.
+//
+// `entree` is fed to the command's standard input. A password typed as an
+// argument would sit in the pod's process table; on stdin it does not.
+func ExecuterKcadm(ctx context.Context, ns, entree, commande string) (string, error) {
+	cli, err := clientK8s()
+	if err != nil {
+		return "", fmt.Errorf("connecting to the cluster: %w", err)
+	}
+	pod, err := podKeycloak(ctx, cli, ns)
+	if err != nil {
+		return "", err
+	}
+
+	script := kcadmConnecte() + commande
+	args := []string{"sh", "-c", script, "sh"}
+	var out string
+	if entree == "" {
+		out, err = cli.Executer(ctx, ns, pod, "keycloak", args...)
+	} else {
+		out, err = cli.ExecuterAvecEntree(ctx, ns, pod, "keycloak", entree, args...)
+	}
+	if err != nil {
+		return out, fmt.Errorf("running kcadm in the %s realm: %w: %s",
+			RealmCeffio, err, strings.TrimSpace(out))
+	}
+	return out, nil
+}
+
 // podKeycloak returns the Ready keycloak pod of the identity namespace.
 //
 // IT TAKES A READY ONE rather than the first listed: during a rollout the terminating
@@ -197,7 +237,7 @@ func appliquerThemeDepuisDeploiement(ctx context.Context, ns string) error {
 	fmt.Println("∙ login page (theme ceffio, fr)")
 	if err := appliquerThemeRealm(ctx, ns, ReglagesParDefaut()); err != nil {
 		return fmt.Errorf("the login theme could not be applied to the %s realm: %w",
-			realmCeffio, err)
+			RealmCeffio, err)
 	}
 	return nil
 }
@@ -209,7 +249,7 @@ func appliquerThemeDepuisDeploiement(ctx context.Context, ns string) error {
 // installation whose realm was created before the theme existed.
 func LireLoginTheme(ctx context.Context, ns string) (theme, locale string, err error) {
 	script := kcadmConnecte() +
-		`/opt/keycloak/bin/kcadm.sh get realms/` + realmCeffio +
+		`/opt/keycloak/bin/kcadm.sh get realms/` + RealmCeffio +
 		` --fields loginTheme,defaultLocale 2>/dev/null`
 
 	cli, err := clientK8s()
@@ -230,7 +270,7 @@ func LireLoginTheme(ctx context.Context, ns string) (theme, locale string, err e
 	// http://localhost:8080 as user admin of realm master" precedes the document, and
 	// a straight Unmarshal fails on the 'L'. The JSON body is isolated by taking the
 	// first line that opens a brace to the last that closes one.
-	corps := corpsJSON(out)
+	corps := CorpsJSON(out)
 	if corps == "" {
 		return "", "", fmt.Errorf("reading the realm's login page: no JSON in the answer: %s",
 			strings.TrimSpace(out))
@@ -262,19 +302,19 @@ var clientK8s = k8sapi.Nouveau
 // and switching back must find it intact.
 func AppliquerLoginPage(ctx context.Context, ns, theme, locale string) error {
 	script := kcadmConnecte() +
-		`/opt/keycloak/bin/kcadm.sh update realms/` + realmCeffio +
+		`/opt/keycloak/bin/kcadm.sh update realms/` + RealmCeffio +
 		` -s loginTheme=` + shellQuote(theme) + " " +
 		` -s internationalizationEnabled=true` +
 		` -s defaultLocale=` + shellQuote(locale)
 	return kcadmExec(ctx, ns, script, theme, locale)
 }
 
-// corpsJSON returns the JSON document inside a stream that carries other text.
+// CorpsJSON returns the JSON document inside a stream that carries other text.
 //
 // THE SHAPE IS KNOWN AND NARROW: kcadm prints one or two progress lines, then the
 // document. Rather than a lenient parser, the braces are located — an output with no
 // braces returns "" and the caller reports what it actually received.
-func corpsJSON(sortie string) string {
+func CorpsJSON(sortie string) string {
 	debut := strings.Index(sortie, "{")
 	fin := strings.LastIndex(sortie, "}")
 	if debut < 0 || fin <= debut {

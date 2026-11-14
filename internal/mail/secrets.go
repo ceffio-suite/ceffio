@@ -6,9 +6,9 @@ package mail
 // scriptAvecSecrets sources the secrets the OpenBao injector wrote, then runs
 // the given command.
 //
-// WHY THIS EXISTS, and why every `kubectl exec` into Stalwart must use it:
+// WHY THIS EXISTS, and why every exec into Stalwart must use it:
 // the injector writes /secrets/env, and the CONTAINER'S OWN command sources it
-// for the Stalwart process. A `kubectl exec` opens a NEW shell that inherits
+// for the Stalwart process. An exec into the pod opens a NEW shell that inherits
 // nothing of that environment. A command reading $STALWART_RECOVERY_ADMIN
 // without this prefix therefore sees an empty value: curl is called with an
 // empty -u, prompts for a password it cannot read, and the API answers 401 —

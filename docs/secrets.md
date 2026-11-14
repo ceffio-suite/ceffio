@@ -31,7 +31,13 @@ OpenBao; what changes is how they reach the process.
 |---|---|---|
 | `cert-manager/ceffio-acme-dns` | `internal/ingress/dnswebhook.go` | cert-manager resolves the ClusterIssuer's `secretRef` itself. It has no way to reach OpenBao, and it is not our process to teach. |
 | `ceffio-video/ghcr-pull` | `internal/talk/talk.go` | It is a `kubernetes.io/dockerconfigjson`, consumed by the kubelet to pull images. The kubelet reads it from the API, never from a mounted file. |
-| `ceffio-mail/*` | `internal/mail/mail.go` | Stalwart's own administration calls need a credential at a moment when no pod is available to inject into. |
+
+The mail server used to be a third entry here: Stalwart's administration credential was a
+Secret written from the vault. It is gone since 0.11.0 — the workload reads
+`kv/ceffio/stalwart/admin` through the injector, and `internal/mail` now prints
+`Kubernetes Secret "stalwart-admin" still present — dead copy, to be removed` when an
+older installation leaves one behind. A value in two places drifts, and the workload now
+reads only the injected one.
 
 `ceffio-system/longhorn-oauth2-proxy-vault` used to be on this list. It is gone: the module
 now declares its vault access (`Info.Vault`) and oauth2-proxy reads its two credentials
@@ -60,9 +66,20 @@ OpenBao is initialised once, and its root token is revoked as soon as a scoped t
 exists. The recovery keys are the only way back in if that scoped token is lost — they are
 shown once at initialisation, and belong somewhere other than the machine.
 
-`ceffio backup` includes the vault's data. It does **not** include the recovery keys: a
-backup that carries both the data and the keys that open it is not a backup, it is a
-copy of the risk.
+`ceffio backup` includes the vault's key-value tree — every entry under `kv/ceffio`,
+values included, dumped through `bao kv list` and `bao kv get` — plus the two Secrets the
+vault needs to run: `openbao-token` and `openbao-unseal-key`. Both are Secrets already
+present on the machine, like the database passwords; archiving them means a restore puts
+the vault back as it was, including the token the other modules authenticates with.
+
+It does **not** include the recovery keys, and that line is deliberate: they are the only
+way back in if the vault itself is lost, they do not live on the machine, and a backup
+that carries both the data and the keys that open it is not a backup, it is a copy of the
+risk. Losing the vault therefore remains a manual rebuild — `operator init` with the
+recovery keys, then re-writing the entries with `bao kv put` from the archive's
+`vault/kv-ceffio.json` — and a restore into a **new** cluster records a failure for the
+vault step instead of pretending to have restored it: the archived `openbao-token` was
+issued by the vault that no longer exists, and the new vault will not accept it.
 
 ## Working with the vault
 

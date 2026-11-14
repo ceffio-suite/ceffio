@@ -67,18 +67,7 @@ func Synthese(ctx context.Context, domain string) {
 // deployment did what it said, and a 502 here is the fastest way to notice a
 // component that came up but is not serving.
 func afficherServices(ctx context.Context, domain string) {
-	// sub, label, internal port
-	services := []struct {
-		sub, quoi string
-	}{
-		{"cloud", "Nextcloud (fichiers, agenda, bureautique)"},
-		{"admin", "Console d'administration"},
-		{"keycloak", "Keycloak (connexion unique)"},
-		{"office", "ONLYOFFICE (édition en ligne)"},
-		{"spreed", "Talk (visioconférence)"},
-		{"bao", "OpenBao (coffre à secrets)"},
-		{"mail", "Stalwart (messagerie)"},
-	}
+	services := servicesPublies(leServeurMailEstDeploye(ctx))
 
 	fmt.Println("  SERVICES")
 	fmt.Println("  ─────────────────────────────────────────────────────────────────")
@@ -89,6 +78,51 @@ func afficherServices(ctx context.Context, domain string) {
 	fmt.Println()
 	fmt.Printf("  L'API de la console écoute sur le port %d.\n", ConsPort)
 	fmt.Println()
+}
+
+// ligneService is one line of the summary's SERVICES block.
+type ligneService struct {
+	sub, quoi string
+}
+
+// servicesPublies returns the services the summary lists, mail being there only
+// when it is actually deployed.
+//
+// WHY MAIL IS CONDITIONAL: it is an optional module now (`--without mail`), and
+// the summary is the last thing an operator reads — listing `mail.<domain>` on
+// an installation that does not serve it sends them to a name that resolves and
+// answers 404. The other six are Core layers, deployed by the sequence itself,
+// so they are always there.
+//
+// EXTRACTED FROM THE PRINTING LOOP so the list can be asserted without a
+// cluster: the point of the test is the CONTENT, not the formatting.
+func servicesPublies(aMail bool) []ligneService {
+	services := []ligneService{
+		{"cloud", "Nextcloud (fichiers, agenda, bureautique)"},
+		{"admin", "Console d'administration"},
+		{"keycloak", "Keycloak (connexion unique)"},
+		{"office", "ONLYOFFICE (édition en ligne)"},
+		{"spreed", "Talk (visioconférence)"},
+		{"bao", "OpenBao (coffre à secrets)"},
+	}
+	if aMail {
+		services = append(services, ligneService{"mail", "Stalwart (messagerie)"})
+	}
+	return services
+}
+
+// leServeurMailEstDeploye asks the cluster whether the mail Deployment exists.
+//
+// WHY A KUBECTL READ rather than the module's State: Synthese is a package
+// function called by the installer, which has no Kubernetes client in hand at
+// that point (the deployment code creates one per layer). The existence of the
+// Deployment is exactly what the module's State answers with on this release,
+// and a summary is allowed to degrade — if kubectl is unavailable, the line is
+// simply omitted rather than asserted falsely.
+func leServeurMailEstDeploye(ctx context.Context) bool {
+	out, err := k8s.Command(ctx, "kubectl", "get", "deployment", "stalwart",
+		"-n", "ceffio-mail", "-o", "name").Output()
+	return err == nil && strings.TrimSpace(string(out)) != ""
 }
 
 // afficherCertificats shows what signs each host and when it expires.

@@ -19,12 +19,10 @@ package mail
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
-	"github.com/ceffio-suite/ceffio/internal/k8s"
+	"github.com/ceffio-suite/ceffio/internal/mail/jmap"
 )
 
 // compteGestion is the identifier of Stalwart's internal admin account, the one
@@ -173,17 +171,19 @@ func ConfigurerSSO(ctx context.Context, domaineMessagerie string, o SSO) error {
 	// /api/discover still returns Stalwart's internal endpoints and the
 	// permissions stay empty.
 	fmt.Println("      restarting (configuration is read at startup)")
-	if out, err := k8s.Command(ctx, "kubectl", "-n", ns, "rollout", "restart",
-		"deployment/stalwart").CombinedOutput(); err != nil {
-		return fmt.Errorf("restart: %w: %s", err, tronquer(string(out), 200))
+	cli, err := clientK8s()
+	if err != nil {
+		return fmt.Errorf("cluster access: %w", err)
 	}
-	// We wait for the END of the restart, not just for a pod to be ready: during
-	// the transition, the old pod still answers and `kubectl exec
-	// deploy/stalwart` may reach it — the verification below then failed on a
-	// refused connection.
-	if out, err := k8s.Command(ctx, "kubectl", "-n", ns, "rollout", "status",
-		"deployment/stalwart", "--timeout=600s").CombinedOutput(); err != nil {
-		return fmt.Errorf("waiting for the restart: %w: %s", err, tronquer(string(out), 200))
+	if err := cli.RedemarrerDeploiement(ctx, ns, "stalwart"); err != nil {
+		return fmt.Errorf("restart: %w", err)
+	}
+	// We wait for the END of the restart, not just for a pod to be ready: the
+	// Deployment uses `Recreate`, so the old pod disappears before the new one
+	// exists, and an exec sent to `deploy/stalwart` in that window reaches
+	// nothing. The verification below then failed on a refused connection.
+	if err := cli.AttendreDeploiement(ctx, ns, "stalwart", 10*time.Minute); err != nil {
+		return fmt.Errorf("waiting for the restart: %w", err)
 	}
 	if err := waitReady(ctx); err != nil {
 		return err
@@ -196,12 +196,10 @@ func ConfigurerSSO(ctx context.Context, domaineMessagerie string, o SSO) error {
 	compte := o.CompteAdmin + "@" + o.DomaineAdmin
 	var dernier string
 	for essai := 0; essai < 6; essai++ {
-		out, err := k8s.Command(ctx, "kubectl", "-n", ns, "exec", "deploy/stalwart", "-c", "stalwart", "--",
-			"sh", "-c", scriptAvecSecrets(`curl -s --max-time 15 -u "$STALWART_RECOVERY_ADMIN" `+
-				`"http://localhost:8080/api/discover/`+compte+`"`)).CombinedOutput()
+		reponse, err := Decouvrir(ctx, compte)
 		if err == nil {
-			dernier = string(out)
-			if strings.Contains(dernier, o.Issuer) {
+			dernier = fmt.Sprint(reponse)
+			if issuer, _ := reponse["issuer"].(string); issuer == o.Issuer {
 				fmt.Printf("  ✓ SSO active: %s redirects to %s\n", compte, o.Issuer)
 				return nil
 			}
@@ -414,62 +412,11 @@ func assurerClientWebUI(ctx context.Context, clientID string) error {
 // THE SECRET MUST BE SOURCED, and the comment here used to claim otherwise
 // ("STALWART_RECOVERY_ADMIN is already in the container environment" — it is
 // not). The injector writes /secrets/env and the container's own command
-// sources it for the Stalwart process; a `kubectl exec` opens a NEW shell that
-// inherits nothing of that. Without the source below, curl is called with an
+// sources it for the Stalwart process; an exec into the pod opens a NEW shell
+// that inherits nothing of that. Without the source below, curl is called with an
 // empty -u, prompts for a password it cannot read, and the API answers 401 —
 // which is exactly how this failed in production.
 // ---------------------------------------------------------------------------
-
-// appelJMAP sends a JMAP request and returns the first response body.
-func appelJMAP(ctx context.Context, methode string, args map[string]any) (map[string]any, error) {
-	enveloppe := map[string]any{
-		"using":       []string{},
-		"methodCalls": []any{[]any{methode, args, "c1"}},
-	}
-	brut, err := json.Marshal(enveloppe)
-	if err != nil {
-		return nil, err
-	}
-	script := scriptAvecSecrets(`curl -s --max-time 20 -u "$STALWART_RECOVERY_ADMIN" ` +
-		`-H "Content-Type: application/json" -X POST http://localhost:8080/jmap --data @-`)
-	cmd := k8s.Command(ctx, "kubectl", "-n", ns, "exec", "-i", "deploy/stalwart", "-c", "stalwart", "--",
-		"sh", "-c", script)
-	cmd.Stdin = strings.NewReader(string(brut))
-	sortie, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("JMAP call %s: %w: %s", methode, err, tronquer(string(sortie), 200))
-	}
-
-	var reponse struct {
-		MethodResponses []json.RawMessage `json:"methodResponses"`
-	}
-	if err := json.Unmarshal(sortie, &reponse); err != nil {
-		return nil, fmt.Errorf("unreadable JMAP response (%s): %w", tronquer(string(sortie), 200), err)
-	}
-	if len(reponse.MethodResponses) == 0 {
-		return nil, fmt.Errorf("empty JMAP response: %s", tronquer(string(sortie), 200))
-	}
-	var couple []json.RawMessage
-	if err := json.Unmarshal(reponse.MethodResponses[0], &couple); err != nil || len(couple) < 2 {
-		return nil, fmt.Errorf("unexpected JMAP response: %s", tronquer(string(sortie), 200))
-	}
-	var nom string
-	_ = json.Unmarshal(couple[0], &nom)
-	var corps map[string]any
-	if err := json.Unmarshal(couple[1], &corps); err != nil {
-		return nil, fmt.Errorf("unreadable JMAP body: %w", err)
-	}
-	// The API reports its refusals in the body, not through an HTTP code.
-	if _, estErreur := corps["type"]; estErreur && nom == "error" {
-		return nil, fmt.Errorf("Stalwart refusal: %s", tronquer(string(couple[1]), 300))
-	}
-	for _, cle := range []string{"notCreated", "notUpdated", "notDestroyed"} {
-		if v, ok := corps[cle]; ok {
-			return nil, fmt.Errorf("Stalwart refused (%s): %v", cle, tronquer(fmt.Sprint(v), 300))
-		}
-	}
-	return corps, nil
-}
 
 // majJMAP sends a modification and returns nothing.
 func majJMAP(ctx context.Context, methode string, args map[string]any) error {
@@ -485,23 +432,14 @@ func majJMAPObjet(ctx context.Context, methode, id string, champs map[string]any
 
 // creerObjet creates an object and returns its identifier.
 func creerObjet(ctx context.Context, methode string, champs map[string]any) (string, error) {
-	corps, err := appelJMAP(ctx, methode, map[string]any{
-		"accountId": compteGestion,
-		"create":    map[string]any{"n1": champs},
+	crees, err := clientJMAP().Set(ctx, methode, jmap.Modification{
+		Creer: map[string]map[string]any{"n1": champs},
 	})
 	if err != nil {
 		return "", err
 	}
-	crees, ok := corps["created"].(map[string]any)
-	if !ok {
-		return "", fmt.Errorf("creation without a returned identifier")
-	}
-	for _, v := range crees {
-		if m, ok := v.(map[string]any); ok {
-			if id, ok := m["id"].(string); ok {
-				return id, nil
-			}
-		}
+	if id := crees["n1"]; id != "" {
+		return id, nil
 	}
 	return "", fmt.Errorf("creation without a returned identifier")
 }
@@ -517,20 +455,12 @@ func chercherID(ctx context.Context, methode, champ, valeur string) (string, err
 
 // lireChamps returns, for each object, the value of the field associated with its id.
 func lireChamps(ctx context.Context, methode, champ string) (map[string]string, error) {
-	corps, err := appelJMAP(ctx, methode, map[string]any{
-		"accountId":  compteGestion,
-		"properties": []string{"id", champ},
-	})
+	objets, err := clientJMAP().Get(ctx, methode, nil, []string{"id", champ})
 	if err != nil {
 		return nil, err
 	}
-	liste, _ := corps["list"].([]any)
 	resultat := map[string]string{}
-	for _, e := range liste {
-		m, ok := e.(map[string]any)
-		if !ok {
-			continue
-		}
+	for _, m := range objets {
 		id, _ := m["id"].(string)
 		val, _ := m[champ].(string)
 		if id != "" && val != "" {
@@ -542,20 +472,14 @@ func lireChamps(ctx context.Context, methode, champ string) (map[string]string, 
 
 // lireIDs returns all identifiers of an object type.
 func lireIDs(ctx context.Context, methode string) ([]string, error) {
-	corps, err := appelJMAP(ctx, methode, map[string]any{
-		"accountId":  compteGestion,
-		"properties": []string{"id"},
-	})
+	objets, err := clientJMAP().Get(ctx, methode, nil, []string{"id"})
 	if err != nil {
 		return nil, err
 	}
-	liste, _ := corps["list"].([]any)
 	var ids []string
-	for _, e := range liste {
-		if m, ok := e.(map[string]any); ok {
-			if id, ok := m["id"].(string); ok {
-				ids = append(ids, id)
-			}
+	for _, m := range objets {
+		if id, ok := m["id"].(string); ok {
+			ids = append(ids, id)
 		}
 	}
 	return ids, nil
