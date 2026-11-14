@@ -9,20 +9,8 @@ import (
 
 	"github.com/ceffio-suite/ceffio/internal/k8sapi"
 	"github.com/ceffio-suite/ceffio/internal/mail"
-	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"github.com/ceffio-suite/ceffio/internal/vault"
 	"github.com/spf13/cobra"
-)
-
-// Default values of the outbound relay.
-//
-// WHY THIS DEFAULT, AND NOT AUTOMATIC DISCOVERY: outbound port 25 is blocked
-// by Free (measured), so Stalwart cannot deliver to the outside by itself —
-// one.com provides the reverse DNS and the deliverability. This is not a
-// guess, it is the configuration of this installation.
-const (
-	relaisParDefaut     = "send.one.com"
-	portRelaisParDefaut = 587
 )
 
 // newMailCmd deploys the mail layer ALONE.
@@ -33,10 +21,12 @@ const (
 // it is ABSENT from the upgrade sequence. In other words: a fix on mail had
 // no path to be applied.
 //
-// THE RELAY CREDENTIALS ARE READ, NOT TYPED. They come from the vault, with
-// fallback to the Kubernetes Secret. Passing them as options would invite
-// writing them into the shell history, and they would have to be fixed at
-// every rotation — that is exactly what we are trying to remove.
+// THE RELAY IS A SETTING NOW, not a parameter of this command. The deployment
+// reads the mail module's settings — relay group included — so a command line
+// that passed a host and a port on every run would be a second source for a
+// value the page also edits, and the last writer would win silently. The two
+// legacy flags are kept, and they WRITE THE SETTINGS through the module, so a
+// script that passes them still works and still lands in one place.
 func newMailCmd() *cobra.Command {
 	var domain string
 	var hote string
@@ -51,8 +41,13 @@ The domain of the ADDRESSES is the platform domain, not the web host
 "mail.<domain>": those are two distinct things, and confusing them produces
 addresses that nobody can receive.
 
-The outbound relay credentials are read from the vault, with fallback to the
-Kubernetes Secret. No secret value is ever typed as an option.`,
+The outbound relay comes from the mail module's settings (the relay group),
+which this command reads and applies. --relais and --relais-port are kept for
+scripts: when given they are WRITTEN TO THOSE SETTINGS first, then applied, so
+there is still exactly one place where the relay is configured.
+
+The relay password is read from the vault, with fallback to the Kubernetes
+Secret. No secret value is ever typed as an option.`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(c *cobra.Command, args []string) error {
@@ -77,18 +72,19 @@ Kubernetes Secret. No secret value is ever typed as an option.`,
 					fmt.Printf("  ∙ vault unresolved (%v) — secrets will come from Kubernetes\n", err)
 				}
 			}
-			coffre := secrets.DepuisEnvironnement()
-			utilisateur, err := secrets.LireOuSecret(c.Context(), coffre, "smtp", "relais",
-				"username", "ceffio-files/nextcloud-smtp", "username")
-			if err != nil {
-				return fmt.Errorf("outbound relay user not found: %w", err)
+			if err := mail.Deploy(c.Context(), domain); err != nil {
+				return err
 			}
-			motdepasse, err := secrets.LireOuSecret(c.Context(), coffre, "smtp", "relais",
-				"password", "ceffio-files/nextcloud-smtp", "password")
-			if err != nil {
-				return fmt.Errorf("outbound relay password not found: %w", err)
+			// The legacy flags are written AFTER the deployment, because they
+			// end by re-applying the server configuration: on a cluster where
+			// the mail layer does not exist yet, there would be nothing to
+			// apply them to.
+			if c.Flags().Changed("relais") || c.Flags().Changed("relais-port") {
+				if err := enregistrerRelaisInitial(c.Context(), domain, hote, port, "", ""); err != nil {
+					return err
+				}
 			}
-			return mail.Deploy(c.Context(), domain, hote, port, utilisateur, motdepasse)
+			return nil
 		},
 	}
 
@@ -99,7 +95,7 @@ Kubernetes Secret. No secret value is ever typed as an option.`,
 	cmd.AddCommand(newMailSSOCmd())
 
 	cmd.Flags().StringVar(&domain, "domain", "ceffio.example.com", "Base domain")
-	cmd.Flags().StringVar(&hote, "relais", relaisParDefaut, "Outbound relay host")
-	cmd.Flags().IntVar(&port, "relais-port", portRelaisParDefaut, "Outbound relay port")
+	cmd.Flags().StringVar(&hote, "relais", "", "Outbound relay host, written to the mail settings")
+	cmd.Flags().IntVar(&port, "relais-port", 587, "Outbound relay port, written to the mail settings")
 	return cmd
 }

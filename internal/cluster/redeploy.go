@@ -96,11 +96,12 @@ func Redeployer(ctx context.Context, domain string) error {
 		// passer une installation dégradée pour une réussite.
 		fmt.Printf("  ! vault not ready after the replay (%s)\n", res.Adresse)
 	}
-	// THE SEND RELAY IS NOT REPLAYED: it lives in Stalwart's own configuration,
-	// written through its admin API, and the install path only verifies it. An
-	// empty relay here therefore changes nothing — it must not wipe what the
-	// operator configured.
-	if err := mail.Deploy(ctx, domain, "", 0, "", ""); err != nil {
+	// THE SEND RELAY IS NOW REPLAYED, from the module's own settings: an
+	// upgrade used to keep Stalwart on the routing it had on the day it was
+	// installed, because the relay lived only in its live configuration. The
+	// relay group is the single source, so the replay applies it — and an
+	// installation that never configured one keeps the direct route it had.
+	if err := mail.Deploy(ctx, domain); err != nil {
 		return err
 	}
 	if err := mail.ConfigurerSSO(ctx, domain, mail.SSO{

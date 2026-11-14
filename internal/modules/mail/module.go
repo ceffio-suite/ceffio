@@ -9,14 +9,18 @@
 // the state and the diagnostic read it in the registry.
 //
 // THE PARTICULAR CASE OF THIS MODULE — Install DOES NOT DELEGATE:
-// mail.Deploy requires the outbound SMTP relay settings (host, port, user,
-// password) that module.Env does not carry, and rightly so: they are
-// operator data entered by the install command (--smtp-relais, …). Outbound
-// port 25 is blocked by ISPs (verified), so a Stalwart deployed WITHOUT a
-// relay would receive but never send — a silently broken installation.
-// Rather than delegate with an empty relay and pretend, Install returns an
-// explicit error: the install sequence, which holds the settings, remains
-// the only one to install this layer.
+// mail.Deploy creates the workload, the volume, the Service and the ingress
+// host of a CORE layer, in the order the installation has fixed; it is the
+// installation sequence's job, not the registry's. Install therefore returns
+// an explicit error rather than pretending to do it.
+//
+// WHAT THIS MODULE DOES DRIVE: its SETTINGS. The outbound relay (host, port,
+// password) used to be four installation flags; it is now the relay group of
+// this module (reglages.go), stored in the common settings and applied through
+// Stalwart's own admin API. The server group adds what the deployment could not
+// express: send mode, volume size, default quota, and whether IMAP / SMTPS are
+// published — the ports it declared (587, 143) were NOT the ones Stalwart 1.0.3
+// listens on (465, 993), measured in docs/plan-mail.md §9.E.
 package mail
 
 import (
@@ -27,10 +31,11 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/modules/socle"
 )
 
-// NO IMPORT OF internal/mail HERE, and it is deliberate: this module NEVER
-// calls mail.Deploy (see Install). Keeping an unusable import for the sake
-// of a symbolic link would suggest a delegation that does not exist. The
-// layer is described, not driven.
+// THE IMPORT OF internal/mail BELOW IS THE SETTINGS PATH ONLY: this module
+// never calls mail.Deploy (see Install), but it does need the stored form of
+// the mail settings (mailcore.Reglages, mailcore.AppliquerServeur) to apply a
+// group to the running server. It is imported as mailcore because this package
+// is itself called mail.
 
 // The namespace of Stalwart (internal/mail/mail.go, ns).
 const nsMail = "ceffio-mail"
@@ -48,7 +53,7 @@ func (m *mailModule) Info() module.Info {
 	return module.Info{
 		ID:          "mail",
 		Title:       "Mail server (Stalwart)",
-		Description: "Stalwart: the mail server behind Nextcloud Mail, with SMTP relay settings held by the install sequence.",
+		Description: "Stalwart: the mail server behind Nextcloud Mail, configured by its own settings (relay, volume, exposure).",
 		Kind:        module.Core,
 		Default:     true,
 		Namespaces:  []string{nsMail},

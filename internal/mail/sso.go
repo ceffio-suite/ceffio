@@ -19,7 +19,6 @@ package mail
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -422,46 +421,17 @@ func assurerClientWebUI(ctx context.Context, clientID string) error {
 
 // appelJMAP sends a JMAP request and returns the first response body.
 func appelJMAP(ctx context.Context, methode string, args map[string]any) (map[string]any, error) {
-	enveloppe := map[string]any{
-		"using":       []string{},
-		"methodCalls": []any{[]any{methode, args, "c1"}},
-	}
-	brut, err := json.Marshal(enveloppe)
+	nom, corps, err := appelJMAPBrut(ctx, methode, args)
 	if err != nil {
 		return nil, err
 	}
-	script := scriptAvecSecrets(`curl -s --max-time 20 -u "$STALWART_RECOVERY_ADMIN" ` +
-		`-H "Content-Type: application/json" -X POST http://localhost:8080/jmap --data @-`)
-	cmd := k8s.Command(ctx, "kubectl", "-n", ns, "exec", "-i", "deploy/stalwart", "-c", "stalwart", "--",
-		"sh", "-c", script)
-	cmd.Stdin = strings.NewReader(string(brut))
-	sortie, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("JMAP call %s: %w: %s", methode, err, tronquer(string(sortie), 200))
-	}
-
-	var reponse struct {
-		MethodResponses []json.RawMessage `json:"methodResponses"`
-	}
-	if err := json.Unmarshal(sortie, &reponse); err != nil {
-		return nil, fmt.Errorf("unreadable JMAP response (%s): %w", tronquer(string(sortie), 200), err)
-	}
-	if len(reponse.MethodResponses) == 0 {
-		return nil, fmt.Errorf("empty JMAP response: %s", tronquer(string(sortie), 200))
-	}
-	var couple []json.RawMessage
-	if err := json.Unmarshal(reponse.MethodResponses[0], &couple); err != nil || len(couple) < 2 {
-		return nil, fmt.Errorf("unexpected JMAP response: %s", tronquer(string(sortie), 200))
-	}
-	var nom string
-	_ = json.Unmarshal(couple[0], &nom)
-	var corps map[string]any
-	if err := json.Unmarshal(couple[1], &corps); err != nil {
-		return nil, fmt.Errorf("unreadable JMAP body: %w", err)
-	}
-	// The API reports its refusals in the body, not through an HTTP code.
-	if _, estErreur := corps["type"]; estErreur && nom == "error" {
-		return nil, fmt.Errorf("Stalwart refusal: %s", tronquer(string(couple[1]), 300))
+	// The write methods report their refusals in the body rather than through
+	// an error: a caller that did not check them would take a refused write for
+	// a success. That check lives here, once, and `appelJMAPBrut` is reserved
+	// for the one caller that must judge on the read-back instead — route
+	// deletion (see internal/mail/envoi.go).
+	if nom == "error" {
+		return nil, fmt.Errorf("Stalwart refusal: %s", tronquer(fmt.Sprint(corps), 300))
 	}
 	for _, cle := range []string{"notCreated", "notUpdated", "notDestroyed"} {
 		if v, ok := corps[cle]; ok {

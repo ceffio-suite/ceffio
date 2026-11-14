@@ -473,9 +473,19 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	// (Mail app) but not the mail server. The outbound relay is INDISPENSABLE
 	// here: outbound port 25 is blocked by the ISP (verified), so Stalwart
 	// cannot deliver to Gmail by itself.
-	if err := mail.Deploy(ctx, o.domain, o.relaisSmtpHote, o.relaisSmtpPort,
-		o.relaisSmtpUser, o.relaisSmtpPass); err != nil {
+	//
+	// THE RELAY FLAGS NOW WRITE THE MODULE'S SETTINGS instead of being passed
+	// through: a value typed at installation must land in the store the page
+	// and `ceffio module config` read, or an installation could hold a relay
+	// that no page shows and that a later save silently overwrites.
+	if err := mail.Deploy(ctx, o.domain); err != nil {
 		return err
+	}
+	if o.relaisSmtpHote != "" {
+		if err := enregistrerRelaisInitial(ctx, o.domain, o.relaisSmtpHote,
+			o.relaisSmtpPort, o.relaisSmtpUser, o.relaisSmtpPass); err != nil {
+			return err
+		}
 	}
 
 	// 12ter. Stalwart single sign-on. The mail server has its own
