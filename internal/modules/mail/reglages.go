@@ -514,7 +514,7 @@ func (m *mailModule) reappliquerServeur(ctx context.Context) error {
 func (m *mailModule) appliquerAuServeur(ctx context.Context, cfg mailcore.Reglages) error {
 	if err := mailcore.AppliquerServeur(ctx, cfg); err != nil {
 		return fmt.Errorf("the values are stored, but applying them to the server failed: %w — "+
-			"from a machine with kubectl, `ceffio mail deploy` applies them", err)
+			"from a machine with kubectl, `ceffio mail` applies them", err)
 	}
 	return nil
 }

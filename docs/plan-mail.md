@@ -1,10 +1,12 @@
 # Implementation plan — mail as an optional module, internal users, platform mail (0.11.0)
 
-Status: accepted by the maintainer (2026-11-14); the POC round is done (PR 0,
-results and design amendments in §9), nothing implemented yet — implementation
-starts with PR 1. Every product decision is recorded in §2; the implementing
-agent does not need to ask them again. The places where it MUST stop and ask
-are listed in §0.5.
+Status: accepted by the maintainer (2026-11-14) and **delivered in 0.11.0**:
+PR 0 (POC, results and design amendments in §9) and PRs 1–10 are merged, and
+the release follows §7. This document stays the design record — the decisions,
+the measured facts of §9 and the PR chain; the operator's guide is
+[mail.md](mail.md). Every product decision is recorded in §2; the places where
+the implementation had to stop and ask are listed in §0.5 (gate 3, the host
+exposure fix, was deferred by the maintainer to a later release).
 
 This plan was written after a read-only inspection of the demo server (v0.10.22)
 and of the Stalwart 1.0 documentation. The demo is only evidence of what the
@@ -1166,9 +1168,10 @@ documented in the code comment and limited to the pod.
   `/var/lib/stalwart` on the `stalwart-data` PVC (20 GiB, Longhorn RWO), the pod
   runs as uid/gid 2000.
 - A scale-to-zero window around the copy is therefore the only portable method
-  for `ceffio backup`; inbound mail during the window is deferred by the
-  senders (SMTP 4xx), not lost. A Longhorn snapshot would work on this cluster
-  but is not portable and is not what `ceffio backup` produces.
+  for `ceffio backup`; inbound mail during the window is not lost: no listener
+  answers, so the sending servers keep the message queued and retry. A
+  Longhorn snapshot would work on this cluster but is not portable and is not
+  what `ceffio backup` produces.
 - **`ceffio backup` does not cover the vault at all today**: `internal/backup`
   dumps PostgreSQL (`mysuite`, `keycloak`, `nextcloud`), the Nextcloud and
   OnlyOffice volumes, and Kubernetes Secrets/ConfigMaps — no OpenBao entry, and

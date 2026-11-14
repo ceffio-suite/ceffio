@@ -62,11 +62,12 @@ const (
 
 // nomsDesObjets are the Kubernetes objects Install creates on the public side.
 const (
-	cleDeploiement = "stalwart"
-	cleService     = "stalwart"
-	cleIngress     = "mail"
-	cleCompte      = "stalwart"
-	cleConfigMap   = "stalwart-config"
+	cleDeploiement   = "stalwart"
+	cleService       = "stalwart"
+	cleServicePublic = "stalwart-public"
+	cleIngress       = "mail"
+	cleCompte        = "stalwart"
+	cleConfigMap     = "stalwart-config"
 )
 
 // mailModule is the registry entry of the mail server.
@@ -325,8 +326,16 @@ func (m *mailModule) Uninstall(ctx context.Context, env module.Env) error {
 		quoi string
 		supp func() error
 	}{
-		{"the public Service", func() error {
+		{"the cluster Service", func() error {
 			return env.Kube.CoreV1().Services(nsMail).Delete(ctx, cleService, metav1.DeleteOptions{})
+		}},
+		// BOTH SERVICES GO, and the public one is the reason this matters: it
+		// is a LoadBalancer, so leaving it behind keeps a cloud load balancer
+		// and its published ports alive for a server that no longer exists —
+		// and the next `ceffio expose` run would find a forward pointing at
+		// nothing. The plan says "removes the public Service"; it is this one.
+		{"the public Service", func() error {
+			return env.Kube.CoreV1().Services(nsMail).Delete(ctx, cleServicePublic, metav1.DeleteOptions{})
 		}},
 		{"the Ingress host", func() error {
 			return env.Kube.NetworkingV1().Ingresses(nsMail).Delete(ctx, cleIngress, metav1.DeleteOptions{})

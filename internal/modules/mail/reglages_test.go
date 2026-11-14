@@ -5,7 +5,7 @@
 // that happen before anything is written, and the two writes that must not
 // destroy each other.
 //
-// WHY THEY EXIST: these values are what `ceffio mail deploy`, `ceffio install`
+// WHY THEY EXIST: these values are what `ceffio mail`, `ceffio install`
 // and the console all apply, and they are stored in one ConfigMap key read by
 // three paths. The failure modes are not theoretical: a relay saved without its
 // Test leaves outbound mail on a route that bounces, and re-applying the send

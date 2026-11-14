@@ -659,6 +659,10 @@ stable and complete for a healthy fixture. The console's own tests already pin
 the generic behaviour (`TestLesChecksSontServisSansNomDeModule`,
 `TestUnModuleSansChecksRepond404`), so a module only tests what it measures.
 
+The worked example is `mail`: eleven top-level checks over DNS, ports,
+certificates and the server's own state, with the `records` one expanding into
+seven children. What it produces for an operator is in [mail.md](mail.md).
+
 ## 11. User accounts: the `Accounts` contract
 
 A module that owns a per-user object — a mailbox is the first one — implements
@@ -750,7 +754,8 @@ deletion while it can still be retried from the page.
 No network, no cluster: the console's tests use a fake registry, a fake module
 and an `httptest` Keycloak, so a module tests **its own** logic (validation
 rules, idempotence, lifecycle) directly against its seams — see
-`internal/modules/mail` for a module that implements the full contract. The
+`internal/modules/mail` for a module that implements the full contract, and
+[mail.md](mail.md) for the mailbox it produces. The
 console's generic behaviour is already pinned
 (`internal/console/users_accounts_test.go`: validation before creation, order,
 write-back, typed confirmations, protection of the administration account).
