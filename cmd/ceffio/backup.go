@@ -23,11 +23,20 @@ func newBackupCmd() *cobra.Command {
 
 Contents:
   · the PostgreSQL databases   mysuite, keycloak, nextcloud
-  · the volumes                nextcloud-data, onlyoffice-data
+  · the volumes                nextcloud-data, onlyoffice-data,
+                               stalwart-data (mail)
   · the application Secrets — without them, the restored data would be
                                orphaned (database passwords, signing
-                               keys and ONLYOFFICE)
+                               keys, ONLYOFFICE, the vault's token and
+                               unseal key)
+  · the vault's entries        every kv/ceffio entry, values included
   · a manifest                 SHA-256 fingerprints of every item
+
+The mail volume is copied with the server STOPPED and restarted afterwards:
+Stalwart keeps a RocksDB store, and a copy taken while it runs is a file of
+unknown validity. Mail is refused (SMTP 4xx, so senders retry) for the few
+seconds the copy lasts. The vault's RECOVERY keys are not in the archive — see
+docs/secrets.md.
 
 The archive is written to the current directory, or into --dir. It contains
 secrets: it is created 0600 and must not be left in clear text on a share.

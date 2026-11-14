@@ -60,9 +60,20 @@ OpenBao is initialised once, and its root token is revoked as soon as a scoped t
 exists. The recovery keys are the only way back in if that scoped token is lost — they are
 shown once at initialisation, and belong somewhere other than the machine.
 
-`ceffio backup` includes the vault's data. It does **not** include the recovery keys: a
-backup that carries both the data and the keys that open it is not a backup, it is a
-copy of the risk.
+`ceffio backup` includes the vault's key-value tree — every entry under `kv/ceffio`,
+values included, dumped through `bao kv list` and `bao kv get` — plus the two Secrets the
+vault needs to run: `openbao-token` and `openbao-unseal-key`. Both are Secrets already
+present on the machine, like the database passwords; archiving them means a restore puts
+the vault back as it was, including the token the other modules authenticates with.
+
+It does **not** include the recovery keys, and that line is deliberate: they are the only
+way back in if the vault itself is lost, they do not live on the machine, and a backup
+that carries both the data and the keys that open it is not a backup, it is a copy of the
+risk. Losing the vault therefore remains a manual rebuild — `operator init` with the
+recovery keys, then re-writing the entries with `bao kv put` from the archive's
+`vault/kv-ceffio.json` — and a restore into a **new** cluster records a failure for the
+vault step instead of pretending to have restored it: the archived `openbao-token` was
+issued by the vault that no longer exists, and the new vault will not accept it.
 
 ## Working with the vault
 

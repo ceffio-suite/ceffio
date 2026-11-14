@@ -71,6 +71,19 @@ func Restaurer(ctx context.Context, archive string, progress func(string)) (*Man
 		}
 	}
 
+	// 2 bis. The vault's entries. Before the volumes: the vault is what names
+	// the credentials the restored workloads will look for, and it is cheap to
+	// write.
+	for _, e := range man.Entries {
+		if e.Kind != "vault" {
+			continue
+		}
+		progress("vault entries")
+		if err := restaurerCoffre(ctx, filepath.Join(work, e.File), &man.Errors); err != nil {
+			man.Errors = append(man.Errors, "vault : "+err.Error())
+		}
+	}
+
 	// 3. Volumes.
 	for _, e := range man.Entries {
 		if e.Kind != "volume" {
@@ -82,12 +95,7 @@ func Restaurer(ctx context.Context, archive string, progress func(string)) (*Man
 			continue
 		}
 		progress("volume " + e.Name)
-		podName := podFor(ctx, v.Namespace, v.PodLabel)
-		if podName == "" {
-			man.Errors = append(man.Errors, fmt.Sprintf("volume %s : no pod %s", e.Name, v.PodLabel))
-			continue
-		}
-		if err := restoreVolume(ctx, v, podName, filepath.Join(work, e.File)); err != nil {
+		if err := restaurerVolume(ctx, v, filepath.Join(work, e.File), progress); err != nil {
 			man.Errors = append(man.Errors, fmt.Sprintf("volume %s : %v", e.Name, err))
 		}
 	}
@@ -337,12 +345,8 @@ func restoreVolume(ctx context.Context, v Volume, pod, tarPath string) error {
 		"chown -R " + itoa(v.UID) + ":" + itoa(v.GID) + " " + v.Path + " 2>/dev/null || true; " +
 		"rm -rf " + v.Path + "/" + staging
 
-	cmd := k8s.Command(ctx, "kubectl", "exec", "-i", "-n", v.Namespace, pod, "--", "sh", "-c", script)
-	cmd.Stdin = f
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("extraction: %w : %s", err, oneLine(stderr.String()))
+	if err := executerKubectl(ctx, f, nil, "exec", "-i", "-n", v.Namespace, pod, "--", "sh", "-c", script); err != nil {
+		return fmt.Errorf("extraction: %w", err)
 	}
 	return nil
 }
