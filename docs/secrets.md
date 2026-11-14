@@ -31,7 +31,13 @@ OpenBao; what changes is how they reach the process.
 |---|---|---|
 | `cert-manager/ceffio-acme-dns` | `internal/ingress/dnswebhook.go` | cert-manager resolves the ClusterIssuer's `secretRef` itself. It has no way to reach OpenBao, and it is not our process to teach. |
 | `ceffio-video/ghcr-pull` | `internal/talk/talk.go` | It is a `kubernetes.io/dockerconfigjson`, consumed by the kubelet to pull images. The kubelet reads it from the API, never from a mounted file. |
-| `ceffio-mail/*` | `internal/mail/mail.go` | Stalwart's own administration calls need a credential at a moment when no pod is available to inject into. |
+
+The mail server used to be a third entry here: Stalwart's administration credential was a
+Secret written from the vault. It is gone since 0.11.0 — the workload reads
+`kv/ceffio/stalwart/admin` through the injector, and `internal/mail` now prints
+`Kubernetes Secret "stalwart-admin" still present — dead copy, to be removed` when an
+older installation leaves one behind. A value in two places drifts, and the workload now
+reads only the injected one.
 
 `ceffio-system/longhorn-oauth2-proxy-vault` used to be on this list. It is gone: the module
 now declares its vault access (`Info.Vault`) and oauth2-proxy reads its two credentials

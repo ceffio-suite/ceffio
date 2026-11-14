@@ -46,8 +46,12 @@ which this command reads and applies. --relais and --relais-port are kept for
 scripts: when given they are WRITTEN TO THOSE SETTINGS first, then applied, so
 there is still exactly one place where the relay is configured.
 
-The relay password is read from the vault, with fallback to the Kubernetes
-Secret. No secret value is ever typed as an option.`,
+The relay password lives in the vault (kv/ceffio/mail/relay): it is never
+typed as an option, and never written to a ConfigMap.
+
+Once deployed, ceffio module check mail says whether the world can actually
+reach it — MX, PTR, port 25, TLS, the DNS records — and docs/mail.md explains
+each check and how to fix it.`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(c *cobra.Command, args []string) error {

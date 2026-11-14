@@ -31,6 +31,7 @@ func clusterComplet() *fake.Clientset {
 	return fake.NewSimpleClientset(
 		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "stalwart", Namespace: nsMail}},
 		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "stalwart", Namespace: nsMail}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "stalwart-public", Namespace: nsMail}},
 		&networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: "mail", Namespace: nsMail}},
 		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "stalwart", Namespace: nsMail}},
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "stalwart-config", Namespace: nsMail}},
@@ -96,8 +97,15 @@ func TestLaDesinstallationEnleveLeServiceEtGardeLeVolume(t *testing.T) {
 			_, err := cs.AppsV1().Deployments(nsMail).Get(context.Background(), "stalwart", metav1.GetOptions{})
 			return err
 		}},
-		{"the public Service", func() error {
+		{"the cluster Service", func() error {
 			_, err := cs.CoreV1().Services(nsMail).Get(context.Background(), "stalwart", metav1.GetOptions{})
+			return err
+		}},
+		{"the public Service", func() error {
+			// THE LOADBALANCER IS THE ONE THAT MATTERS: left behind, it keeps
+			// a load balancer and published ports alive for a server that no
+			// longer exists.
+			_, err := cs.CoreV1().Services(nsMail).Get(context.Background(), "stalwart-public", metav1.GetOptions{})
 			return err
 		}},
 		{"the Ingress", func() error {

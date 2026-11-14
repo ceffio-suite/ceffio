@@ -44,10 +44,12 @@ the release that carries it — not an option.
 - the installation is healthy (`ceffio status`, `ceffio doctor`);
 - you have room for one extra copy of the mail volume (the store of this
   installation is ~3 MB; a 2 Gi volume is enough for a large mailbox);
-- **`ceffio backup` does not cover the mail volume.** It archives the
-  config maps, the three SQL dumps and the Nextcloud/ONLYOFFICE volumes —
-  verified by listing a real archive (`configmaps/`, `db/`, `volumes/`): no
-  `stalwart`. The mail store has to be saved explicitly, as below.
+- **on the version that runs the 0.16 store, `ceffio backup` does not cover the
+  mail volume.** That backup archives the config maps, the three SQL dumps and
+  the Nextcloud/ONLYOFFICE volumes — verified by listing a real archive
+  (`configmaps/`, `db/`, `volumes/`): no `stalwart`. Mail joined the backup in
+  0.11.0 ([mail.md](mail.md)), which is the release this conversion prepares, so
+  the store has to be saved explicitly here, as below.
 - no `ceffio upgrade` has been run with the new binary yet (it would move mail
   to 1.0.3 before the conversion and the pod would crash-loop).
 
