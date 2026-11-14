@@ -659,6 +659,102 @@ stable and complete for a healthy fixture. The console's own tests already pin
 the generic behaviour (`TestLesChecksSontServisSansNomDeModule`,
 `TestUnModuleSansChecksRepond404`), so a module only tests what it measures.
 
+## 11. User accounts: the `Accounts` contract
+
+A module that owns a per-user object — a mailbox is the first one — implements
+`module.Accounts`. The Users page then grows the module's creation inputs, its
+account column and its actions **without the page, the handlers or the route
+list changing**: the console asks every *installed* module implementing the
+interface and renders what it is given. This is why a module ID must never
+appear in `internal/console/web/index.html`; a test enforces it
+(`TestLaPageNAppelleAucunModuleEnDur`).
+
+### The contract, method by method
+
+| Method | When it runs | What it must do |
+|---|---|---|
+| `AccountFields` | every render of the page | declare the creation inputs, cheap and side-effect free |
+| `ValidateAccount` | **before anything is created**, Keycloak included | refuse an impossible creation with an actionable message |
+| `EnsureAccount` | once the platform account exists | provision what the module owns; **idempotent** |
+| `AccountInfos` | page load, once for the whole list | report every user's account in one call |
+| `AccountAction` | operator clicks one of `AccountInfo.Actions` | run that action, no-op never |
+| `SuspendAccount` / `ResumeAccount` | user deactivated / reactivated | follow the platform account's `enabled` flag |
+| `DeleteAccount` | user deleted, **before** the platform account | remove what the module owns |
+
+`module.AccountsOf(m)` is the type assertion both frontends use; do not write
+your own.
+
+### The order, and why it is the contract's
+
+The console implements this sequence **once** for every module:
+
+1. `ValidateAccount` of **every** module — before Keycloak is touched. A refusal
+   arriving after the account exists leaves a half-created user to clean up by
+   hand;
+2. the Keycloak user, then the Nextcloud account (what the page has always
+   done);
+3. `EnsureAccount` of every module;
+4. write-back of each `AccountResult` (email and attributes).
+
+Platform account first, module objects second, is also what makes a **retry
+converge**: both steps are idempotent, and the account the operator can see and
+delete is the one that already exists. A creation that partially failed says
+what exists and tells the operator to send the same request again.
+
+### Fields: reuse `module.Field`
+
+`AccountField` embeds `module.Field` (`Key`, `Label`, `Help`, `Type`,
+`Options`, `Default`, `Required`, `Pattern`, `ShowWhen`), so the page renders
+the creation form with the same rules as the settings forms, and every field
+type (`text`, `number`, `bool`, `choice`, `secret`) arrives typed. Values come
+back as `module.Values` (a `map[string]string`): the console applies each
+field's `Default` before calling you, and refuses a key no field declares
+instead of dropping the typo.
+
+`AccountField.ReplacesEmail` exists for one case: a `bool` field that, when
+`true`, makes the email input meaningless because the module computes the
+address (`<username>@<domain>`). The console then hides the input *and* creates
+the platform account without an email; the address is written back in step 4.
+Use it only when the address really is yours to choose.
+
+### Result: state it, do not write it
+
+`EnsureAccount` returns an `AccountResult` — an address and attributes — and
+does **not** write the Keycloak user itself. One writer per object: the console
+owns the platform account, so the module states the outcome and the page applies
+it (email + `emailVerified`, then the Nextcloud address). Attributes are how a
+module recognizes its own users later (`User.Attributes`, read from Keycloak
+with the user list).
+
+### Inform, act, confirm
+
+`AccountInfos` returns one `AccountInfo` per user, keyed by `User.ID`:
+`Present`, `Suspended`, a human `Summary` (e.g. `312 MiB / 1 GiB`), and the
+`Actions` this user has. An action declares its `ID`, a `Label`, optional
+`Fields` (reusing `module.Field`), and `Confirm`: when non-empty, the operator
+must type that string (the username, for an irreversible action) and the console
+enforces it server-side. An action ID that `AccountInfos` did not declare for
+that user is refused with 404 — the page and the module disagreeing is a bug,
+not a no-op.
+
+### Lifecycle
+
+`SuspendAccount` / `ResumeAccount` follow the platform account's `enabled` flag
+(Keycloak first, then the modules); both must be idempotent. `DeleteAccount`
+runs **before** Nextcloud and Keycloak are deleted: module objects are the ones
+no page can reach once the account is gone, so a failure there stops the
+deletion while it can still be retried from the page.
+
+### Tests expected
+
+No network, no cluster: the console's tests use a fake registry, a fake module
+and an `httptest` Keycloak, so a module tests **its own** logic (validation
+rules, idempotence, lifecycle) directly against its seams — see
+`internal/modules/mail` for a module that implements the full contract. The
+console's generic behaviour is already pinned
+(`internal/console/users_accounts_test.go`: validation before creation, order,
+write-back, typed confirmations, protection of the administration account).
+
 ## Checklist
 
 1. New package under `internal/modules/<name>/`, SPDX header, comments in
@@ -677,15 +773,19 @@ the generic behaviour (`TestLesChecksSontServisSansNomDeModule`,
    certificate): implement `Checker` (`Checks`) — see §10 — and a test per check
    proving it can fail. Do NOT add a console route or a CLI subcommand: the
    page renders the list generically and `module check` runs it.
-6. `func init() { module.Register(&yourModule{}) }`.
-7. One blank-import line in `internal/modules/all.go`.
-8. Tests: `Info` validity, (if the module installs resources itself) the
+6. **If the feature has per-user objects**: implement `Accounts` (§11) —
+   fields, validation, provisioning, per-user state, actions, lifecycle. Do NOT
+   add a console route, a Users-page section or a CLI subcommand: the page and
+   `ceffio users` serve the contract generically.
+7. `func init() { module.Register(&yourModule{}) }`.
+8. One blank-import line in `internal/modules/all.go`.
+9. Tests: `Info` validity, (if the module installs resources itself) the
    fake-clientset contract tests, the settings round trip
    (`Current` → `Apply` → `Current`) when it has settings, and the check tests
    of §10 when it has checks.
-9. `gofmt -l .`, `go build ./...`, `go vet ./...`, `make test`,
+10. `gofmt -l .`, `go build ./...`, `go vet ./...`, `make test`,
    `go test -tags demo ./...` — all green.
-10. **Nothing else.** If anything else changed, you changed too much — and the
+11. **Nothing else.** If anything else changed, you changed too much — and the
    test of the demo module's settings checks exactly that for its own package.
    A console route, a page in `web/index.html` or a CLI subcommand named after
    your feature means the contract was not extended where it should have been.
