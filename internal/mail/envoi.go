@@ -47,13 +47,11 @@
 package mail
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"reflect"
 
-	"github.com/ceffio-suite/ceffio/internal/k8s"
+	"github.com/ceffio-suite/ceffio/internal/mail/jmap"
 )
 
 // Send modes, as stored in the module settings (`mail.server`, field `envoi`).
@@ -153,79 +151,6 @@ func (e Envoi) champsRouteMiseAJour() map[string]any {
 // Transport
 // ---------------------------------------------------------------------------
 
-// transportJMAP executes one JMAP exchange and returns the raw response body.
-//
-// A VARIABLE, because every behaviour in this file is a decision about what to
-// do with a response, and a decision that cannot be exercised by a test is a
-// decision nobody has checked. The default goes through the pod, exactly like
-// the rest of the mail package: the admin credential is read from
-// /secrets/env inside the container and never appears on a command line.
-var transportJMAP = transportJMAPKubectl
-
-// transportJMAPKubectl calls /jmap through an exec in the Stalwart pod.
-func transportJMAPKubectl(ctx context.Context, corps []byte) ([]byte, error) {
-	script := scriptAvecSecrets(`curl -s --max-time 20 -u "$STALWART_RECOVERY_ADMIN" ` +
-		`-H "Content-Type: application/json" -X POST http://localhost:8080/jmap --data @-`)
-	cmd := k8s.Command(ctx, "kubectl", "-n", ns, "exec", "-i", "deploy/stalwart", "-c", "stalwart", "--",
-		"sh", "-c", script)
-	cmd.Stdin = bytes.NewReader(corps)
-	sortie, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("JMAP call through the pod: %w: %s", err, tronquer(string(sortie), 200))
-	}
-	return sortie, nil
-}
-
-// appelJMAPBrut sends one method call and returns its name and body WITHOUT
-// interpreting the refusals.
-//
-// WHY BRUT EXISTS: `appelJMAP` turns every `notCreated`/`notUpdated`/
-// `notDestroyed` into an error, which is the right default — a write that did
-// not happen must not pass for a success. Deletion is the exception the POC
-// documented: 1.0.3 sometimes answers `notDestroyed` for an object that is
-// gone, and treating that as a failure would make `direct` mode undeployable
-// on an installation whose relay route was already deleted. The caller of the
-// brut form decides, and here it decides on the read-back.
-func appelJMAPBrut(ctx context.Context, methode string, args map[string]any) (string, map[string]any, error) {
-	enveloppe := map[string]any{
-		"using":       []string{},
-		"methodCalls": []any{[]any{methode, args, "c1"}},
-	}
-	brut, err := json.Marshal(enveloppe)
-	if err != nil {
-		return "", nil, err
-	}
-	sortie, err := transportJMAP(ctx, brut)
-	if err != nil {
-		return "", nil, fmt.Errorf("JMAP call %s: %w", methode, err)
-	}
-
-	var reponse struct {
-		MethodResponses []json.RawMessage `json:"methodResponses"`
-	}
-	if err := json.Unmarshal(sortie, &reponse); err != nil {
-		return "", nil, fmt.Errorf("unreadable JMAP response (%s): %w", tronquer(string(sortie), 200), err)
-	}
-	if len(reponse.MethodResponses) == 0 {
-		return "", nil, fmt.Errorf("empty JMAP response: %s", tronquer(string(sortie), 200))
-	}
-	var couple []json.RawMessage
-	if err := json.Unmarshal(reponse.MethodResponses[0], &couple); err != nil || len(couple) < 2 {
-		return "", nil, fmt.Errorf("unexpected JMAP response: %s", tronquer(string(sortie), 200))
-	}
-	var nom string
-	_ = json.Unmarshal(couple[0], &nom)
-	var corps map[string]any
-	if err := json.Unmarshal(couple[1], &corps); err != nil {
-		return "", nil, fmt.Errorf("unreadable JMAP body: %w", err)
-	}
-	// The API reports its refusals in the body, not through an HTTP code.
-	if nom == "error" {
-		return nom, corps, fmt.Errorf("Stalwart refusal: %s", tronquer(string(couple[1]), 300))
-	}
-	return nom, corps, nil
-}
-
 // ---------------------------------------------------------------------------
 // Outbound routing
 // ---------------------------------------------------------------------------
@@ -269,19 +194,11 @@ func AppliquerEnvoi(ctx context.Context, e Envoi) error {
 
 // routeParNom returns the route with that name, or nil when it does not exist.
 func routeParNom(ctx context.Context, nom string) (map[string]any, error) {
-	corps, err := appelJMAP(ctx, "x:MtaRoute/get", map[string]any{
-		"accountId": compteGestion,
-		"ids":       nil,
-	})
+	routes, err := clientJMAP().Get(ctx, "x:MtaRoute/get", nil, nil)
 	if err != nil {
 		return nil, err
 	}
-	liste, _ := corps["list"].([]any)
-	for _, item := range liste {
-		route, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
+	for _, route := range routes {
 		if route["name"] == nom {
 			return route, nil
 		}
@@ -298,9 +215,8 @@ func assurerRouteRelais(ctx context.Context, e Envoi) error {
 	}
 
 	if existante == nil {
-		if _, err := appelJMAP(ctx, "x:MtaRoute/set", map[string]any{
-			"accountId": compteGestion,
-			"create":    map[string]any{routeRelais: e.champsRoute()},
+		if _, err := clientJMAP().Set(ctx, "x:MtaRoute/set", jmap.Modification{
+			Creer: map[string]map[string]any{routeRelais: e.champsRoute()},
 		}); err != nil {
 			return fmt.Errorf("creating the relay route: %w", err)
 		}
@@ -309,9 +225,8 @@ func assurerRouteRelais(ctx context.Context, e Envoi) error {
 		if id == "" {
 			return fmt.Errorf("relay route read back without an identifier: %v", tronquer(fmt.Sprint(existante), 200))
 		}
-		if _, err := appelJMAP(ctx, "x:MtaRoute/set", map[string]any{
-			"accountId": compteGestion,
-			"update":    map[string]any{id: e.champsRouteMiseAJour()},
+		if _, err := clientJMAP().Set(ctx, "x:MtaRoute/set", jmap.Modification{
+			MettreAJour: map[string]map[string]any{id: e.champsRouteMiseAJour()},
 		}); err != nil {
 			return fmt.Errorf("updating the relay route: %w", err)
 		}
@@ -374,8 +289,7 @@ func supprimerRouteRelais(ctx context.Context) error {
 		return fmt.Errorf("relay route read back without an identifier: %v", tronquer(fmt.Sprint(existante), 200))
 	}
 	if _, _, err := appelJMAPBrut(ctx, "x:MtaRoute/set", map[string]any{
-		"accountId": compteGestion,
-		"destroy":   []any{id},
+		"destroy": []any{id},
 	}); err != nil {
 		return fmt.Errorf("deleting the relay route: %w", err)
 	}
@@ -414,22 +328,14 @@ func routeSortanteAttendue(courante map[string]any, nomRoute string) map[string]
 
 // lireRouteSortante returns the outbound strategy's `route` expression.
 func lireRouteSortante(ctx context.Context) (map[string]any, error) {
-	corps, err := appelJMAP(ctx, "x:MtaOutboundStrategy/get", map[string]any{
-		"accountId": compteGestion,
-		"ids":       []any{"singleton"},
-	})
+	strategies, err := clientJMAP().Get(ctx, "x:MtaOutboundStrategy/get", []string{"singleton"}, nil)
 	if err != nil {
 		return nil, err
 	}
-	liste, _ := corps["list"].([]any)
-	if len(liste) == 0 {
+	if len(strategies) == 0 {
 		return nil, fmt.Errorf("the outbound strategy is absent from the server")
 	}
-	strategie, ok := liste[0].(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("unreadable outbound strategy: %v", tronquer(fmt.Sprint(liste[0]), 200))
-	}
-	route, ok := strategie["route"].(map[string]any)
+	route, ok := strategies[0]["route"].(map[string]any)
 	if !ok {
 		return map[string]any{}, nil
 	}
@@ -451,10 +357,9 @@ func forcerSortie(ctx context.Context, nomRoute string) error {
 		return nil
 	}
 
-	if _, err := appelJMAP(ctx, "x:MtaOutboundStrategy/set", map[string]any{
-		"accountId": compteGestion,
-		"update": map[string]any{
-			"singleton": map[string]any{"route": voulue},
+	if _, err := clientJMAP().Set(ctx, "x:MtaOutboundStrategy/set", jmap.Modification{
+		MettreAJour: map[string]map[string]any{
+			"singleton": {"route": voulue},
 		},
 	}); err != nil {
 		return fmt.Errorf("pointing outgoing mail at route %q: %w", nomRoute, err)

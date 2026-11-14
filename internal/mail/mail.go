@@ -33,12 +33,12 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/ceffio-suite/ceffio/internal/ingress"
-	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"github.com/ceffio-suite/ceffio/internal/vault"
 	"github.com/ceffio-suite/ceffio/internal/version"
@@ -435,12 +435,15 @@ func waitReady(ctx context.Context) error {
 	// kubelet était en train de supprimer. Mesuré en production, au passage à
 	// Stalwart 1.0.3 : « JMAP call x:AllowedIp/get: exit status 7 ».
 	//
-	// `rollout status` attend le NOUVEAU RéplicaSet, celui qui va servir.
-	out, err := k8s.Command(ctx, "kubectl", "-n", ns, "rollout", "status",
-		"deployment/stalwart", "--timeout=240s").CombinedOutput()
+	// Ce qui attend le NOUVEAU RéplicaSet, celui qui va servir, c'est l'état du
+	// déploiement : génération observée à jour, réplicas mis à jour ET
+	// disponibles. La condition est lue par l'API, pas déduite d'une sortie.
+	cli, err := clientK8s()
 	if err != nil {
-		return fmt.Errorf("Stalwart did not become ready within 4 minutes: %w: %s",
-			err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("cluster access: %w", err)
+	}
+	if err := cli.AttendreDeploiement(ctx, ns, "stalwart", 4*time.Minute); err != nil {
+		return fmt.Errorf("Stalwart did not become ready within 4 minutes: %w", err)
 	}
 	fmt.Println("  ✓ Stalwart ready")
 	return nil
@@ -516,8 +519,8 @@ func rendrePortsService(ports []portStalwart) string {
 // THE READ-BACK IS THE POINT OF THIS FUNCTION: the port list is the one place
 // where a wrong value is invisible until a user cannot connect. The check
 // compares the ports in place with the ports wanted, by name and number, and
-// reports the difference rather than assuming that `kubectl apply` did what it
-// was told.
+// reports the difference rather than assuming that the apply did what it was
+// told.
 func applyService(ctx context.Context, cfg Reglages) error {
 	manifest := fmt.Sprintf(`apiVersion: v1
 kind: Service
@@ -602,8 +605,12 @@ func decrirePorts(ports []portStalwart) string {
 // became the single source, a Kubernetes Secret of the same name is no longer
 // read by anyone. Detecting it prevents mistaking it for the source.
 func secretExiste(ctx context.Context, nom string) bool {
-	out, err := k8s.Command(ctx, "kubectl", "get", "secret", nom, "-n", ns).CombinedOutput()
-	return err == nil && strings.Contains(string(out), nom)
+	cli, err := clientK8s()
+	if err != nil {
+		return false
+	}
+	_, err = cli.Kubernetes().CoreV1().Secrets(ns).Get(ctx, nom, metav1.GetOptions{})
+	return err == nil
 }
 
 func createSecret(ctx context.Context, name string, kv map[string]string) error {
@@ -616,11 +623,12 @@ func createSecret(ctx context.Context, name string, kv map[string]string) error 
 }
 
 func apply(ctx context.Context, manifest string) error {
-	cmd := k8s.Command(ctx, "kubectl", "apply", "-f", "-")
-	cmd.Stdin = strings.NewReader(manifest)
-	out, err := cmd.CombinedOutput()
+	cli, err := clientK8s()
 	if err != nil {
-		return fmt.Errorf("kubectl apply: %w: %s", err, tronquer(string(out), 300))
+		return fmt.Errorf("cluster access: %w", err)
+	}
+	if err := cli.Appliquer(ctx, manifest); err != nil {
+		return fmt.Errorf("applying the manifest: %w", err)
 	}
 	return nil
 }
