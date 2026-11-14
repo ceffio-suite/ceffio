@@ -55,10 +55,18 @@ var routesAutorisees = map[string]string{
 	"/api/modules/{id}/settings":         "GENERIC settings read",
 	"/api/modules/{id}/settings/{group}": "GENERIC settings save",
 	"/api/modules/{id}/settings/{group}/test": "GENERIC settings check",
-	"/api/admin":        "administration account",
-	"/api/admin/rotate": "password rotation",
-	"/api/certificates": "certificates, read-only",
-	"/api/monitoring":   "the machine: node consumption, volumes, storage",
+	// WHY THIS ROUTE IS ALLOWED. The checks measure prerequisites OUTSIDE the
+	// cluster (a DNS record, a port, a reverse zone), so they cannot live in
+	// the module view every other route publishes: each can wait seconds, and
+	// /api/modules is polled every three seconds. The route is generic — it
+	// takes the id from the path, asks the module, and knows no name — and the
+	// page asks for it only when the module view says `checkable`, so no
+	// module-specific URL appears in the page.
+	"/api/modules/{id}/checks": "the prerequisite checks a module declares",
+	"/api/admin":               "administration account",
+	"/api/admin/rotate":        "password rotation",
+	"/api/certificates":        "certificates, read-only",
+	"/api/monitoring":          "the machine: node consumption, volumes, storage",
 }
 
 // routesEnregistrees reads the routes the console declares.
