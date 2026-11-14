@@ -14,12 +14,17 @@
 //     keycloak, nextcloud. This is the heart of the platform: identities,
 //     accounts, file metadata, conversations.
 //  2. The volumes (tar) — nextcloud-data (users' actual files),
-//     onlyoffice-data. A SQL dump is not enough:
-//     documents and attachments live on disk.
+//     onlyoffice-data, stalwart-data (the mail server's RocksDB store and
+//     blobs). A SQL dump is not enough: documents, attachments and messages
+//     live on disk.
 //  3. The application Secrets — without them, a restore leaves orphaned
 //     data: the database passwords no longer match, the Matrix and
 //     ONLYOFFICE signing keys no longer agree.
-//  4. A manifest — versions, SHA-256 fingerprints and size of each item,
+//  4. The vault's key-value tree — the platform's non-regenerable
+//     credentials (OIDC secrets, relay credentials, DKIM keys). Backing up
+//     workloads without it restores an installation that starts and whose
+//     integrations fail, with no error naming the vault.
+//  5. A manifest — versions, SHA-256 fingerprints and size of each item,
 //     so we can say "the archive is complete" at restore time.
 //
 // Data is extracted via kubectl exec then streamed back: nothing is written
@@ -32,6 +37,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -50,11 +56,22 @@ var Bases = []string{"mysuite", "keycloak", "nextcloud"}
 
 // Volumes to back up: namespace, PVC name, and the useful subpath (some
 // volumes hold, alongside the data, state of no interest).
+//
+// WHY stalwart-data DECLARES StopWorkload AND THE OTHERS DO NOT. Nextcloud and
+// ONLYOFFICE keep file trees: copying them while the application runs is
+// imperfect but the result is a coherent-enough archive, and stopping the
+// application would be a bigger risk than the one it removes. Stalwart keeps a
+// RocksDB store and a local blob store: a copy taken while it runs is not a
+// backup, it is a file of unknown validity — tar exits 0 and the store does not
+// open. Measured in POC K of docs/plan-mail.md, hence the stop/copy/restart
+// sequence implemented in arret.go.
 var Volumes = []Volume{
 	{Namespace: "ceffio-files", PVC: "nextcloud-data", PodLabel: "app=nextcloud",
 		Path: "/var/www/html/data", UID: 33, GID: 33}, // www-data
 	{Namespace: "ceffio-office", PVC: "onlyoffice-data", PodLabel: "app=onlyoffice",
 		Path: "/var/lib/onlyoffice", UID: 0, GID: 0},
+	{Namespace: "ceffio-mail", PVC: "stalwart-data", PodLabel: "app=stalwart",
+		Path: "/var/lib/stalwart", UID: 2000, GID: 2000, StopWorkload: "stalwart"},
 }
 
 // Application Secrets: without them, the restored data is orphaned.
@@ -84,6 +101,12 @@ var Secrets = []struct{ Name, Namespace string }{
 	{"onlyoffice-secret", "ceffio-office"},
 	// admin console
 	{"ceffio-console-key", "ceffio-system"},
+	// vault: the token that re-reads the backed-up tree after a restore, and
+	// the unseal key the vault needs to start. Both are SECRETS ALREADY ON THE
+	// MACHINE — what stays excluded is the recovery keys, which are not on the
+	// machine and are the only way back in if the vault is lost (docs/secrets.md).
+	{"openbao-token", "ceffio-vault"},
+	{"openbao-unseal-key", "ceffio-vault"},
 	// module settings, when no vault is configured: one Secret per module
 	// (`ceffio-settings-<module>`), holding the groups with secret fields.
 	// Enumerated at backup time rather than listed here — the modules are a
@@ -110,6 +133,10 @@ type Volume struct {
 	// loses write access (real case: Nextcloud 503ing after a restore).
 	UID int `json:"uid"`
 	GID int `json:"gid"`
+	// Deployment to stop while this volume is copied, empty when a live copy
+	// is acceptable. See the comment on Volumes for why the mail server needs
+	// it and the others do not.
+	StopWorkload string `json:"-"`
 }
 
 // Entry describes one backed-up item: this is what lets us verify the
@@ -193,16 +220,11 @@ func Sauvegarder(ctx context.Context, dir string, progress func(string)) (string
 	// 2. Volumes.
 	for _, v := range Volumes {
 		progress("volume " + v.PVC)
-		podName := podFor(ctx, v.Namespace, v.PodLabel)
-		if podName == "" {
-			man.Errors = append(man.Errors, fmt.Sprintf("volume %s : no pod %s in %s", v.PVC, v.PodLabel, v.Namespace))
-			continue
-		}
 		rel := filepath.Join("volumes", v.PVC+".tar.gz")
 		dst := filepath.Join(work, rel)
 		os.MkdirAll(filepath.Dir(dst), 0o700)
 
-		if err := tarVolume(ctx, v.Namespace, podName, v.Path, dst); err != nil {
+		if err := sauvegarderVolume(ctx, v, dst, progress); err != nil {
 			man.Errors = append(man.Errors, fmt.Sprintf("volume %s : %v", v.PVC, err))
 			continue
 		}
@@ -239,6 +261,23 @@ func Sauvegarder(ctx context.Context, dir string, progress func(string)) (string
 	} else {
 		e := Entry{Kind: "configmap", Name: "ceffio-settings", File: settingsRel}
 		e.Bytes, e.SHA256, _ = empreinte(filepath.Join(work, settingsRel))
+		man.Entries = append(man.Entries, e)
+	}
+
+	// 5. The vault's key-value tree.
+	//
+	// A vault that is not deployed is not a failure: an installation may not
+	// have one. A vault that IS deployed but does not answer is a failure, and
+	// it is reported as such — the operator asked for a complete backup.
+	progress("vault entries")
+	vaultRel := filepath.Join("vault", "kv-ceffio.json")
+	if err := dumpCoffre(ctx, filepath.Join(work, vaultRel)); err != nil {
+		if !errors.Is(err, errCoffreAbsent) {
+			man.Errors = append(man.Errors, "vault : "+err.Error())
+		}
+	} else {
+		e := Entry{Kind: "vault", Name: "kv-ceffio", File: vaultRel}
+		e.Bytes, e.SHA256, _ = empreinte(filepath.Join(work, vaultRel))
 		man.Entries = append(man.Entries, e)
 	}
 
@@ -358,15 +397,15 @@ func tarVolume(ctx context.Context, ns, pod, path, dst string) error {
 	defer f.Close()
 	// tar -czf -: we write to the container's standard output, streamed back
 	// as-is. The path is checked beforehand: no risk of writing to the node.
-	cmd := k8s.Command(ctx, "kubectl", "exec", "-n", ns, pod, "--",
-		"sh", "-c", "tar czf - -C "+path+" .")
-	cmd.Stdout = f
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	//
+	// The command goes through executerKubectl (the package's seam) rather than
+	// k8s.Command directly: the same function then serves the live volumes and
+	// the stopped mail volume, and the mail path is testable without a cluster.
+	if err := executerKubectl(ctx, nil, f, "exec", "-n", ns, pod, "--",
+		"sh", "-c", "tar czf - -C "+path+" ."); err != nil {
 		f.Close()
 		os.Remove(dst)
-		return fmt.Errorf("tar : %w : %s", err, oneLine(stderr.String()))
+		return fmt.Errorf("tar : %w", err)
 	}
 	if fi, _ := f.Stat(); fi != nil && fi.Size() < 32 {
 		return fmt.Errorf("empty archive (path %s missing in the pod?)", path)
