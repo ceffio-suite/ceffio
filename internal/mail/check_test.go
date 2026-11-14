@@ -1058,7 +1058,9 @@ func jmapEntrant(t *testing.T, expediteur, entetes string) {
 		"x:Domain/get": map[string]any{
 			"list": []any{map[string]any{"id": "d1", "name": "ceffio.org"}},
 		},
-		"x:Mailbox/get": map[string]any{
+		// MAILBOX DATA IS STANDARD JMAP, unlike the `x:` management calls above:
+		// Stalwart 1.0.3 answers `x:Mailbox/get` with `unknownMethod`.
+		"Mailbox/get": map[string]any{
 			"list": []any{map[string]any{"id": "m1", "name": "INBOX", "role": "inbox"}},
 		},
 		"Email/query": map[string]any{"ids": []any{"e1"}},

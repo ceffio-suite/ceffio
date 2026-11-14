@@ -151,23 +151,26 @@ func ecrireSmtpServerKeycloak(ctx context.Context, charge map[string]string) err
 
 // lireSmtpServerKeycloak reads the realm's SMTP settings back.
 //
-// THE WHOLE REALM IS READ, WITHOUT `--fields`. Keycloak 26.8 answers
-// `?fields=smtpServer` with `{"smtpServer": {}}`: the server-side field filter
-// empties the map it just selected, so the read-back compared "no sender" against a
-// realm that had one and every install reported a mismatch it had itself invented.
-// Measured on the live demo, 2026-11-14: the same realm answers `--fields
-// smtpServer` with `{}` and the plain document with all nine values.
+// THE FIELD FILTER NEEDS THE BRACKETS: `--fields "smtpServer(*)"`. Keycloak 26.8
+// answers `--fields smtpServer` with `{"smtpServer": {}}` — the server-side filter
+// empties the object it just selected — while the same realm answers the bracketed
+// form with all nine values. The rule is documented by kcadm itself ("if attribute
+// of object type is included, but its children are not specified by using brackets,
+// then an empty object will be returned") and was measured on the live demo,
+// 2026-11-14, after the bare filter had made every install report a mismatch it had
+// invented.
 //
-// THE FULL DOCUMENT IS SMALL AND CARRIES NO SECRETS: 5 877 bytes on the demo, zero
-// `secret` keys, zero `clientId` entries — the realm representation does not expand
-// its clients. The only credential in it is `smtpServer.password`, which Keycloak
-// masks as `**********`.
+// THE NARROW DOCUMENT IS WHAT MAKES THIS COMPARABLE: the previous version read the
+// whole realm to work around the empty map, which worked but dragged 5 877 bytes of
+// unrelated settings into an SMTP read-back. The bracketed filter asks for the one
+// map this package owns.
 //
 // A REALM WITH NO SETTINGS ANSWERS `{}` (the field is absent), which decodes to an
 // empty map — the same value as an emptied one. Both mean "no sender", which is
 // exactly the comparison the caller needs.
 func lireSmtpServerKeycloak(ctx context.Context) (map[string]string, error) {
-	out, err := executerKcadm(ctx, nsIdentity, "", `/opt/keycloak/bin/kcadm.sh get realms/`+identity.RealmCeffio)
+	out, err := executerKcadm(ctx, nsIdentity, "", `/opt/keycloak/bin/kcadm.sh get realms/`+
+		identity.RealmCeffio+` --fields "smtpServer(*)"`)
 	if err != nil {
 		return nil, err
 	}

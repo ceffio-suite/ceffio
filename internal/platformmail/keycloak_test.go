@@ -168,11 +168,12 @@ func TestKeycloakWriterKeepsThePasswordOffTheCommandLine(t *testing.T) {
 	}
 }
 
-// TestKeycloakReadBackReadsTheWholeRealm : `--fields smtpServer` makes Keycloak
-// 26.8 answer `{"smtpServer": {}}`, which reads as "no sender" on a configured
-// realm and turns every install into a mismatch. The read-back asks for the whole
-// document, which is small and carries no client secrets.
-func TestKeycloakReadBackReadsTheWholeRealm(t *testing.T) {
+// TestKeycloakReadBackRequestsTheNestedMap : the read-back asks for the SMTP map
+// WITH ITS CHILDREN. `--fields smtpServer` makes Keycloak 26.8 answer
+// `{"smtpServer": {}}`, which reads as "no sender" on a configured realm and turns
+// every install into a mismatch; the bracketed form is the documented way to ask
+// for an object's fields.
+func TestKeycloakReadBackRequestsTheNestedMap(t *testing.T) {
 	faux := &kcadmFaux{realm: map[string]string{"host": "mail.example.com"}}
 	kcadmSilencieux(t, faux)
 
@@ -182,10 +183,10 @@ func TestKeycloakReadBackReadsTheWholeRealm(t *testing.T) {
 	if len(faux.cmds) != 1 {
 		t.Fatalf("kcadm was invoked %d time(s); want once", len(faux.cmds))
 	}
-	if strings.Contains(faux.cmds[0], "--fields") {
-		t.Fatalf("the read-back filters the realm: %s\nKeycloak 26.8 answers "+
-			"{\"smtpServer\": {}} for --fields smtpServer, so a configured realm "+
-			"would be reported as having no sender", faux.cmds[0])
+	if !strings.Contains(faux.cmds[0], `--fields "smtpServer(*)"`) {
+		t.Fatalf("the read-back does not ask for the nested map: %s\nKeycloak 26.8 "+
+			"answers {\"smtpServer\": {}} for a bare --fields smtpServer, so a "+
+			"configured realm would be reported as having no sender", faux.cmds[0])
 	}
 }
 

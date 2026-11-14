@@ -152,13 +152,26 @@ func occDansPod(ctx context.Context, entree, script string) (string, error) {
 // account with no attributes. The pages are read until a short one, because
 // Keycloak caps a response at 100 users by default and a directory that grew
 // past it would silently lose accounts from the list.
+//
+// PAGINATION IS `--offset`, NOT `--first`: Keycloak 26.8 removed the old name and
+// kcadm exits 2 with `Unknown options: '--first', '0'` — which `ceffio users list`
+// turned into an authentication-shaped failure on the live demo (2026-11-14), on a
+// realm whose credentials were fine. `kcadm get --help` documents the surviving
+// pair ("kcadm.sh get users -r demorealm --offset 0 --limit 100").
+//
+// `attributes(*)` IS NOT OPTIONAL EITHER. kcadm's field filter returns an EMPTY
+// object for a map-valued field whose children are not requested — the documented
+// rule reads "if attribute of object type is included, but its children are not
+// specified by using brackets, then an empty object will be returned". Measured on
+// the same realm: `--fields attributes` answers `"attributes": {}`, the bracketed
+// form answers the map. The modules' markers (`ceffio_kind`) live there.
 func listerComptesKeycloak(ctx context.Context) ([]comptePlateforme, error) {
 	const page = 100
 	var comptes []comptePlateforme
-	for premier := 0; ; premier += page {
+	for decalage := 0; ; decalage += page {
 		sortie, err := executerKcadm(ctx, "", fmt.Sprintf(
-			"%s get users -r %s -q briefRepresentation=false --fields id,username,email,enabled,attributes --first %d --limit %d",
-			kcadmBin, realmCeffio, premier, page))
+			"%s get users -r %s -q briefRepresentation=false --fields id,username,email,enabled,attributes(*) --offset %d --limit %d",
+			kcadmBin, realmCeffio, decalage, page))
 		if err != nil {
 			return nil, fmt.Errorf("listing the platform accounts: %w", err)
 		}
@@ -172,8 +185,8 @@ func listerComptesKeycloak(ctx context.Context) ([]comptePlateforme, error) {
 		if len(bruts) < page {
 			return comptes, nil
 		}
-		if premier >= page*100 {
-			return nil, fmt.Errorf("the directory returned more than %d accounts: refusing to list a truncated page", premier+page)
+		if decalage >= page*100 {
+			return nil, fmt.Errorf("the directory returned more than %d accounts: refusing to list a truncated page", decalage+page)
 		}
 	}
 }
@@ -183,7 +196,7 @@ func listerComptesKeycloak(ctx context.Context) ([]comptePlateforme, error) {
 func trouverCompteKeycloak(ctx context.Context, nom string) (comptePlateforme, bool, error) {
 	sortie, err := executerKcadm(ctx, "", kcadmBin+" get users -r "+realmCeffio+
 		" -q briefRepresentation=false -q username="+entreGuillemets(nom)+" -q exact=true"+
-		" --fields id,username,email,enabled,attributes")
+		" --fields id,username,email,enabled,attributes(*)")
 	if err != nil {
 		return comptePlateforme{}, false, fmt.Errorf("looking up %q in Keycloak: %w", nom, err)
 	}

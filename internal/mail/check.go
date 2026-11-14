@@ -1529,8 +1529,16 @@ func dernierMessageExterne(ctx context.Context, compte, domaine string) (map[str
 }
 
 // boitesEntrantes lists the mailboxes a delivered message can land in.
+//
+// THE METHOD IS `Mailbox/get`, NOT `x:Mailbox/get`. The `x:` namespace is
+// Stalwart's MANAGEMENT API (accounts, domains, directories); mailbox and message
+// data follow the standard JMAP names (RFC 8621). Reading mail through the
+// management prefix looks right — the neighbouring calls all carry `x:` — and
+// answers `{"type":"unknownMethod","description":"x:Mailbox/get"}` on Stalwart
+// 1.0.3, which is exactly what the live demo returned on 2026-11-14 when the
+// end-to-end inbound check ran for the first time.
 func boitesEntrantes(ctx context.Context, compte string) ([]string, error) {
-	corps, err := appelServeurJMAP(ctx, "x:Mailbox/get", map[string]any{
+	corps, err := appelServeurJMAP(ctx, "Mailbox/get", map[string]any{
 		"accountId":  compte,
 		"ids":        nil,
 		"properties": []string{"id", "name", "role"},

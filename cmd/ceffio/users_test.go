@@ -1084,3 +1084,59 @@ func TestEcrireCompteKeycloakSansRienAFaireNInterrogeRien(t *testing.T) {
 		t.Fatalf("an empty result is a no-op, got: %v", err)
 	}
 }
+
+// TestListerComptesKeycloakPagineEtLitLesAttributs : the two Keycloak 26.8 traps,
+// both measured on the live demo (2026-11-14) and both INVISIBLE in the answer.
+//
+// `--first` is refused by kcadm ("Unknown options: '--first', '0'", exit 2), so
+// `ceffio users list` failed on a realm whose credentials were perfectly fine.
+// A bare `--fields attributes` returns an EMPTY map even when the account has
+// attributes — the documented filter rule returns an empty object for a map whose
+// children are not requested with brackets — so the module markers
+// (`ceffio_kind`) would vanish from accounts that carry them and a marked account
+// would be read as external.
+func TestListerComptesKeycloakPagineEtLitLesAttributs(t *testing.T) {
+	var commandes []string
+	ancien := executerKcadm
+	t.Cleanup(func() { executerKcadm = ancien })
+	executerKcadm = func(_ context.Context, _ string, commande string) (string, error) {
+		commandes = append(commandes, commande)
+		if strings.Contains(commande, "--offset 0") {
+			// A FULL PAGE forces the second call: Keycloak caps an answer at 100.
+			page := make([]string, 0, 100)
+			for i := 0; i < 100; i++ {
+				page = append(page, fmt.Sprintf(
+					`{"id":"id-%d","username":"user-%d","enabled":true}`, i, i))
+			}
+			return "[" + strings.Join(page, ",") + "]", nil
+		}
+		return `[{"id":"id-marque","username":"alice","enabled":true,` +
+			`"attributes":{"ceffio_kind":["internal"]}}]`, nil
+	}
+
+	comptes, err := listerComptesKeycloak(context.Background())
+	if err != nil {
+		t.Fatalf("listerComptesKeycloak: %v", err)
+	}
+	if len(comptes) != 101 {
+		t.Fatalf("listed %d accounts, want 101 (the full page and the short one)", len(comptes))
+	}
+	if len(commandes) != 2 {
+		t.Fatalf("kcadm was invoked %d time(s), want 2 (one full page, one short)", len(commandes))
+	}
+	for i, commande := range commandes {
+		if strings.Contains(commande, "--first") {
+			t.Fatalf("call %d still passes --first, which kcadm 26.8 refuses: %s", i, commande)
+		}
+		if !strings.Contains(commande, "attributes(*)") {
+			t.Fatalf("call %d filters the attributes without their children, "+
+				"which Keycloak answers with an empty map: %s", i, commande)
+		}
+	}
+	if !strings.Contains(commandes[1], "--offset 100") {
+		t.Fatalf("the second page does not start at 100: %s", commandes[1])
+	}
+	if got := comptes[100].Attributes["ceffio_kind"]; got != "internal" {
+		t.Fatalf("the module marker was not read: %q", got)
+	}
+}
