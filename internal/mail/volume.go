@@ -62,8 +62,8 @@ var clientK8s = k8sapi.Nouveau
 // appliquerVolume is the write path, isolated for the same reason.
 //
 // IT APPLIES A MANIFEST rather than patching the object through the typed
-// client, because `kubectl apply` is what every other component of this package
-// uses: a second write path would be a second way to get the same object wrong
+// client, because `apply` is what every other component of this package uses:
+// a second write path would be a second way to get the same object wrong
 // (server-side defaults, last-applied annotation, and so on).
 var appliquerVolume = func(ctx context.Context, manifeste string) error {
 	return apply(ctx, manifeste)
