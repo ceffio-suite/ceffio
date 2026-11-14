@@ -56,6 +56,12 @@ type fauxNoreply struct {
 	prochainMotDePasse   int
 	dernierSecret        string
 	mentirSurDestruction bool
+
+	// destruction governs a `destroy` of an ACCOUNT (not of an app password):
+	// "" or "ok" removes it and answers `destroyed`; "mente" removes it and
+	// answers `notDestroyed:notFound` (the 1.0.3 quirk of §9.H); "refusee"
+	// keeps it and answers `notDestroyed:forbidden`.
+	destruction string
 }
 
 func nouveauFauxNoreply() *fauxNoreply {
@@ -199,6 +205,27 @@ func (f *fauxNoreply) listerComptes(args map[string]any) []any {
 	return liste
 }
 
+// ecrireChamp writes one field of an account, honouring the POINTER KEYS the
+// server accepts for nested objects: `"aliases/3"` writes index 3 of the alias
+// table and leaves the others alone (§9.F). Storing it as a flat key would make
+// the read-back show no alias at all, and the code under test would look
+// idempotent for the wrong reason.
+func (f *fauxNoreply) ecrireChamp(compte map[string]any, cle string, valeur any) {
+	if index, ok := strings.CutPrefix(cle, "aliases/"); ok {
+		aliases, _ := compte["aliases"].(map[string]any)
+		if aliases == nil {
+			aliases = map[string]any{}
+			compte["aliases"] = aliases
+		}
+		// THE @type IS DROPPED, like the real server does on read-back.
+		champs, _ := valeur.(map[string]any)
+		propre := map[string]any{"name": champs["name"], "domainId": champs["domainId"], "enable": true}
+		aliases[index] = propre
+		return
+	}
+	compte[cle] = valeur
+}
+
 // modifierComptes applies a create and/or update, deriving the read-only fields
 // after each write so a repair of `domainId` is observable through the address.
 func (f *fauxNoreply) modifierComptes(args map[string]any) (string, map[string]any) {
@@ -227,12 +254,46 @@ func (f *fauxNoreply) modifierComptes(args map[string]any) (string, map[string]a
 			}
 			champs, _ := brut.(map[string]any)
 			for cle, valeur := range champs {
-				compte[cle] = valeur
+				f.ecrireChamp(compte, cle, valeur)
 			}
 			f.completer(compte)
 			modifies[id] = nil
 		}
 		reponse["updated"] = modifies
+	}
+	if bruts, ok := args["destroy"].([]any); ok && len(bruts) > 0 {
+		detruits := map[string]any{}
+		notDetruits := map[string]any{}
+		for _, brut := range bruts {
+			id, ok := brut.(string)
+			if !ok {
+				continue
+			}
+			if _, present := f.comptes[id]; !present {
+				// AN ALREADY ABSENT OBJECT IS `notFound`, like the server: the
+				// deletion that a retry asks for has nothing left to do.
+				notDetruits[id] = map[string]any{"type": "notFound"}
+				continue
+			}
+			if f.destruction == "refusee" {
+				notDetruits[id] = map[string]any{"type": "forbidden"}
+				continue
+			}
+			delete(f.comptes, id)
+			delete(f.motsDePasse, id)
+			f.operations = append(f.operations, "detruire-compte:"+id)
+			if f.destruction == "mente" {
+				notDetruits[id] = map[string]any{"type": "notFound"}
+				continue
+			}
+			detruits[id] = nil
+		}
+		if len(detruits) > 0 {
+			reponse["destroyed"] = detruits
+		}
+		if len(notDetruits) > 0 {
+			reponse["notDestroyed"] = notDetruits
+		}
 	}
 	return "x:Account/set", reponse
 }
@@ -355,9 +416,10 @@ func (f *fauxNoreply) motDePasseDe(idCompte string) []fauxMotDePasse {
 // fauxCoffre is the vault: an in-memory map behind the two seams, so a test
 // never reaches OpenBao.
 type fauxCoffre struct {
-	entrees   map[string]map[string]string // "composant/nom" → entry
-	lectures  int
-	ecritures int
+	entrees      map[string]map[string]string // "composant/nom" → entry
+	lectures     int
+	ecritures    int
+	suppressions int
 }
 
 func nouveauFauxCoffre() *fauxCoffre {
@@ -378,6 +440,15 @@ func (f *fauxCoffre) lire(_ context.Context, _ *secrets.Coffre, composant, nom s
 func (f *fauxCoffre) ecrire(_ context.Context, _ *secrets.Coffre, composant, nom string, donnees map[string]string) error {
 	f.ecritures++
 	f.entrees[composant+"/"+nom] = copierEntree(donnees)
+	return nil
+}
+
+// supprimer stands in for the DELETE call, and FOLLOWS THE REAL CONTRACT: an
+// absent entry is a success (the goal is "no credential left"), which is what
+// lets a retried deletion converge instead of failing on its second run.
+func (f *fauxCoffre) supprimer(_ context.Context, _ *secrets.Coffre, composant, nom string) error {
+	f.suppressions++
+	delete(f.entrees, composant+"/"+nom)
 	return nil
 }
 
@@ -431,6 +502,7 @@ func installer(t *testing.T) *banc {
 	remplacer(t, &transportJMAP, b.serveur.transport)
 	remplacer(t, &lireEntreeCoffre, b.coffre.lire)
 	remplacer(t, &ecrireDansCoffre, b.coffre.ecrire)
+	remplacer(t, &supprimerEntreeCoffre, b.coffre.supprimer)
 	remplacer(t, &verifierSoumission, b.smtp.verifier)
 	return b
 }
