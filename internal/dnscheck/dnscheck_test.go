@@ -6,6 +6,7 @@ package dnscheck
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
 	"testing"
@@ -494,4 +495,32 @@ func TestNouveauConstruitUnClientUtilisable(t *testing.T) {
 	// to Resolveur that this test does not implement would fail to compile,
 	// which is the point of declaring it here.
 	var _ Resolveur = &fauxResolveur{}
+}
+
+// TestEstAbsentDistingueLeManqueDeLEchec : "the zone publishes nothing" and
+// "the resolver could not answer" lead to different checks, so the helper that
+// separates them is pinned on the exact errors Go produces.
+//
+// WHY IT MATTERS: a domain without an MX record comes back as `no such host`
+// with IsNotFound set — the same answer as a domain that does not exist. Without
+// this distinction every missing record was reported as an unreadable lookup,
+// telling the operator to look at the network instead of at their zone.
+func TestEstAbsentDistingueLeManqueDeLEchec(t *testing.T) {
+	cas := []struct {
+		nom    string
+		err    error
+		absent bool
+	}{
+		{"nom ou enregistrement inexistant", &net.DNSError{Err: "no such host", Name: "example.com", IsNotFound: true}, true},
+		{"délai dépassé", &net.DNSError{Err: "i/o timeout", Name: "example.com", IsTimeout: true}, false},
+		{"serveur injoignable", &net.DNSError{Err: "server misbehaving", Name: "example.com", IsTemporary: true}, false},
+		{"erreur enveloppée", fmt.Errorf("lookup: %w", &net.DNSError{Err: "no such host", IsNotFound: true}), true},
+		{"erreur quelconque", errors.New("boom"), false},
+		{"aucune erreur", nil, false},
+	}
+	for _, c := range cas {
+		if got := EstAbsent(c.err); got != c.absent {
+			t.Errorf("%s: EstAbsent = %v, want %v", c.nom, got, c.absent)
+		}
+	}
 }

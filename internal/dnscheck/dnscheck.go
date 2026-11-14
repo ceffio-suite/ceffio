@@ -20,6 +20,7 @@ package dnscheck
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -324,6 +325,24 @@ func (c *Client) FCrDNS(ctx context.Context, hote, ip string) ([]string, bool, e
 		return ptrs, contient(addrs, ip), nil
 	}
 	return ptrs, false, nil
+}
+
+// EstAbsent reports whether err says the name or the record asked for does not
+// exist, as opposed to the resolver being unable to answer.
+//
+// THE DISTINCTION IS THE WHOLE POINT OF THE CHECKS: "the zone publishes no
+// answer" is a finding for the operator (a missing record, a fix to write),
+// while "the resolver did not answer" is a failure of the verification itself
+// (a timeout, a broken network) and must not be presented as a missing record.
+// Go reports the first case as a *net.DNSError with IsNotFound set — including
+// for a name that exists but has no record of the type queried, which is how a
+// domain without MX comes back as `no such host`.
+func EstAbsent(err error) bool {
+	var dnsErr *net.DNSError
+	if !errors.As(err, &dnsErr) {
+		return false
+	}
+	return dnsErr.IsNotFound
 }
 
 // borne applies the client's bound on top of the caller's context.
