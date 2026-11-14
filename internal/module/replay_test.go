@@ -49,10 +49,31 @@ func TestUnModuleInstalleEstRejoue(t *testing.T) {
 	}
 }
 
+// TestUnModuleDegradeEstRejoue: a module whose workload is ready but whose
+// configuration is incomplete — the mail server before its DNS records exist —
+// must still follow the binary on an upgrade.
+//
+// WHY: its Deployment is what carries the image. Refusing to replay it would
+// freeze the image for a defect an upgrade cannot fix, and the drift would
+// only disappear on the day the operator happened to reinstall.
+func TestUnModuleDegradeEstRejoue(t *testing.T) {
+	rec := &moduleRejoue{info: Info{ID: "mail", Kind: Optional}, etat: State{Status: Degraded,
+		Detail: "the MX record is missing"}}
+	if err := RejouerInstalles(context.Background(), []Module{rec}, Env{Out: io.Discard}, nil); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if !rec.installé {
+		t.Error("a degraded optional module must be replayed")
+	}
+	if len(rec.vus) != 1 || rec.vus[0] != "mail" {
+		t.Errorf("ModuleID = %v, expected the module's own id", rec.vus)
+	}
+}
+
 // TestUnModuleAbsentNEstPasInstalle: replaying must never INSTALL something the
 // operator did not ask for — an upgrade is not an installation.
 func TestUnModuleAbsentNEstPasInstalle(t *testing.T) {
-	for _, etat := range []State{{Status: Absent}, {Status: Degraded}, {Status: Installing}, {Status: Unknown}} {
+	for _, etat := range []State{{Status: Absent}, {Status: Installing}, {Status: Unknown}} {
 		rec := &moduleRejoue{info: Info{ID: "capture", Kind: Optional}, etat: etat}
 		if err := RejouerInstalles(context.Background(), []Module{rec}, Env{Out: io.Discard}, nil); err != nil {
 			t.Fatalf("replay: %v", err)

@@ -20,12 +20,12 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/files"
 	"github.com/ceffio-suite/ceffio/internal/identity"
 	"github.com/ceffio-suite/ceffio/internal/ingress"
-	"github.com/ceffio-suite/ceffio/internal/mail"
 	"github.com/ceffio-suite/ceffio/internal/module"
 	"github.com/ceffio-suite/ceffio/internal/office"
 	"github.com/ceffio-suite/ceffio/internal/platform"
 	"github.com/ceffio-suite/ceffio/internal/publicip"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
+	"github.com/ceffio-suite/ceffio/internal/settings"
 	"github.com/ceffio-suite/ceffio/internal/sso"
 	"github.com/ceffio-suite/ceffio/internal/stacks"
 	"github.com/ceffio-suite/ceffio/internal/storage"
@@ -96,20 +96,23 @@ Examples:
 	f.StringVar(&o.runtime, "runtime", "k3s", "Kubernetes runtime (k3s, rke2)")
 	f.BoolVar(&o.existingCluster, "existing-cluster", false, "Use an existing Kubernetes cluster")
 
-	// DEPRECATED, HIDDEN, AND WITHOUT EFFECT — the three flags below never did
-	// anything. `mail` and `office` are Core modules, deployed by the install
-	// sequence unconditionally; no supervision exists to enable. They only
-	// reached the summary, where "Mail: no" was printed by default while
-	// Stalwart was being installed, which is worse than saying nothing.
+	// DEPRECATED, HIDDEN, AND WITHOUT EFFECT — the two flags below never did
+	// anything: `office` and `monitoring` are Core modules, deployed by the
+	// install sequence unconditionally; no supervision exists to enable. They
+	// only reached the summary, where "Office: yes" was printed from a flag
+	// while the actual state came from elsewhere.
 	//
 	// They are KEPT for one minor release, hidden, because a deployment script
 	// written against the previous version would otherwise fail on an unknown
 	// flag. They accept the same values and do the same thing as before —
 	// nothing — and say so once.
-	f.Bool("mail", false, "")
+	//
+	// `--mail` IS GONE, and it is the one that mattered: mail is now an ordinary
+	// optional module, so its selection is `--with mail` / `--without mail`, and
+	// keeping a second, inert `--mail` flag next to a real selection would be
+	// two spellings of different things.
 	f.Bool("office", true, "")
 	f.Bool("monitoring", true, "")
-	_ = f.MarkHidden("mail")
 	_ = f.MarkHidden("office")
 	_ = f.MarkHidden("monitoring")
 	// Live transcription in Talk. DEPRECATED: superseded by
@@ -153,11 +156,11 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 			"use --with live-transcription instead; it will be removed in two minor versions")
 	}
 
-	// The three hidden flags say once that they do nothing. SILENT ACCEPTANCE
-	// would be the worse choice: an operator passing --mail=false believes they
-	// are turning the mail layer off, and it is deployed anyway. Naming the
+	// The two hidden flags say once that they do nothing. SILENT ACCEPTANCE
+	// would be the worse choice: an operator passing --office=false believes
+	// they are switching something off, and it is deployed anyway. Naming the
 	// truth costs one line and prevents a false belief about what is running.
-	for _, f := range []string{"mail", "office", "monitoring"} {
+	for _, f := range []string{"office", "monitoring"} {
 		if cmd.Flags().Changed(f) {
 			fmt.Fprintf(os.Stderr, "warning: --%s never had any effect and will be removed "+
 				"in v0.9; use --with/--without for optional modules\n", f)
@@ -208,7 +211,7 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 	// DNS while watching a stopped installer has no reason to be stopped. The
 	// warning is printed, the deployment continues, and the failure — if it
 	// comes — arrives with the list already on screen.
-	if err := verifierPrerequis(ctx, o, hw); err != nil {
+	if err := verifierPrerequis(ctx, o, hw, modulesOptionnels); err != nil {
 		return err
 	}
 
@@ -469,43 +472,32 @@ func runInstall(cmd *cobra.Command, o *installOptions) error {
 		return err
 	}
 
-	// 12bis. Mail (Phase 13): Stalwart. Nextcloud provides the interface
-	// (Mail app) but not the mail server. The outbound relay is INDISPENSABLE
-	// here: outbound port 25 is blocked by the ISP (verified), so Stalwart
-	// cannot deliver to Gmail by itself.
+	// 12bis. THE OUTBOUND RELAY, STORED BEFORE THE OPTIONAL PHASE.
 	//
-	// THE RELAY FLAGS NOW WRITE THE MODULE'S SETTINGS instead of being passed
+	// Mail itself is now an optional module, installed with the others below
+	// (internal/modules/mail): its deployment and its SSO configuration moved
+	// into Install, where the registry can carry them. What stays here is the
+	// one thing that must happen BEFORE it: the relay given on the command line
+	// is a SETTING, and mail.Deploy reads the stored settings. Writing them
+	// after the module was installed would apply the server with a direct send
+	// mode and then switch it — an outage in the middle of a fresh install.
+	//
+	// The flags therefore write the module's settings rather than being passed
 	// through: a value typed at installation must land in the store the page
 	// and `ceffio module config` read, or an installation could hold a relay
 	// that no page shows and that a later save silently overwrites.
-	if err := mail.Deploy(ctx, o.domain); err != nil {
-		return err
-	}
 	if o.relaisSmtpHote != "" {
 		if err := enregistrerRelaisInitial(ctx, o.domain, o.relaisSmtpHote,
 			o.relaisSmtpPort, o.relaisSmtpUser, o.relaisSmtpPass); err != nil {
 			return err
 		}
-	}
-
-	// 12ter. Stalwart single sign-on. The mail server has its own
-	// administration interface, and it must delegate to Keycloak like the
-	// rest of the platform. This block replays exactly the configuration that
-	// was established by hand: each line corresponds to a real blocker,
-	// notably the four role tables of the Authentication object, without
-	// which an otherwise successful login ends in a "403".
-	//
-	// The domain of the ADDRESSES is the platform domain, not the web host
-	// "mail.<domain>": those are two distinct things, and confusing them
-	// would put the MX records in the wrong place.
-	if err := mail.ConfigurerSSO(ctx, o.domain, mail.SSO{
-		Hote:         mail.DomaineMessagerie(o.domain),
-		Issuer:       "https://keycloak." + o.domain + "/realms/ceffio",
-		ClientID:     "stalwart-webui",
-		DomaineAdmin: "ceffio.local",
-		CompteAdmin:  "adminceffio",
-	}); err != nil {
-		return err
+		if !contientModule(modulesOptionnels, "mail") {
+			// THE VALUES ARE STILL STORED: they are configuration, not a
+			// deployment, and an operator may be preparing a mail server they
+			// will install later from the console. Staying silent would let
+			// them believe the relay is in use.
+			fmt.Println("  ! mail is not selected: the relay settings are stored but not applied")
+		}
 	}
 
 	// 12ter. THE RECORDING SERVER IS NO LONGER DEPLOYED HERE.
@@ -626,19 +618,26 @@ func resolveRuntime(o *installOptions, osName string) (cluster.Runtime, error) {
 // will request and an Ingress Traefik will publish; a missing record means the
 // HTTP-01 challenge never completes for that host, and the symptom appears much
 // later, during the TLS phase, as a certificate that stays unissued.
-func nomsAttendus(domain string) []string {
+func nomsAttendus(domain string, aMail bool) []string {
 	// cloud, keycloak, office, spreed (signaling), bao (vault) — the five
-	// Ingresses of ingressManifest, plus admin (console) and mail (Stalwart),
-	// which are written by their own packages.
-	return []string{
+	// Ingresses of ingressManifest, plus admin (console), which are written by
+	// their own packages.
+	noms := []string{
 		"cloud." + domain,
 		"keycloak." + domain,
 		"office." + domain,
 		"spreed." + domain,
 		"bao." + domain,
 		"admin." + domain,
-		"mail." + domain,
 	}
+	// MAIL ONLY WHEN IT IS SELECTED: `--without mail` must not send the operator
+	// hunting for a DNS record for a host that will never exist, and a missing
+	// `mail.<domain>` is not a certificate that fails — there is no Ingress to
+	// issue it.
+	if aMail {
+		noms = append(noms, "mail."+domain)
+	}
+	return noms
 }
 
 // verifierPrerequis checks the DNS and the machine, and REPORTS WITHOUT
@@ -653,7 +652,8 @@ func nomsAttendus(domain string) []string {
 // The one thing that does abort is the hardware minimum: below it the platform
 // does not run at all, and going further would produce a half-installed
 // machine.
-func verifierPrerequis(ctx context.Context, o *installOptions, hw bootstrap.Hardware) error {
+func verifierPrerequis(ctx context.Context, o *installOptions, hw bootstrap.Hardware,
+	modules []module.Module) error {
 	fmt.Println("\nPrerequisites:")
 
 	// --- 1. Hardware -------------------------------------------------------
@@ -669,7 +669,7 @@ func verifierPrerequis(ctx context.Context, o *installOptions, hw bootstrap.Hard
 	// failures that are not failures.
 	public := !strings.HasSuffix(o.domain, ".local")
 
-	noms := nomsAttendus(o.domain)
+	noms := nomsAttendus(o.domain, contientModule(modules, "mail"))
 	resultats := bootstrap.Verifier(ctx, noms)
 
 	// The address to compare against: what the INTERNET sees, not what an
@@ -826,17 +826,33 @@ func selectedOptionalModules(o *installOptions) ([]module.Module, error) {
 	// live-transcription must see exapps-daemon appear rather than wonder
 	// where the extra namespace came from. The expansion is transitive
 	// (a dependency may itself require one), hence the recursion.
+	//
+	// CORE DEPENDENCIES ARE NOT ADDED. `Requires` names what must be PRESENT,
+	// not what this phase must deploy: a module may require identity, files or
+	// ingress, which the sequence installs above and which cannot be excluded
+	// (--without refuses them). Pulling them in here would replay whole layers
+	// a second time in the same run — minutes of idempotent work whose only
+	// visible effect is a banner claiming to install the identity layer twice.
+	// The mail module is what made this visible: it requires three Core layers.
 	var expand func(m module.Module)
 	expand = func(m module.Module) {
 		for _, dep := range m.Info().Requires {
 			if retenu[dep] {
 				continue
 			}
+			dm, ok := module.Get(dep)
+			if !ok {
+				// A dependency naming an unknown module is a registry bug; the
+				// console's status page already reports it. Skipping it here
+				// keeps an installation from being blocked by a display issue.
+				continue
+			}
+			if dm.Info().Kind != module.Optional {
+				continue
+			}
 			retenu[dep] = true
 			fmt.Printf("∙ %s requires %s: adding it\n", m.Info().ID, dep)
-			if dm, ok := module.Get(dep); ok {
-				expand(dm)
-			}
+			expand(dm)
 		}
 	}
 	for _, m := range module.All() {
@@ -854,6 +870,20 @@ func selectedOptionalModules(o *installOptions) ([]module.Module, error) {
 		}
 	}
 	return out, nil
+}
+
+// contientModule says whether a module ID is part of a selection.
+//
+// WHY A HELPER AND NOT A MAP: the lists are short (a dozen entries at most) and
+// built once per installation; the clarity of "does the selection contain mail"
+// is worth more than a set built for one question.
+func contientModule(modules []module.Module, id string) bool {
+	for _, m := range modules {
+		if m.Info().ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // installerModulesOptionnels deploys the selected Optional modules, in
@@ -887,12 +917,27 @@ func installerModulesOptionnels(ctx context.Context, o *installOptions, modules 
 	// dependency is gone, and with it the second place where a value could be
 	// resolved differently.
 
-	env := module.Env{Domain: o.domain, Kube: kube, Out: os.Stdout}
+	// THE ENVIRONMENT IS COMPLETE FOR EVERY MODULE: ModuleID tells a module
+	// which registry entry is running (replay and settings use it), and the two
+	// stores are the SAME ones the console uses — a module that writes a setting
+	// during Install must land in the ConfigMap the page reads, not in a copy.
+	// Incomplete in the first version, and the mail module is what exposed it:
+	// it stores its server settings, and without Settings that write was a nil
+	// dereference waiting for the first installation through the registry.
+	base := module.Env{
+		Domain:   o.domain,
+		Kube:     kube,
+		Out:      os.Stdout,
+		Settings: settings.ConfigMaps{},
+		Secrets:  settings.Secrets{},
+	}
 
 	fmt.Printf("\n∙ optional modules from the registry (%d)\n", len(modules))
 	for _, m := range modules {
 		i := m.Info()
 		fmt.Printf("→ installing %s (%s)\n", i.ID, i.Title)
+		env := base
+		env.ModuleID = i.ID
 		if err := m.Install(ctx, env); err != nil {
 			return fmt.Errorf("installing module %q: %w", i.ID, err)
 		}

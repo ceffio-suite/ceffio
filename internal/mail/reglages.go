@@ -202,7 +202,7 @@ func reglagesDepuis(ctx context.Context, donnees map[string]string) (Reglages, e
 	if donnees == nil {
 		return ReglagesParDefaut(), nil
 	}
-	cfg, _, err := LireServeur(donnees[CleServeur])
+	cfg, stocké, err := LireServeur(donnees[CleServeur])
 	if err != nil {
 		return Reglages{}, err
 	}
@@ -218,6 +218,17 @@ func reglagesDepuis(ctx context.Context, donnees map[string]string) (Reglages, e
 		cfg.Envoi.Port = relais.Port
 		cfg.Envoi.Utilisateur = relais.Utilisateur
 		cfg.Envoi.MotDePasse = motDePasseRelais(ctx)
+	}
+
+	// UPGRADING FROM 0.10.x: the installation had no `mail.server` key at all,
+	// but it may well have a relay in `mail.relay` — the flags of `install` and
+	// the relay group both write there. Defaulting such a server to `direct`
+	// would silently stop its outbound mail the day of the upgrade: port 25 is
+	// blocked on most hosts, which is exactly why the relay was configured.
+	// The historical mode is therefore preserved, and only an EXPLICIT
+	// `mail.server` can say otherwise.
+	if !stocké && cfg.Envoi.Hote != "" {
+		cfg.Envoi.Mode = ModeRelais
 	}
 	return cfg, nil
 }

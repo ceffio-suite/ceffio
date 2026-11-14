@@ -8,7 +8,8 @@ import (
 	"fmt"
 )
 
-// RejouerInstalles redeploys every OPTIONAL module whose state says installed.
+// RejouerInstalles redeploys every OPTIONAL module whose state says installed
+// or merely degraded.
 //
 // WHY THIS EXISTS: `ceffio upgrade` replays the core layers, and nothing else.
 // A module installed later — the Talk relay, the capture, the transcription —
@@ -22,6 +23,14 @@ import (
 // idempotent — it is already called by the CLI, by the console, and again after
 // any interruption. Replaying is not a new operation; it is the ordinary one.
 //
+// DEGRADED IS REPLAYED TOO, and that is deliberate: a mail server whose DNS
+// records are not published yet reports Degraded while its Deployment is
+// perfectly ready. Skipping it would freeze its image at the version of the
+// day it was installed — the exact drift this function exists to remove — for
+// a defect an upgrade has no way to fix. A module that is ABSENT, INSTALLING
+// or UNKNOWN is still not replayed: an upgrade is not an installation, and an
+// unknown state is not a green light.
+//
 // CORE MODULES ARE NOT HANDLED HERE: they belong to the install sequence, which
 // Redeployer already replays.
 func RejouerInstalles(ctx context.Context, modules []Module, env Env, progress func(string)) error {
@@ -33,7 +42,7 @@ func RejouerInstalles(ctx context.Context, modules []Module, env Env, progress f
 		if info.Kind != Optional {
 			continue
 		}
-		if st := m.State(ctx, env); st.Status != Installed {
+		if st := m.State(ctx, env); !estRejouable(st) {
 			continue
 		}
 		progress(fmt.Sprintf("%s: replaying the installed module", info.ID))
@@ -45,4 +54,14 @@ func RejouerInstalles(ctx context.Context, modules []Module, env Env, progress f
 		}
 	}
 	return nil
+}
+
+// estRejouable says whether a state means "the module is there and must follow
+// the binary".
+//
+// WHY A NAMED PREDICATE: the rule is easy to get subtly wrong (Degraded is not
+// Absent, and Installing is not a green light), and naming it makes the test
+// table below read as the rule itself.
+func estRejouable(st State) bool {
+	return st.Status == Installed || st.Status == Degraded
 }
