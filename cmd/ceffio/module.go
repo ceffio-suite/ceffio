@@ -104,9 +104,11 @@ The catalog is the module registry: every optional feature declares itself
 there (ID, dependencies, resources, warnings), and these commands only walk
 it — no feature list is hardcoded in the CLI.
 
-Core modules (platform, data, identity, files, talk, mail, …) are NOT
-managed here: they are the product, deployed by "ceffio install" in its own
-sequence, and removed with the cluster by "ceffio uninstall".`,
+The commands are GENERIC: they take a module id and ask the registry, so a
+module added tomorrow is listed, installed, checked and removed without editing
+them. Core modules (platform, data, identity, files, talk) are NOT managed here:
+they are the product, deployed by "ceffio install" in its own sequence, and
+removed with the cluster by "ceffio uninstall".`,
 	}
 
 	// Same production default as `ceffio install` (see the note there):
@@ -121,6 +123,7 @@ sequence, and removed with the cluster by "ceffio uninstall".`,
 		newModuleRemoveCmd(&domain),
 		newModuleStatusCmd(&domain),
 		newModuleConfigCmd(&domain),
+		newModuleCheckCmd(&domain),
 	)
 	return c
 }
@@ -216,11 +219,11 @@ func newModuleInstallCmd(domain *string) *cobra.Command {
 				pinfo := pm.Info()
 
 				if pinfo.Kind == module.Core {
-					// A core dependency belongs to the install sequence:
-					// its registry Install either delegates to a phase
-					// that needs settings the registry does not carry
-					// (mail and its SMTP relay) or refuses outright. If
-					// the platform is there, so is the core module.
+					// A core dependency belongs to the product: `ceffio
+					// install` deployed it in its own sequence, and this
+					// command only verifies it is there. Running a core
+					// module's registry Install here would replay a phase
+					// outside the sequence that gives it its settings.
 					st := pm.State(ctx, env)
 					if st.Status != module.Installed {
 						return fmt.Errorf("module %q requires the core module %q, which is not installed (status: %s): run `ceffio install`",
@@ -359,6 +362,45 @@ func newModuleStatusCmd(domain *string) *cobra.Command {
 			}
 			if st.Blocked != "" {
 				fmt.Printf("Blocked     %s\n", st.Blocked)
+			}
+			return nil
+		},
+	}
+}
+
+func newModuleCheckCmd(domain *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "check <id>",
+		Short: "Run the prerequisite checks a module declares",
+		Long: `Runs the checks the module declares (module.Checker) and prints each one with
+what it measured and, when there is one, the fix to apply.
+
+THE EXIT CODE SEPARATES "MEASURED" FROM "MEASURED AND BLOCKING": 1 when at
+least one check is blocking, 0 otherwise. A warning and a not-applicable check
+do not fail the command, because they describe a decision the operator still has
+to make, not something broken. A module that declares no check is an ERROR, not
+an empty success: silence would read as "everything was verified".
+
+These checks measure what is OUTSIDE the cluster — a DNS record, a port, a
+reverse zone. That is why they are on demand and not in "module status".`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id := args[0]
+			m, ok := module.Get(id)
+			if !ok {
+				return fmt.Errorf("unknown module %q (known modules: %s)", id,
+					strings.Join(knownIDs(), ", "))
+			}
+			env := moduleEnv(*domain)
+			// The module must know it is being asked about itself: a check
+			// that writes to the journal or reads its own settings keys on it.
+			env.ModuleID = id
+			bloquants, err := verifierModuleCheck(cmd.Context(), m, env, os.Stdout)
+			if err != nil {
+				return err
+			}
+			if bloquants > 0 {
+				return fmt.Errorf("%d blocking check(s): apply the fixes above, then run this command again", bloquants)
 			}
 			return nil
 		},

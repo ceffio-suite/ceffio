@@ -103,6 +103,19 @@
   .badge.mut{color:var(--muted);background:var(--panel2);border-color:var(--line)}
   .badge.info{color:var(--acc2);background:rgba(56,189,248,.10);border-color:rgba(56,189,248,.25)}
 
+  /* The prerequisite checks a module declares (module.Checker). They read as a
+     list, not as a table: each line is one measurement, and the fix under it is
+     the only multi-line element. */
+  .mod-checks{display:flex;flex-direction:column;gap:6px;margin-top:2px}
+  .check-row{display:flex;gap:8px;align-items:flex-start;font-size:12px;line-height:1.5}
+  .check-row .badge{flex:0 0 auto}
+  .check-body{flex:1;min-width:0}
+  .check-label{color:var(--txt)}
+  .check-fix-row{display:flex;gap:8px;align-items:flex-start;margin-top:4px}
+  .check-fix{flex:1;margin:0;background:var(--bg2);border:1px solid var(--line);
+             border-radius:8px;padding:8px 10px;font-size:11px;white-space:pre-wrap;
+             overflow-wrap:anywhere;color:var(--muted)}
+
   /* Step numbers, for the two ordered steps of the Applications panel. */
   .etape{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;
          border-radius:50%;background:var(--acc);color:#fff;font-size:11px;font-weight:700;
@@ -1083,6 +1096,11 @@
   let modulesData = [];
   let modulePoll = null;          // setInterval handle, active only while an operation runs
   let moduleAwaiting = null;      // {id, action} of the inline confirmation currently open
+  // The rendered checks, keyed by module id. renderModules() replaces the grid's
+  // HTML on every poll (3 s while an operation runs), so what was loaded has to
+  // live outside the DOM: re-asking the server every 3 s would re-run DNS
+  // lookups and port dials for an answer that did not change.
+  let moduleChecks = {};
 
   function moduleStatusBadge(st) {
     switch (st.status) {
@@ -1145,6 +1163,7 @@
       </div>
       ${st.detail ? `<div class="muted" style="font-size:12px">${esc(st.detail)}</div>` : ''}
       ${m.warning && !awaiting ? `<div class="muted" style="font-size:11.5px">⚠ ${esc(m.warning)}</div>` : ''}
+      ${m.checkable ? `<div id="modChecks-${esc(m.id)}" class="mod-checks">${moduleChecks[m.id] || ''}</div>` : ''}
       ${confirmBox}
       <div id="modJournal-${esc(m.id)}"></div>
       ${buttons}
@@ -1157,6 +1176,91 @@
       ? opt.map(moduleCard).join('')
       : '<div class="empty">No optional module in the registry.</div>';
   }
+
+  // ── CHECKS ──
+  //
+  // THIS CODE KNOWS NO MODULE. A module that declares checks (module.Checker)
+  // gets a `checkable` flag from the API; the page asks for its list and draws
+  // it. The level is the only vocabulary: ok / warning / blocking /
+  // not_applicable. A module added tomorrow appears here unchanged.
+  //
+  // Detail and Fix are rendered differently ON PURPOSE: Detail is what was
+  // measured (read as text), Fix is what the operator does about it (a DNS
+  // record or a command, offered as a copyable block). Merging them would make
+  // every fix carry an observation, and the operator would paste the wrong
+  // paragraph into their zone file.
+  const CHECK_SYMBOL = { ok: '✓', warning: '⚠', blocking: '✗', not_applicable: '·' };
+  const CHECK_BADGE  = { ok: 'ok', warning: 'warn', blocking: 'ko', not_applicable: 'mut' };
+
+  function checkLine(c) {
+    const sym = CHECK_SYMBOL[c.level] || '?';
+    const cls = CHECK_BADGE[c.level] || 'mut';
+    const niveau = String(c.level || '').replace(/_/g, ' ');
+    const detail = c.detail ? ' — ' + esc(c.detail) : '';
+    const fix = c.fix ? `
+      <div class="check-fix-row">
+        <pre class="check-fix mono">${esc(c.fix)}</pre>
+        <button class="btn-ghost" data-fix="${esc(c.fix)}" onclick="copyCheckFix(this)">Copy fix</button>
+      </div>` : '';
+    return `<div class="check-row">
+      <span class="badge ${cls}">${sym} ${esc(niveau)}</span>
+      <div class="check-body">
+        <div class="check-label"><b>${esc(c.label || c.id)}</b>${detail}</div>
+        ${fix}
+      </div>
+    </div>`;
+  }
+
+  async function loadModuleChecks() {
+    for (const m of modulesData) {
+      if (!m.checkable) continue;
+      try {
+        const d = await api('/api/modules/' + m.id + '/checks');
+        const checks = d.checks || [];
+        moduleChecks[m.id] = checks.length ? checks.map(checkLine).join('') : '';
+      } catch (e) {
+        if (e.message === 'auth') return;
+        moduleChecks[m.id] = `<div class="muted">Could not read the checks: ${esc(e.message)}</div>`;
+      }
+      // Re-read the zone: the 3 s poll may have re-rendered the grid while the
+      // request was in flight, so the element captured before the await can be
+      // detached.
+      const zone = $('modChecks-' + m.id);
+      if (zone) zone.innerHTML = moduleChecks[m.id];
+    }
+  }
+
+  // Copying the fix is the only action this block offers: it is a DNS record,
+  // a port rule or a command, meant to be pasted into a zone file or a
+  // terminal.
+  //
+  // THE FALLBACK IS NOT LEGACY SUPPORT: the clipboard API only exists in a
+  // secure context, and the console is routinely reached over plain HTTP on a
+  // LAN address (the ingress terminates TLS only for the public host name).
+  // Without it the button would do nothing there — silently, which is the one
+  // failure mode this page must not have.
+  function copyCheckFix(btn) {
+    const texte = btn.dataset.fix || '';
+    const fait = () => toast('Fix copied');
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(texte).then(fait, () => copyCheckFixSecours(texte, fait));
+      return;
+    }
+    copyCheckFixSecours(texte, fait);
+  }
+
+  function copyCheckFixSecours(texte, fait) {
+    const zone = document.createElement('textarea');
+    zone.value = texte;
+    zone.style.position = 'fixed';
+    zone.style.opacity = '0';
+    document.body.appendChild(zone);
+    zone.select();
+    try { document.execCommand('copy'); fait(); } catch (e) { toast('Copy failed', 'ko'); }
+    zone.remove();
+  }
+
+  window.copyCheckFix = copyCheckFix;
 
   // ── MONITORING ──
   // The figures are read, never guessed: a value the API could not read shows
@@ -1279,6 +1383,11 @@
       const d = await api('/api/modules');
       modulesData = d.modules || [];
       renderModules();
+      // Checks are external measurements (DNS, ports, a reverse zone): they are
+      // loaded when the page opens and after an action, NEVER on the 3 s poll —
+      // re-running them while an install runs would hammer the resolver for an
+      // answer that has not changed.
+      if (!showJournal) loadModuleChecks();
       // Poll every 3 s WHILE an operation runs, and stop when none does:
       // a permanent poll would re-run the exec-based state reads (occ in the
       // Nextcloud pod) for nothing.
@@ -1346,6 +1455,9 @@
       await api('/api/modules/' + id, { method: 'POST', body: JSON.stringify({ action }) });
       toast(action === 'install' ? 'Installation started' : 'Uninstallation started');
       await loadModules(true);
+      // An install or a removal changes what the checks measure (a module that
+      // was absent now listens): refresh them once, after the action.
+      loadModuleChecks();
     } catch (e) {
       toast(e.message, 'ko');
       await loadModules();
