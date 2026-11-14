@@ -22,6 +22,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -134,22 +135,88 @@ func (m *mailModule) Install(ctx context.Context, env module.Env) error {
 	if err := mailcore.Deploy(ctx, env.Domain); err != nil {
 		return err
 	}
-	return mailcore.ConfigurerSSO(ctx, env.Domain, mailcore.SSO{
+	// STEP 3: the directory, the admin account and the web client. THE DOMAIN
+	// AND THE ACCOUNT COME FIRST, in that order, because step 7 writes aliases
+	// that reference both — an alias is an object of the account, pointing at a
+	// domain identifier.
+	if err := mailcore.ConfigurerSSO(ctx, env.Domain, mailcore.SSO{
 		Hote:         mailcore.DomaineMessagerie(env.Domain),
 		Issuer:       "https://keycloak." + env.Domain + "/realms/ceffio",
 		ClientID:     "stalwart-webui",
 		DomaineAdmin: "ceffio.local",
 		CompteAdmin:  "adminceffio",
-	})
+	}); err != nil {
+		return err
+	}
+	// STEP 7: postmaster@ and abuse@ (RFC 2142). Read back by address, so a
+	// second Install writes nothing.
+	if err := mailcore.AssurerAlias(ctx, env.Domain, "adminceffio"); err != nil {
+		return err
+	}
+	return afficherExpose(ctx, env)
 }
 
-// State reports the deployment's state.
+// afficherExpose performs step 9's part that belongs to Install: it PRINTS the
+// firewall command, it does not run it.
 //
-// Until the mail checks exist (they arrive with the Checker interface), the
-// Deployment is the whole answer: a module that has no ready replica is
-// Degraded, and one that has no Deployment is Absent.
+// WHY NOT CALL THE OPNsense API HERE: the API host, the API key and the WAN
+// interface live on the operator's machine (`ceffio-expose.json`), not in the
+// cluster — the console has no credential and no route to the firewall. Running
+// `ceffio expose` from inside the console would either need that file mounted
+// into it or would silently do nothing. The plan says the step is done through
+// `ceffio expose`, so Install names the exact command and stops there; the
+// `inbound-25` check reports whether the port really answers.
+func afficherExpose(ctx context.Context, env module.Env) error {
+	sortie := env.Out
+	if sortie == nil {
+		sortie = io.Discard
+	}
+	cfg, err := mailcore.LireReglages(ctx)
+	if err != nil {
+		// NOT A FAILURE OF THE INSTALL: the settings were readable a moment ago
+		// for Deploy. Printing the widest list is the safe default — an extra
+		// forward is undone in one click, a missing one blocks mail with a
+		// timeout the checks report.
+		fmt.Fprintln(sortie, "  ∙ firewall: run `ceffio expose --ports 25,465,993` (settings unreadable, assuming external clients)")
+		return nil
+	}
+	ports := "25"
+	if cfg.ClientsExternes {
+		ports = "25,465,993"
+	}
+	fmt.Fprintf(sortie, "  ∙ firewall: run `ceffio expose --ports %s` to forward them to the node\n", ports)
+	fmt.Fprintln(sortie, "    (if your firewall's API cannot create them, `ceffio expose` prints the exact rule)")
+	return nil
+}
+
+// Checks implements module.Checker (§4.4): what the outside world still lacks
+// before this server can send and receive mail properly.
+//
+// THE CHECKS ARE NOT PART OF State's ANSWER, but of its REASON: State is
+// Degraded while a BLOCKING check fails, and the detail names them. A module
+// whose DNS is half-done is installed (the server runs, the mailboxes exist) and
+// degraded (mail does not flow) — the console shows both, which is the truth.
+func (m *mailModule) Checks(ctx context.Context, env module.Env) []module.Check {
+	return mailcore.Checks(ctx, env.Domain)
+}
+
+// State reports the deployment's state, degraded while a blocking check fails.
 func (m *mailModule) State(ctx context.Context, env module.Env) module.State {
-	return socle.EtatDuDeploiement(ctx, env, nsMail, cleDeploiement)
+	etat := socle.EtatDuDeploiement(ctx, env, nsMail, cleDeploiement)
+	if etat.Status != module.Installed {
+		return etat
+	}
+	bloquants := module.Bloquants(m.Checks(ctx, env))
+	if len(bloquants) == 0 {
+		return etat
+	}
+	// THE LABELS ARE NAMED, NOT COUNTED: "2 checks failed" tells an operator
+	// nothing they can act on, while the two labels are the two things to fix.
+	labels := make([]string, 0, len(bloquants))
+	for _, c := range bloquants {
+		labels = append(labels, c.Label)
+	}
+	return module.State{Status: module.Degraded, Detail: "blocking checks: " + strings.Join(labels, ", ")}
 }
 
 // Uninstall removes the public side, the workload and its configuration, and

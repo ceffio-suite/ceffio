@@ -9,17 +9,20 @@
 // antispam — in a single Rust binary. The user reads their messages in
 // Nextcloud; Stalwart is the plumbing behind it.
 //
-// TWO REAL CONSTRAINTS, MEASURED BEFORE WRITING THIS CODE:
+// RECEPTION HAPPENS ON PORT 25, ALWAYS. An earlier revision of the mail plan
+// assumed outbound 25 was blocked at the hosting provider and that a send relay
+// was therefore mandatory; the plan's final version (§4.8) replaced it: the
+// public Service publishes 25 for inbound mail, and DELIVERY is a choice —
+// direct (Stalwart delivers itself, so reverse DNS, SPF, DKIM and DMARC must be
+// right) or through a relay (`envoi = relais`, which carries the reputation).
+// Both are supported here, and neither is refused: the checks report what the
+// outside world still lacks.
 //
-//  1. OUTBOUND port 25 is BLOCKED at Free (verified). Stalwart therefore cannot
-//     deliver directly to Gmail. It is configured with a SEND relay
-//     (send.one.com:587): the relay sends to the outside, and it carries the
-//     reverse DNS. This is the standard configuration for self-hosters behind a
-//     residential connection.
-//
-//  2. The reverse DNS of the public IP is "<fai>.example.net", not the domain.
-//     Without a relay, Gmail would reject the messages. With a relay, the
-//     question disappears — one.com is responsible for deliverability.
+// TLS IS THE HOST'S OWN CERTIFICATE. Stalwart serves a built-in self-signed
+// one ("CN=rcgen self signed cert", SAN DNS:localhost) until it is told about
+// another, and every mail client refuses that. cert-manager issues the right
+// certificate into the `mail-tls` Secret (the mail Ingress asks for it); tls.go
+// mounts the Secret and declares it to the server, without a restart.
 //
 // Stalwart administration stays SEPARATE (user instruction): the Ceffio console
 // only links to it, and the admin password rotation acts on its REST API (see
@@ -75,7 +78,18 @@ func Deploy(ctx context.Context, domain string) error {
 	fmt.Println("\nDeploying the mail layer (Phase 13)...")
 
 	domaine := domaineMail(domain)
-	fmt.Printf("∙ mail domain: %s\n", domaine)
+	// THE MAIL DOMAIN AND THE MAIL HOST ARE TWO DIFFERENT NAMES, and conflating
+	// them is the mistake that makes every record wrong:
+	//   - the mail DOMAIN is the platform domain: addresses are user@<domain>;
+	//   - the mail HOST is mail.<domain>: MX, PTR, SPF, autoconfig and the
+	//     certificate all name THAT one.
+	// `domain` is the platform domain; `domaine` is the host. Both are needed
+	// here because the Ingress serves four hosts under the platform domain.
+	plateforme := domain
+	if plateforme == "" {
+		plateforme = domaineDefaut
+	}
+	fmt.Printf("∙ mail domain: %s (host %s)\n", plateforme, domaine)
 
 	cfg, err := LireReglages(ctx)
 	if err != nil {
@@ -104,13 +118,21 @@ func Deploy(ctx context.Context, domain string) error {
 	}
 	fmt.Printf("∙ mailbox volume: %dGi\n", taille)
 
-	if err := applyWorkload(ctx, domaine); err != nil {
+	if err := applyWorkload(ctx, domaine, plateforme); err != nil {
 		return err
 	}
 	if err := applyService(ctx, cfg); err != nil {
 		return err
 	}
 	if err := waitReady(ctx); err != nil {
+		return err
+	}
+
+	// THE CERTIFICATE COMES AFTER THE SERVER ANSWERS, because declaring it is a
+	// JMAP call: there is no server to declare it to before this point. It is
+	// not a refusal when the Secret does not exist yet (§4.8, external
+	// prerequisite) — the message says so and the `tls` check reports it.
+	if err := AssurerTLS(ctx, plateforme); err != nil {
 		return err
 	}
 
@@ -251,7 +273,7 @@ func ensureSecrets(ctx context.Context) error {
 	return nil
 }
 
-func applyWorkload(ctx context.Context, domaine string) error {
+func applyWorkload(ctx context.Context, domaine, plateforme string) error {
 	fmt.Println("∙ Stalwart " + stalwartImage)
 
 	// THE VOLUME IS NOT PART OF THIS MANIFEST, and that is deliberate:
@@ -351,6 +373,10 @@ spec:
         # The injector adds the secrets mount at /secrets itself.
         - {name: data, mountPath: /var/lib/stalwart}
         - {name: config, mountPath: /etc/stalwart}
+        # THE CERTIFICATE'S TWO FILES, mounted where tls.go says the
+        # x:Certificate object reads them. readOnly, because the server only
+        # ever reads them.
+        - {name: mail-tls, mountPath: /etc/stalwart/tls, readOnly: true}
         ports:
 %[6]s        # Probe on /healthz/live: this is the endpoint that Stalwart's official
         # Dockerfile declares itself (STALWART_HEALTHCHECK_URL). It answers
@@ -368,16 +394,28 @@ spec:
         persistentVolumeClaim: {claimName: stalwart-data}
       - name: config
         configMap: {name: stalwart-config}
+      # OPTIONAL, AND THE WHOLE INSTALLATION DEPENDS ON THAT WORD: on a fresh
+      # cluster cert-manager has not issued the certificate yet when this
+      # Deployment is created. A required volume would leave the pod in
+      # CreateContainerConfigError — no server, no mail, no way to see the
+      # certificate page — until a DNS challenge completes somewhere else.
+      # Optional lets the pod start with an empty directory; tls.go installs the
+      # certificate as soon as it appears, and the tls check reports the gap
+      # meanwhile.
+      - name: mail-tls
+        secret: {secretName: mail-tls, optional: true}
 ---
 # The admin interface is exposed through Ingress, like the other apps.
 # Without this object, the mail.<domain> domain resolves and the firewall
 # routes, but Traefik does not know the Host: it answers 404 and the interface
 # is unreachable.
 #
-# No TLS block here: the other Ingresses of the platform do not have one either
-# (the certificate is laid down at the cluster and firewall level). Adding one
-# would create an inconsistency, and a nonexistent secretName would break the
-# routing.
+# IT DOES CARRY A TLS BLOCK, and that is the mail layer's one real divergence
+# from the other Ingresses: mail clients verify the name on the certificate, so
+# the platform-level wildcard is not enough on its own (the mail host, its
+# autoconfig/autodiscover/mta-sts names and the SMTP/IMAP listeners must all
+# present the same certificate). secretName: mail-tls is what Stalwart is
+# told to serve by tls.go; cert-manager fills it from the hosts listed below.
 #
 # Only the ADMINISTRATION port goes through the Ingress. Mail (SMTP, IMAP) stays
 # directly accessible: we do not push mail through an HTTP proxy.
@@ -401,21 +439,20 @@ metadata:
     traefik.ingress.kubernetes.io/router.middlewares: %[1]s-ceffio-redirect-https@kubernetescrd
 spec:
   ingressClassName: traefik
+  # FOUR NAMES, FOUR CONSUMERS, ONE CERTIFICATE: mail. is the server itself
+  # (admin interface, JMAP), autoconfig./autodiscover. are what a mail client
+  # asks for BEFORE it knows the settings, and mta-sts. publishes the SMTP
+  # transport-security policy. cert-manager's ingress-shim creates — or
+  # EXTENDS — the mail-tls Certificate from this list, so the names belong
+  # here rather than in a second object that would issue a second certificate.
   tls:
-  - hosts: [%[2]s]
+  - hosts: [%[7]s]
     secretName: mail-tls
   rules:
-  - host: %[2]s
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: stalwart
-            port: {number: 8080}
+%[8]s
 `, ns, domaine, stalwartImage, annotations, ingress.PourDomaine(domaine),
-		rendrePortsConteneur(portsConteneur()))
+		rendrePortsConteneur(portsConteneur()), strings.Join(hotesIngress(plateforme, domaine), ", "),
+		rendreReglesIngress(hotesIngress(plateforme, domaine)))
 
 	return apply(ctx, manifest)
 }
@@ -478,11 +515,23 @@ func portsConteneur() []portStalwart {
 	}
 }
 
-// portsService lists what the Service publishes, which depends on the
-// `clients_externes` setting: mail clients (Thunderbird, a phone) need 465 and
-// 993 from the outside, while 25 and 8080 are required either way (inbound mail
-// and the administration interface).
-func portsService(cfg Reglages) []portStalwart {
+// portsService lists what the INTERNAL Service publishes: every port the
+// server listens on, always.
+//
+// IT DOES NOT DEPEND ON `clients_externes` ANY MORE, and the separation is what
+// makes the exposure setting safe: the cluster's Service exposes all four ports
+// on the pod network (Traefik needs 8080, the checks dial 25/465/993 from
+// inside), while the PUBLIC Service — portsPublics — is the only one whose port
+// list follows the setting. Closing 993 on the inside would have hidden it from
+// the checks and from any in-cluster client, without changing what the Internet
+// can reach.
+func portsService() []portStalwart { return portsConteneur() }
+
+// portsPublics lists what the INTERNET can reach, which is the `clients_externes`
+// setting's whole effect: 25 always (inbound mail), 465 and 993 only when the
+// operator asked to connect mail clients from outside. 8080 is never public:
+// the administration interface goes through the Ingress, on 443.
+func portsPublics(cfg Reglages) []portStalwart {
 	ports := []portStalwart{{"smtp", 25}}
 	if cfg.ClientsExternes {
 		ports = append(ports,
@@ -490,7 +539,7 @@ func portsService(cfg Reglages) []portStalwart {
 			portStalwart{"imaps", 993},
 		)
 	}
-	return append(ports, portStalwart{"http", 8080})
+	return ports
 }
 
 // rendrePortsConteneur renders the container's port list (eight-space indent,
@@ -522,7 +571,56 @@ func rendrePortsService(ports []portStalwart) string {
 // reports the difference rather than assuming that the apply did what it was
 // told.
 func applyService(ctx context.Context, cfg Reglages) error {
-	manifest := fmt.Sprintf(`apiVersion: v1
+	manifest := manifesteServices(cfg)
+	if err := apply(ctx, manifest); err != nil {
+		return err
+	}
+
+	// THE INTERNAL SERVICE IS READ BACK ON EVERY PORTS VALUE, because it is the
+	// one the checks and every in-cluster client use.
+	enPlace, err := lirePortsService(ctx, "stalwart")
+	if err != nil {
+		return err
+	}
+	voulus := portsService()
+	if !memesPorts(enPlace, voulus) {
+		return fmt.Errorf("the stalwart Service reads back the ports %s, expected %s",
+			decrirePorts(enPlace), decrirePorts(voulus))
+	}
+	fmt.Printf("  ∙ ports in the cluster: %s\n", decrirePorts(enPlace))
+
+	// THE PUBLIC SERVICE IS READ BACK WITH ITS TYPE AND POLICY, not only its
+	// ports: a ClusterIP or a masquerading policy would look perfectly healthy
+	// in the port list and be wrong for everything the outside world does.
+	publics, err := lireServicePublic(ctx)
+	if err != nil {
+		return err
+	}
+	if !memesPorts(publics.Ports, portsPublics(cfg)) {
+		return fmt.Errorf("the stalwart-public Service reads back the ports %s, expected %s",
+			decrirePorts(publics.Ports), decrirePorts(portsPublics(cfg)))
+	}
+	if publics.Type != "LoadBalancer" || publics.Policy != "Local" {
+		return fmt.Errorf("the stalwart-public Service reads back type %q and externalTrafficPolicy %q, expected LoadBalancer and Local",
+			publics.Type, publics.Policy)
+	}
+	fmt.Printf("  ∙ ports published outside: %s\n", decrirePorts(publics.Ports))
+	return nil
+}
+
+// manifesteServices renders the two Service objects Install applies.
+//
+// SEPARATE FROM applyService SO THE TEST PARSES THE REAL MANIFEST: a test that
+// rebuilt the YAML itself would pass while the applied one had lost a port, and
+// the port list is what decides whether mail can arrive at all.
+func manifesteServices(cfg Reglages) string {
+	// TWO SERVICES, TWO AUDIENCES. `stalwart` is the cluster's own endpoint: it
+	// publishes everything, and nothing outside the cluster needs a route to it.
+	// `stalwart-public` is the Internet-facing one; its port list is the
+	// `clients_externes` setting, its externalTrafficPolicy is Local so the real
+	// client address survives (POC 9.D), and it is the object the OPNsense port
+	// forwards point at.
+	return fmt.Sprintf(`apiVersion: v1
 kind: Service
 metadata:
   name: stalwart
@@ -531,41 +629,117 @@ spec:
   selector: {app: stalwart}
   ports:
 %[2]s
-`, ns, rendrePortsService(portsService(cfg)))
-	if err := apply(ctx, manifest); err != nil {
-		return err
-	}
-	enPlace, err := lirePortsService(ctx)
-	if err != nil {
-		return err
-	}
-	voulus := portsService(cfg)
-	if !memesPorts(enPlace, voulus) {
-		return fmt.Errorf("the stalwart Service reads back the ports %s, expected %s",
-			decrirePorts(enPlace), decrirePorts(voulus))
-	}
-	fmt.Printf("  ∙ published ports: %s\n", decrirePorts(enPlace))
-	return nil
+---
+# THE SECOND SERVICE IS NOT A DUPLICATE: a Service's type applies to ALL its
+# ports, so a LoadBalancer carrying 8080 would publish the administration
+# interface on a raw port of the Internet, and a ClusterIP cannot be reached
+# from a port forward. Splitting it also makes "which ports are open" readable
+# from one object, which is what the operator and the checks both need.
+apiVersion: v1
+kind: Service
+metadata:
+  name: stalwart-public
+  namespace: %[1]s
+spec:
+  type: LoadBalancer
+  # THE REAL CLIENT ADDRESS IS PRESERVED, and this is not a micro-optimisation:
+  # Stalwart's auto-ban and its logs key on the source address, and a proxied
+  # one would ban the proxy. Measured in POC 9.D: Local keeps it, Cluster
+  # masquerades it.
+  externalTrafficPolicy: Local
+  selector: {app: stalwart}
+  ports:
+%[3]s
+`, ns, rendrePortsService(portsService()), rendrePortsService(portsPublics(cfg)))
 }
 
-// lirePortsService reads the Service's ports through the API.
-func lirePortsService(ctx context.Context) ([]portStalwart, error) {
+// lirePortsService reads a Service's ports through the API.
+func lirePortsService(ctx context.Context, nom string) ([]portStalwart, error) {
 	client, err := clientK8s()
 	if err != nil {
 		return nil, fmt.Errorf("mail service: %w", err)
 	}
-	svc, err := client.Kubernetes().CoreV1().Services(ns).Get(ctx, "stalwart", metav1.GetOptions{})
+	svc, err := client.Kubernetes().CoreV1().Services(ns).Get(ctx, nom, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
-		return nil, fmt.Errorf("the stalwart Service does not exist in namespace %q", ns)
+		return nil, fmt.Errorf("the %s Service does not exist in namespace %q", nom, ns)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("reading the stalwart Service: %w", err)
+		return nil, fmt.Errorf("reading the %s Service: %w", nom, err)
 	}
 	ports := make([]portStalwart, 0, len(svc.Spec.Ports))
 	for _, p := range svc.Spec.Ports {
 		ports = append(ports, portStalwart{Nom: p.Name, Numero: int(p.Port)})
 	}
 	return ports, nil
+}
+
+// servicePublic is what the read-back of `stalwart-public` is compared on.
+type servicePublic struct {
+	Type   string
+	Policy string
+	Ports  []portStalwart
+}
+
+func lireServicePublic(ctx context.Context) (servicePublic, error) {
+	client, err := clientK8s()
+	if err != nil {
+		return servicePublic{}, fmt.Errorf("mail service: %w", err)
+	}
+	svc, err := client.Kubernetes().CoreV1().Services(ns).Get(ctx, "stalwart-public", metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return servicePublic{}, fmt.Errorf("the stalwart-public Service does not exist in namespace %q", ns)
+	}
+	if err != nil {
+		return servicePublic{}, fmt.Errorf("reading the stalwart-public Service: %w", err)
+	}
+	s := servicePublic{Type: string(svc.Spec.Type), Policy: string(svc.Spec.ExternalTrafficPolicy)}
+	for _, p := range svc.Spec.Ports {
+		s.Ports = append(s.Ports, portStalwart{Nom: p.Name, Numero: int(p.Port)})
+	}
+	return s, nil
+}
+
+// hotesIngress lists the names the mail Ingress serves, the mail host first.
+//
+// AUTOCONFIG AND AUTODISCOVER ARE THE FALLBACK PATH a mail client takes when
+// the SRV records are missing: it asks these two names for a configuration
+// file. mta-sts is the sender-side policy publication. All three are served by
+// the same web interface, hence the same backend; only the certificate has to
+// know the names.
+func hotesIngress(plateforme, domaine string) []string {
+	// THE MAIL HOST IS `domaine`, NOT `mail.<plateforme>`: CEFFIO_MAIL_DOMAIN
+	// may have chosen another name, and the certificate must carry the name
+	// that is really used. The three other hosts stay under the platform domain,
+	// because that is the domain a mail client derives them from.
+	hotes := []string{domaine}
+	for _, sous := range []string{"autoconfig", "autodiscover", "mta-sts"} {
+		hote := sous + "." + plateforme
+		if hote != domaine {
+			hotes = append(hotes, hote)
+		}
+	}
+	return hotes
+}
+
+// rendreReglesIngress renders one rule per host, all pointing at the same
+// backend.
+func rendreReglesIngress(hotes []string) string {
+	var b strings.Builder
+	for i, hote := range hotes {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		fmt.Fprintf(&b, `  - host: %s
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: stalwart
+            port: {number: 8080}`, hote)
+	}
+	return b.String()
 }
 
 // memesPorts compares two port lists without caring about their order.
