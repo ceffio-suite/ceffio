@@ -32,10 +32,22 @@ import (
 	mailcore "github.com/ceffio-suite/ceffio/internal/mail"
 	"github.com/ceffio-suite/ceffio/internal/module"
 	"github.com/ceffio-suite/ceffio/internal/modules/socle"
+	"github.com/ceffio-suite/ceffio/internal/platformmail"
 )
 
 // nsMail is the namespace the mail server lives in.
 const nsMail = "ceffio-mail"
+
+// THE SENDER SEAMS: the platform sender is written through these three
+// functions. They are variables so the uninstall guard can run against a fake
+// cluster: `platformmail` talks to the REAL cluster connection (`clientK8s`) and
+// executes into pods, which a fake client cannot serve — the seam is what keeps
+// the test about Uninstall's own contract instead of about k8s plumbing.
+var (
+	resoudreExpediteur = platformmail.Resolve
+	appliquerNextcloud = platformmail.ApplyNextcloud
+	appliquerKeycloak  = platformmail.ApplyKeycloak
+)
 
 // nsFiles and nsIdentity are the namespaces the module needs to reach INTO.
 //
@@ -94,6 +106,14 @@ func (m *mailModule) Info() module.Info {
 						Resources: []string{"pods/exec"},
 						Verbs:     []string{"create"},
 					},
+					{
+						// The in-cluster alias is written into the
+						// application's Deployment (one entry in
+						// hostAliases), so the console needs to update it.
+						APIGroups: []string{"apps"},
+						Resources: []string{"deployments"},
+						Verbs:     []string{"get", "list", "update", "patch"},
+					},
 				},
 			},
 			{
@@ -108,6 +128,12 @@ func (m *mailModule) Info() module.Info {
 						APIGroups: []string{""},
 						Resources: []string{"pods/exec"},
 						Verbs:     []string{"create"},
+					},
+					{
+						// Same alias, in Keycloak's Deployment.
+						APIGroups: []string{"apps"},
+						Resources: []string{"deployments"},
+						Verbs:     []string{"get", "list", "update", "patch"},
 					},
 				},
 			},
@@ -153,7 +179,48 @@ func (m *mailModule) Install(ctx context.Context, env module.Env) error {
 	if err := mailcore.AssurerAlias(ctx, env.Domain, "adminceffio"); err != nil {
 		return err
 	}
+	// STEP 8: THE PLATFORM SENDER. Its credential comes first — the account
+	// every automated e-mail is sent from — and the two applications that send
+	// in the platform's name are then pointed at it.
+	if err := mailcore.AssurerNoreply(ctx, env.Domain); err != nil {
+		return err
+	}
+	if err := appliquerExpediteur(ctx, env); err != nil {
+		return err
+	}
+	// STEP 9: the firewall. Printed, not run: the API credential lives on the
+	// operator's machine, not in the cluster.
 	return afficherExpose(ctx, env)
+}
+
+// appliquerExpediteur resolves which sender the platform uses and writes it into
+// Nextcloud and Keycloak.
+//
+// WHY A MISSING SENDER IS NOT AN INSTALL FAILURE: on a fresh installation the
+// noreply credential needs the mail server to answer on 465, which needs the
+// firewall forward that step 9 only PRINTS. Refusing here would leave a deployed
+// mail server unregistered in the registry over a port the operator has not
+// opened yet, and the blocking `inbound-25` check already says so. The install
+// succeeds, says what is missing, and a replayed Install (or the checks tab)
+// completes the sender once the outside world is ready.
+func appliquerExpediteur(ctx context.Context, env module.Env) error {
+	sortie := env.Out
+	if sortie == nil {
+		sortie = io.Discard
+	}
+	expediteur, err := resoudreExpediteur(ctx, env)
+	if err != nil {
+		return err
+	}
+	if expediteur == nil {
+		fmt.Fprintln(sortie, "  ∙ outgoing mail: no platform sender yet — Nextcloud and Keycloak keep their "+
+			"settings; the next Install points them at the platform once the sender credential can be created")
+		return nil
+	}
+	if err := appliquerNextcloud(ctx, expediteur); err != nil {
+		return err
+	}
+	return appliquerKeycloak(ctx, expediteur)
 }
 
 // afficherExpose performs step 9's part that belongs to Install: it PRINTS the
@@ -276,9 +343,47 @@ func (m *mailModule) Uninstall(ctx context.Context, env module.Env) error {
 		}
 	}
 
+	// THE SENDER FALLS BACK BEFORE THE MESSAGES: with the server gone, the
+	// platform sender no longer exists, and leaving Nextcloud and Keycloak
+	// pointed at `mail.<domain>` would make every invitation fail after a
+	// timeout — silently. They go back to the external relay the operator's
+	// `outgoing_mail` settings describe, or are cleared when there is none.
+	if err := revenirAuRelais(ctx, env); err != nil {
+		return err
+	}
+
 	fmt.Fprintln(sortie, "  ∙ kept: the volume stalwart-data and the vault entries — the mailboxes are intact")
 	fmt.Fprintln(sortie, "  ∙ kept: the Nextcloud Mail accounts of internal users — they work again after a reinstall")
 	return nil
+}
+
+// revenirAuRelais repoints the applications at the external relay (or clears
+// them when the operator stored none).
+//
+// WHY IT RUNS AFTER THE DEPLOYMENT IS GONE: `Resolve` chooses the platform sender
+// only when the mail module is deployed AND its credential is in the vault —
+// deleting the Deployment first is what makes the same resolution answer "the
+// external relay" without a second code path deciding it.
+func revenirAuRelais(ctx context.Context, env module.Env) error {
+	sortie := env.Out
+	if sortie == nil {
+		sortie = io.Discard
+	}
+	expediteur, err := resoudreExpediteur(ctx, env)
+	if err != nil {
+		return err
+	}
+	if expediteur == nil {
+		fmt.Fprintln(sortie, "  ∙ outgoing mail: no external relay stored — Nextcloud and Keycloak are cleared "+
+			"rather than left pointed at the server that no longer exists")
+	} else {
+		fmt.Fprintf(sortie, "  ∙ outgoing mail: Nextcloud and Keycloak send through the external relay %s:%d\n",
+			expediteur.Host, expediteur.Port)
+	}
+	if err := appliquerNextcloud(ctx, expediteur); err != nil {
+		return err
+	}
+	return appliquerKeycloak(ctx, expediteur)
 }
 
 // attendreDisparition waits until the mail Deployment no longer exists.
