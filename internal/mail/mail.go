@@ -31,15 +31,17 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"github.com/ceffio-suite/ceffio/internal/version"
 	"os"
 	"strings"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/ceffio-suite/ceffio/internal/ingress"
 	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"github.com/ceffio-suite/ceffio/internal/secrets"
-	"github.com/ceffio-suite/ceffio/internal/storage"
 	"github.com/ceffio-suite/ceffio/internal/vault"
+	"github.com/ceffio-suite/ceffio/internal/version"
 )
 
 // Actual version observed on Docker Hub (not invented).
@@ -55,39 +57,98 @@ var stalwartImage = version.Image("stalwart")
 
 // Deploy installs the mail layer (Phase 13), idempotently:
 //  1. secrets (admin password, storage key)
-//  2. Stalwart + PVC + Service
-//  3. waiting for the healthcheck
-//  4. send relay configured (outbound port 25 is blocked)
+//  2. the mailbox volume, at the setting's size (never smaller than in place)
+//  3. Stalwart + ConfigMap + Service
+//  4. waiting for the healthcheck
+//  5. outbound routing (direct or through the relay), READ BACK from the server
+//
+// THE SIGNATURE CHANGED IN PR 1 OF docs/plan-mail.md, and that is the point of
+// the change: the relay used to arrive as four arguments, so the only way to
+// change it was to reinstall the platform. The configuration now comes from the
+// module settings (`mail.server`, `mail.relay`), which the console edits, so
+// `install`, `upgrade`, `ceffio mail` and the settings page all apply THE SAME
+// stored values instead of each having its own copy.
 //
 // The domain comes from the deployment: the same code serves a test domain and
 // the real domain.
-func Deploy(ctx context.Context, domain string, relaisHote string, relaisPort int, relaisUser, relaisPass string) error {
+func Deploy(ctx context.Context, domain string) error {
 	fmt.Println("\nDeploying the mail layer (Phase 13)...")
 
 	domaine := domaineMail(domain)
 	fmt.Printf("∙ mail domain: %s\n", domaine)
 
+	cfg, err := LireReglages(ctx)
+	if err != nil {
+		return err
+	}
+	// VALIDATED BEFORE ANYTHING IS TOUCHED: a relay without a password, or a
+	// quota above the volume, must be refused while the cluster is still intact.
+	if err := cfg.Valider(); err != nil {
+		return fmt.Errorf("mail settings: %w", err)
+	}
+
 	if err := ensureSecrets(ctx); err != nil {
 		return err
 	}
+
+	taille, err := assurerVolumeConservant(ctx, cfg.VolumeGio)
+	if err != nil {
+		return err
+	}
+	// The quota rule is re-checked against the size IN PLACE, not against the
+	// stored number: a claim enlarged by hand may allow a quota the settings
+	// alone could not check.
+	if cfg.QuotaDefautGio > taille {
+		return fmt.Errorf("mail settings: the default quota (%d GiB) exceeds the volume in place (%d GiB)",
+			cfg.QuotaDefautGio, taille)
+	}
+	fmt.Printf("∙ mailbox volume: %dGi\n", taille)
+
 	if err := applyWorkload(ctx, domaine); err != nil {
+		return err
+	}
+	if err := applyService(ctx, cfg); err != nil {
 		return err
 	}
 	if err := waitReady(ctx); err != nil {
 		return err
 	}
-	// The send relay is only set up if we have one: without it Stalwart still
-	// starts (it receives), but cannot send — we say so.
-	if relaisHote != "" {
-		if err := configurerRelais(ctx, relaisHote, relaisPort, relaisUser, relaisPass); err != nil {
-			fmt.Printf("  ! send relay not configured: %v\n", err)
-		}
-	} else {
-		fmt.Println("∙ no send relay: Stalwart will receive but will not send to the outside")
+
+	// THE ROUTING COMES LAST, on a server that answers: a route written into a
+	// server that is not ready would be a write whose effect is unknown.
+	if err := AppliquerEnvoi(ctx, cfg.Envoi); err != nil {
+		return fmt.Errorf("outbound routing: %w", err)
 	}
 
 	fmt.Println("✓ Mail layer deployed (Stalwart)")
 	return nil
+}
+
+// AppliquerServeur applies the settings that do not require redeploying the
+// server: the mailbox volume's size and the published ports.
+//
+// WHY THIS EXISTS SEPARATELY FROM `Deploy`: saving a settings page must not
+// replay a Deployment. Stalwart runs with `strategy: Recreate` (a single writer
+// on RocksDB), so re-applying the workload means a mail outage — for a value
+// that concerns a Service port list. What can be changed in place is changed in
+// place, and read back.
+//
+// CALLED BY BOTH SETTINGS GROUPS, as the plan requires (§4.2 rule 6): changing
+// the relay and changing the exposure must both end with the server
+// configuration actually re-applied, not merely stored.
+func AppliquerServeur(ctx context.Context, cfg Reglages) error {
+	if err := cfg.Valider(); err != nil {
+		return err
+	}
+	taille, err := assurerVolume(ctx, cfg.VolumeGio)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("  ∙ mailbox volume: %dGi\n", taille)
+	if err := applyService(ctx, cfg); err != nil {
+		return err
+	}
+	return AppliquerEnvoi(ctx, cfg.Envoi)
 }
 
 // domaineMail decides the domain of the mailboxes.
@@ -193,10 +254,11 @@ func ensureSecrets(ctx context.Context) error {
 func applyWorkload(ctx context.Context, domaine string) error {
 	fmt.Println("∙ Stalwart " + stalwartImage)
 
-	// Storage: a PVC for the mailboxes and the index. Without it, everything is
-	// lost when the pod restarts.
-	// SECRETS ARE LAID DOWN BY THE OPENBAO INJECTOR. This annotation block
-	// replaces the init-container, its ConfigMap, its volume and its mounts.
+	// THE VOLUME IS NOT PART OF THIS MANIFEST, and that is deliberate:
+	// `assurerVolume` (volume.go) creates it at the configured size and
+	// enlarges it when asked, while refusing to shrink it. A claim rendered
+	// here would race with that decision — and would carry the class name
+	// twice, once from the installation and once from the cluster's truth.
 	annotations := vault.AnnotationsAgent(8, "stalwart", "kv/data/ceffio/stalwart/admin",
 		vault.GabaritExports("kv/data/ceffio/stalwart/admin",
 			[2]string{"STALWART_ADMIN_PASSWORD", vault.ChampCoffre("password")},
@@ -206,18 +268,6 @@ func applyWorkload(ctx context.Context, domaine string) error {
 		))
 
 	manifest := fmt.Sprintf(`apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: stalwart-data
-  namespace: %[1]s
-spec:
-  accessModes: [ReadWriteOnce]
-  storageClassName: %[5]s
-  resources:
-    requests:
-      storage: 20Gi
----
-apiVersion: v1
 kind: ConfigMap
 metadata:
   name: stalwart-config
@@ -302,12 +352,7 @@ spec:
         - {name: data, mountPath: /var/lib/stalwart}
         - {name: config, mountPath: /etc/stalwart}
         ports:
-        - {name: smtp,     containerPort: 25}
-        - {name: submission, containerPort: 587}
-        - {name: imap,     containerPort: 143}
-        - {name: imaps,    containerPort: 993}
-        - {name: http,     containerPort: 8080}
-        # Probe on /healthz/live: this is the endpoint that Stalwart's official
+%[6]s        # Probe on /healthz/live: this is the endpoint that Stalwart's official
         # Dockerfile declares itself (STALWART_HEALTHCHECK_URL). It answers
         # without authentication, unlike /api/account (401).
         readinessProbe:
@@ -323,20 +368,6 @@ spec:
         persistentVolumeClaim: {claimName: stalwart-data}
       - name: config
         configMap: {name: stalwart-config}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: stalwart
-  namespace: %[1]s
-spec:
-  selector: {app: stalwart}
-  ports:
-  - {name: smtp,       port: 25,  targetPort: 25}
-  - {name: submission, port: 587, targetPort: 587}
-  - {name: imap,       port: 143, targetPort: 143}
-  - {name: imaps,      port: 993, targetPort: 993}
-  - {name: http,       port: 8080, targetPort: 8080}
 ---
 # The admin interface is exposed through Ingress, like the other apps.
 # Without this object, the mail.<domain> domain resolves and the firewall
@@ -366,7 +397,7 @@ metadata:
     # It was missed because this Ingress is written here, in the mail package,
     # rather than in ingressesManifest with the others. The issuer and the
     # redirection annotation are set the same way as there.
-    cert-manager.io/cluster-issuer: %[6]s
+    cert-manager.io/cluster-issuer: %[5]s
     traefik.ingress.kubernetes.io/router.middlewares: %[1]s-ceffio-redirect-https@kubernetescrd
 spec:
   ingressClassName: traefik
@@ -383,8 +414,8 @@ spec:
           service:
             name: stalwart
             port: {number: 8080}
-`, ns, domaine, stalwartImage, annotations, storage.Classe(),
-		ingress.PourDomaine(domaine))
+`, ns, domaine, stalwartImage, annotations, ingress.PourDomaine(domaine),
+		rendrePortsConteneur(portsConteneur()))
 
 	return apply(ctx, manifest)
 }
@@ -415,57 +446,152 @@ func waitReady(ctx context.Context) error {
 	return nil
 }
 
-// configurerRelais declares the outbound send relay.
+// portsStalwart is the SINGLE SOURCE of the ports this layer publishes.
 //
-// WHY THIS IS NECESSARY HERE: outbound port 25 is blocked by the ISP (verified
-// on the Free connection). Without a relay, Stalwart receives mail but cannot
-// deliver anything to the outside — Gmail would never get our messages. The
-// authenticated relay on 587 bypasses the block and takes on the reverse DNS
-// responsibility.
+// WHY IT IS A TABLE AND NOT FOUR LINES IN TWO MANIFESTS: the POC measured the
+// real listeners of Stalwart 1.0.3 (docs/plan-mail.md §9.E): 25, 465, 993 and
+// 8080. The manifest previously declared 587 and 143 as well — ports the server
+// does not listen on. A Service that publishes a closed port is worse than a
+// missing one: the firewall lets the connection in, and the client waits.
 //
-// TWO THINGS THE DOC ESTABLISHES, AND THAT MY FIRST ATTEMPT IGNORED:
-//
-//  1. Simple authentication is "Authorization: Basic ***" — base64(user:secret).
-//     POST /api/auth exists, but expects a full OAuth flow (clientId,
-//     redirectUri, PKCE…): calling it with a simple JSON body fails with
-//     "JSON deserialization failed".
-//
-//  2. The relay is NOT a setting of the admin API: it is a configuration
-//     object, and all configuration goes through JMAP on /jmap.
-//
-// We therefore verify the authentication, then query JMAP to read the real
-// state. We only declare success if the server answers — not because the
-// request was sent.
-func configurerRelais(ctx context.Context, hote string, port int, utilisateur, motdepasse string) error {
-	fmt.Printf("∙ send relay: %s:%d\n", hote, port)
+// The container ports and the Service ports are derived from the same table, so
+// they cannot drift; a test asserts the rendered manifests.
+type portStalwart struct {
+	Nom    string
+	Numero int
+}
 
-	// Basic authentication: STALWART_RECOVERY_ADMIN contains the "user:password"
-	// form expected by curl -u. It is the secret that is read INSIDE the pod: it
-	// never travels through the command line, where it would be visible in the
-	// process table.
-	//
-	// IT MUST BE SOURCED FIRST. The container's own command sources /secrets/env
-	// for the Stalwart process, but `kubectl exec` opens a NEW shell that
-	// inherits nothing of it — without scriptAvecSecrets the variable is empty,
-	// curl prompts for a password it cannot read, and this reports a 401 that
-	// looks like a bad credential rather than a missing source.
-	script := scriptAvecSecrets(`curl -s -o /dev/null -w "%{http_code}" --max-time 10 -u "$STALWART_RECOVERY_ADMIN" http://localhost:8080/api/account`)
-	out, err := k8s.Command(ctx, "kubectl", "-n", ns, "exec", "deploy/stalwart", "-c", "stalwart", "--",
-		"sh", "-c", script).CombinedOutput()
+// portsConteneur lists what the server listens on, independent of exposure.
+//
+// THE CONTAINER PORTS ARE CONSTANT even when the outside is not exposed: they
+// are metadata that Kubernetes does not enforce, and keeping them constant
+// means a change of exposure never requires re-creating the pod.
+func portsConteneur() []portStalwart {
+	return []portStalwart{
+		{"smtp", 25},
+		{"submission", 465},
+		{"imaps", 993},
+		{"http", 8080},
+	}
+}
+
+// portsService lists what the Service publishes, which depends on the
+// `clients_externes` setting: mail clients (Thunderbird, a phone) need 465 and
+// 993 from the outside, while 25 and 8080 are required either way (inbound mail
+// and the administration interface).
+func portsService(cfg Reglages) []portStalwart {
+	ports := []portStalwart{{"smtp", 25}}
+	if cfg.ClientsExternes {
+		ports = append(ports,
+			portStalwart{"submission", 465},
+			portStalwart{"imaps", 993},
+		)
+	}
+	return append(ports, portStalwart{"http", 8080})
+}
+
+// rendrePortsConteneur renders the container's port list (eight-space indent,
+// inside the pod template).
+func rendrePortsConteneur(ports []portStalwart) string {
+	var b strings.Builder
+	for _, p := range ports {
+		fmt.Fprintf(&b, "        - {name: %s, containerPort: %d}\n", p.Nom, p.Numero)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// rendrePortsService renders the Service's port list (two-space indent, top
+// level of the spec).
+func rendrePortsService(ports []portStalwart) string {
+	var b strings.Builder
+	for _, p := range ports {
+		fmt.Fprintf(&b, "  - {name: %s, port: %d, targetPort: %d}\n", p.Nom, p.Numero, p.Numero)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// applyService publishes the ports the settings ask for, then reads the Service
+// back.
+//
+// THE READ-BACK IS THE POINT OF THIS FUNCTION: the port list is the one place
+// where a wrong value is invisible until a user cannot connect. The check
+// compares the ports in place with the ports wanted, by name and number, and
+// reports the difference rather than assuming that `kubectl apply` did what it
+// was told.
+func applyService(ctx context.Context, cfg Reglages) error {
+	manifest := fmt.Sprintf(`apiVersion: v1
+kind: Service
+metadata:
+  name: stalwart
+  namespace: %[1]s
+spec:
+  selector: {app: stalwart}
+  ports:
+%[2]s
+`, ns, rendrePortsService(portsService(cfg)))
+	if err := apply(ctx, manifest); err != nil {
+		return err
+	}
+	enPlace, err := lirePortsService(ctx)
 	if err != nil {
-		return fmt.Errorf("call to Stalwart: %w: %s", err, tronquer(string(out), 200))
+		return err
 	}
-	code := strings.TrimSpace(string(out))
-	if code != "200" {
-		return fmt.Errorf("authentication refused (HTTP %s)", code)
+	voulus := portsService(cfg)
+	if !memesPorts(enPlace, voulus) {
+		return fmt.Errorf("the stalwart Service reads back the ports %s, expected %s",
+			decrirePorts(enPlace), decrirePorts(voulus))
 	}
-
-	// The relay state is then read via JMAP. We list the available objects rather
-	// than writing a guessed shape: if the key changes between versions, we will
-	// see it in the response instead of corrupting the configuration.
-	fmt.Println("      authentication verified (HTTP 200)")
-	fmt.Println("      → the relay is declared in JMAP (/jmap); to be finalized through the admin interface")
+	fmt.Printf("  ∙ published ports: %s\n", decrirePorts(enPlace))
 	return nil
+}
+
+// lirePortsService reads the Service's ports through the API.
+func lirePortsService(ctx context.Context) ([]portStalwart, error) {
+	client, err := clientK8s()
+	if err != nil {
+		return nil, fmt.Errorf("mail service: %w", err)
+	}
+	svc, err := client.Kubernetes().CoreV1().Services(ns).Get(ctx, "stalwart", metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, fmt.Errorf("the stalwart Service does not exist in namespace %q", ns)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading the stalwart Service: %w", err)
+	}
+	ports := make([]portStalwart, 0, len(svc.Spec.Ports))
+	for _, p := range svc.Spec.Ports {
+		ports = append(ports, portStalwart{Nom: p.Name, Numero: int(p.Port)})
+	}
+	return ports, nil
+}
+
+// memesPorts compares two port lists without caring about their order.
+func memesPorts(a, b []portStalwart) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for _, p := range a {
+		trouve := false
+		for _, q := range b {
+			if p == q {
+				trouve = true
+				break
+			}
+		}
+		if !trouve {
+			return false
+		}
+	}
+	return true
+}
+
+// decrirePorts renders a port list for a message.
+func decrirePorts(ports []portStalwart) string {
+	parties := make([]string, 0, len(ports))
+	for _, p := range ports {
+		parties = append(parties, fmt.Sprintf("%s/%d", p.Nom, p.Numero))
+	}
+	return strings.Join(parties, ", ")
 }
 
 // ---------------------------------------------------------------------------
