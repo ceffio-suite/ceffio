@@ -34,4 +34,5 @@ import (
 	_ "github.com/ceffio-suite/ceffio/internal/modules/talk"
 	_ "github.com/ceffio-suite/ceffio/internal/modules/transcription"
 	_ "github.com/ceffio-suite/ceffio/internal/modules/vault"
+	_ "github.com/ceffio-suite/ceffio/internal/modules/website"
 )

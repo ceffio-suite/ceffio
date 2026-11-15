@@ -40,6 +40,13 @@ namespaces:
   vault: {}
   observability: {}
 
+  # The optional "website" module publishes a static page there. The namespace
+  # is declared HERE although the module is optional: the platform chart runs
+  # with the install identity, which may create namespaces, while the console
+  # installs modules with a namespace-scoped identity, which may not. Declaring
+  # it costs one empty namespace on installations that never ask for a page.
+  website: {}
+
 # cert-manager (installed separately, at cluster level).
 certmanager:
   repo: jetstack

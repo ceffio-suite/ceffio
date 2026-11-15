@@ -1,0 +1,319 @@
+/* Ceffio public landing page — shared by / and /en/.
+   System fonts only, no external references, a single stylesheet.
+   Palette taken verbatim from assets/logo-light.svg and assets/symbol.svg. */
+
+:root {
+  --paper: #F6F5F1;
+  --ink: #12151C;
+  --purple: #6A3FC8;
+  --green: #0B8A6F;
+  --blue: #2B4FD8;
+  --orange: #F28C28;
+  --white: #FFFFFF;
+
+  /* Secondary text and rules are tints of the ink colour, not new brand colours. */
+  --ink-soft: rgba(18, 21, 28, 0.78); /* ≈ 8.5:1 on paper */
+  --hairline: rgba(18, 21, 28, 0.16);
+  --code-bg: rgba(18, 21, 28, 0.06);
+
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --serif: Georgia, "Iowan Old Style", "Times New Roman", serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --wrap: 76rem;
+  --pad: clamp(1.25rem, 5vw, 3.5rem);
+
+  color-scheme: light;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 1rem/1.6 var(--sans);
+  text-rendering: optimizeLegibility;
+}
+
+h1, h2, h3, p, ul, ol, dl { margin: 0; }
+ul, ol { padding: 0; list-style: none; }
+img { max-width: 100%; height: auto; }
+
+a { color: var(--purple); text-decoration-thickness: 1px; text-underline-offset: 0.2em; }
+a:hover { color: var(--ink); }
+::selection { background: var(--purple); color: var(--white); }
+:focus-visible { outline: 3px solid var(--purple); outline-offset: 3px; }
+
+/* Visible only when keyboard-focused. */
+.skip-link {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  z-index: 10;
+  padding: 0.7rem 1rem;
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-decoration: none;
+  transform: translateY(-250%);
+}
+
+.skip-link:focus { color: var(--paper); transform: none; }
+
+.wrap { width: 100%; max-width: var(--wrap); margin-inline: auto; padding-inline: var(--pad); }
+
+/* ---------- Header ---------- */
+
+.site-header { border-bottom: 1px solid var(--hairline); }
+
+.header-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 4.5rem;
+}
+
+.brand { display: inline-flex; align-items: center; gap: 0.6rem; color: var(--ink); text-decoration: none; }
+.brand img { display: block; width: 30px; height: 30px; }
+
+/* Wordmark set in the sans stack, tracked tight to echo the logo's Sora. */
+.wordmark { font: 600 1.375rem/1 var(--sans); letter-spacing: -0.045em; }
+
+.header-nav { display: flex; align-items: center; gap: clamp(0.75rem, 2vw, 1.5rem); }
+
+.lang-switch { display: flex; align-items: center; gap: 0.15rem; font-size: 0.8125rem; font-weight: 600; letter-spacing: 0.1em; }
+.lang-switch a { display: inline-block; padding: 0.35rem 0.4rem; color: var(--ink-soft); text-decoration: none; }
+.lang-switch a:hover { color: var(--ink); }
+.lang-switch a[aria-current="page"] { color: var(--ink); border-bottom: 2px solid var(--purple); }
+
+/* ---------- Buttons ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.95rem 1.5rem;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  font: 600 0.9375rem/1.1 var(--sans);
+  letter-spacing: 0.01em;
+  text-align: center;
+  text-decoration: none;
+  transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+
+.btn-primary { background: var(--purple); border-color: var(--purple); color: var(--white); }
+
+/* Hover darkens the same purple by mixing in ink; no new colour literal. */
+.btn-primary:hover {
+  background: color-mix(in srgb, var(--purple) 86%, var(--ink));
+  border-color: color-mix(in srgb, var(--purple) 86%, var(--ink));
+  color: var(--white);
+}
+
+.btn-ghost { background: transparent; border-color: var(--ink); color: var(--ink); }
+.btn-ghost:hover { background: var(--ink); color: var(--paper); }
+.btn-sm { padding: 0.55rem 0.95rem; font-size: 0.8125rem; letter-spacing: 0.06em; text-transform: uppercase; }
+.btn-primary:focus-visible, .btn-ghost:focus-visible { outline-color: var(--ink); }
+
+/* ---------- Hero ---------- */
+
+.hero { padding-block: clamp(3.5rem, 9vw, 7.5rem) clamp(3rem, 7vw, 5.5rem); }
+
+.eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0 0 clamp(1.25rem, 2.5vw, 1.75rem);
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+/* The four logo segments as a hard-stop rule: brand motif, not a gradient effect. */
+.eyebrow::before {
+  content: "";
+  flex: none;
+  width: 2.5rem;
+  height: 2px;
+  background: linear-gradient(90deg,
+    var(--purple) 0 25%, var(--green) 25% 50%,
+    var(--blue) 50% 75%, var(--orange) 75% 100%);
+}
+
+.hero h1 {
+  max-width: 22ch;
+  font-family: var(--serif);
+  font-size: clamp(2.6rem, 8.2vw, 5.5rem);
+  font-weight: 700;
+  line-height: 1.02;
+  letter-spacing: -0.03em;
+}
+
+.h1-dot { color: var(--purple); }
+
+.lede {
+  max-width: 56ch;
+  margin-top: clamp(1.5rem, 3vw, 2rem);
+  color: var(--ink-soft);
+  font-size: clamp(1.0625rem, 1.5vw, 1.1875rem);
+  line-height: 1.65;
+}
+
+.actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: clamp(2rem, 4vw, 2.75rem); }
+
+/* ---------- Sections ---------- */
+
+.section { padding-block: clamp(3.25rem, 7vw, 6rem); border-top: 1px solid var(--hairline); }
+.section-head { display: grid; align-items: start; gap: 1rem 3rem; }
+.section-head .eyebrow { margin: 0; }
+
+h2 {
+  font-family: var(--serif);
+  font-size: clamp(1.9rem, 4.2vw, 3.1rem);
+  font-weight: 700;
+  line-height: 1.06;
+  letter-spacing: -0.025em;
+}
+
+.section-lede {
+  max-width: 52ch;
+  margin-top: 1rem;
+  color: var(--ink-soft);
+  font-size: clamp(1rem, 1.2vw, 1.0625rem);
+}
+
+/* Editorial two-column head on wide screens: numbered eyebrow, then title. */
+@media (min-width: 52rem) {
+  .section-head { grid-template-columns: 13rem minmax(0, 1fr); }
+}
+
+/* ---------- Modules ---------- */
+
+.modules {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 17.5rem), 1fr));
+  column-gap: clamp(1.5rem, 3vw, 3rem);
+  margin-top: clamp(2.5rem, 5vw, 4rem);
+}
+
+.module { padding: 1.5rem 0 2rem; border-top: 1px solid var(--hairline); }
+
+/* Segment-coloured marker, cycling the four logo colours. */
+.module::before {
+  content: "";
+  display: block;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-bottom: 1rem;
+  background: var(--purple);
+}
+
+.module:nth-child(4n + 2)::before { background: var(--green); }
+.module:nth-child(4n + 3)::before { background: var(--blue); }
+.module:nth-child(4n + 4)::before { background: var(--orange); }
+
+.module h3 { font-size: 1.0625rem; font-weight: 600; line-height: 1.35; letter-spacing: -0.01em; }
+.module p { max-width: 36ch; margin-top: 0.5rem; color: var(--ink-soft); font-size: 0.95rem; line-height: 1.6; }
+
+/* ---------- Steps ---------- */
+
+.steps { counter-reset: step; display: grid; gap: 2.5rem; margin-top: clamp(2.5rem, 5vw, 3.5rem); }
+.step { padding-top: 1.25rem; border-top: 2px solid var(--ink); }
+
+.step::before {
+  counter-increment: step;
+  content: counter(step, decimal-leading-zero);
+  display: block;
+  margin-bottom: 0.9rem;
+  color: var(--purple);
+  font-family: var(--serif);
+  font-size: 2.25rem;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.step h3 { font-size: 1.0625rem; font-weight: 600; }
+.step p { margin-top: 0.55rem; color: var(--ink-soft); font-size: 0.95rem; line-height: 1.65; }
+
+@media (min-width: 56rem) {
+  .steps { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(2rem, 4vw, 3.25rem); }
+}
+
+/* ---------- Verifiable guarantees ---------- */
+
+.checks { margin-top: clamp(2.5rem, 5vw, 3.5rem); }
+.checks li { display: grid; gap: 0.35rem; padding: 1.15rem 0; border-top: 1px solid var(--hairline); }
+.checks li:last-child { border-bottom: 1px solid var(--hairline); }
+.checks strong { font-size: 1rem; font-weight: 600; }
+.checks span { max-width: 52ch; color: var(--ink-soft); font-size: 0.95rem; line-height: 1.6; }
+
+@media (min-width: 48rem) {
+  .checks li { grid-template-columns: 15rem minmax(0, 1fr); align-items: baseline; gap: 2rem; }
+}
+
+code { padding: 0.1em 0.35em; background: var(--code-bg); border-radius: 2px; font-family: var(--mono); font-size: 0.9em; }
+
+/* ---------- Footer ---------- */
+
+.site-footer { padding-block: clamp(2.5rem, 5vw, 4rem) clamp(2rem, 4vw, 3rem); border-top: 1px solid var(--hairline); }
+.footer-top { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 1.5rem; }
+.footer-top .brand img { width: 26px; height: 26px; }
+.footer-lede { max-width: 36ch; margin-top: 1rem; color: var(--ink-soft); font-size: 0.95rem; }
+.footer-links { display: flex; flex-wrap: wrap; gap: 1.5rem; font-size: 0.9375rem; font-weight: 600; }
+.footer-links a { text-decoration: none; }
+.footer-links a:hover { text-decoration: underline; }
+
+.footer-legal {
+  max-width: 72ch;
+  margin-top: clamp(2rem, 4vw, 2.75rem);
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--hairline);
+  color: var(--ink-soft);
+  font-size: 0.8125rem;
+  line-height: 1.7;
+}
+
+.footer-legal p + p { margin-top: 0.6rem; }
+
+/* ---------- Small screens ---------- */
+
+@media (max-width: 30rem) {
+  .header-inner { min-height: 4rem; }
+  .brand img { width: 26px; height: 26px; }
+  .wordmark { font-size: 1.2rem; }
+  .header-nav { gap: 0.65rem; }
+  .btn-sm { padding: 0.5rem 0.8rem; font-size: 0.75rem; letter-spacing: 0.05em; }
+  .hero h1 { max-width: none; }
+
+  /* Stack the calls to action full width on a phone. */
+  .actions { flex-direction: column; }
+  .actions .btn { width: 100%; }
+}
+
+/* ---------- Preferences ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+/* ---------- Print ---------- */
+
+@media print {
+  body { background: #FFFFFF; color: #000000; }
+  .skip-link, .header-nav, .actions { display: none; }
+  a { color: #000000; }
+  .hero { padding-block: 1rem 2rem; }
+  .hero h1 { font-size: 2rem; }
+  .module, .step, .checks li { break-inside: avoid; }
+  .section, .site-footer { border-color: #999999; }
+}

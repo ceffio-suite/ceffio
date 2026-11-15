@@ -44,7 +44,7 @@ func TestNamespacesRendus(t *testing.T) {
 
 	// What the platform actually needs.
 	for _, attendu := range []string{
-		"identity", "data", "files", "office", "video", "mail", "vault", "observability",
+		"identity", "data", "files", "office", "video", "mail", "vault", "observability", "website",
 	} {
 		if !declares(attendu) {
 			t.Errorf("values.yaml does not declare the %q namespace", attendu)

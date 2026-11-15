@@ -214,7 +214,7 @@ func TestEtatSansClientDitInconnu(t *testing.T) {
 // startup on a collision, but a future rename must be caught here, with a
 // readable message, rather than in an init panic).
 func TestPasDeCollisionAvecLesModulesOptionnels(t *testing.T) {
-	optionnels := []string{"exapps-daemon", "live-transcription", "recording", "longhorn-ui", "mail"}
+	optionnels := []string{"exapps-daemon", "live-transcription", "recording", "longhorn-ui", "mail", "website"}
 	vus := map[string]bool{}
 	for _, id := range append(append([]string{}, idsSocle...), optionnels...) {
 		if vus[id] {
