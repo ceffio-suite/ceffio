@@ -15,11 +15,14 @@ package website
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/ceffio-suite/ceffio/internal/module"
 	site "github.com/ceffio-suite/ceffio/internal/website"
@@ -303,6 +306,49 @@ func TestApplySansDomaineRefuseAvantDEcrire(t *testing.T) {
 	}
 	if len(store.ecritures) != 0 {
 		t.Errorf("%d writes recorded for a save that was refused, expected none", len(store.ecritures))
+	}
+}
+
+// TestApplySignaleUnePageNonRepubliee proves the one failure that happens
+// AFTER the store write is reported as what it is: the value is recorded and
+// the page is behind. The two wrong messages are both harmful — "failed"
+// alone sends the operator to retype a saved address, "saved" alone hides that
+// visitors still see the old page.
+func TestApplySignaleUnePageNonRepubliee(t *testing.T) {
+	ctx := context.Background()
+	cs := fakeCluster(t)
+	store := nouveauMagasin()
+	m := &websiteModule{}
+	env := testEnv(cs)
+	env.Settings = store
+	installer(t, cs, m)
+
+	// The address is new, so the page MUST change: this is the update the
+	// cluster refuses, long after the store accepted the value.
+	empreinteAvant := annotationDeploiement(t, cs)
+	refus := errors.New("the cluster refused the deployment update")
+	cs.PrependReactor("update", "deployments", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, refus
+	})
+
+	err := m.Apply(ctx, env, groupePage, module.Values{cleContact: adresseTest})
+	if err == nil {
+		t.Fatal("Apply reported success while the published page was not re-rendered")
+	}
+	if !strings.Contains(err.Error(), "saved") || !strings.Contains(err.Error(), "previous address") {
+		t.Errorf("the error does not say the value is stored AND the page is behind: %v", err)
+	}
+	if !errors.Is(err, refus) {
+		t.Errorf("the cluster error is not wrapped: %v", err)
+	}
+	// The store really did record it: the fix is to republish, not to retype.
+	if got := store.donnees[groupePage]; !strings.Contains(got, adresseTest) {
+		t.Errorf("the store does not hold the address after the failed republish: %q", got)
+	}
+	// And the checksum did not move, so the pod still serves the old page.
+	if apres := annotationDeploiement(t, cs); apres != empreinteAvant {
+		t.Errorf("the deployment checksum moved from %s to %s although the update was refused",
+			empreinteAvant, apres)
 	}
 }
 
