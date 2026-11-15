@@ -103,6 +103,19 @@
   .badge.mut{color:var(--muted);background:var(--panel2);border-color:var(--line)}
   .badge.info{color:var(--acc2);background:rgba(56,189,248,.10);border-color:rgba(56,189,248,.25)}
 
+  /* The prerequisite checks a module declares (module.Checker). They read as a
+     list, not as a table: each line is one measurement, and the fix under it is
+     the only multi-line element. */
+  .mod-checks{display:flex;flex-direction:column;gap:6px;margin-top:2px}
+  .check-row{display:flex;gap:8px;align-items:flex-start;font-size:12px;line-height:1.5}
+  .check-row .badge{flex:0 0 auto}
+  .check-body{flex:1;min-width:0}
+  .check-label{color:var(--txt)}
+  .check-fix-row{display:flex;gap:8px;align-items:flex-start;margin-top:4px}
+  .check-fix{flex:1;margin:0;background:var(--bg2);border:1px solid var(--line);
+             border-radius:8px;padding:8px 10px;font-size:11px;white-space:pre-wrap;
+             overflow-wrap:anywhere;color:var(--muted)}
+
   /* Step numbers, for the two ordered steps of the Applications panel. */
   .etape{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;
          border-radius:50%;background:var(--acc);color:#fff;font-size:11px;font-weight:700;
@@ -138,6 +151,9 @@
   .empty{padding:26px;text-align:center;color:var(--faint);border:1px dashed var(--line);border-radius:var(--radius)}
   .note{background:rgba(91,140,255,.06);border:1px solid var(--line2);border-radius:10px;padding:11px 14px;font-size:12.5px;color:var(--muted);margin-bottom:16px}
   .note b{color:var(--txt)}
+  /* The note box in the warning colour: for states the operator must not read
+     as "nothing to see" — a module's accounts failing to report, above all. */
+  .note.warn{border-color:rgba(251,191,36,.25);background:var(--warnbg);color:var(--warn)}
 
   details.pods{margin-top:4px}
   details.pods summary{cursor:pointer;color:var(--faint);font-size:11.5px;list-style:none}
@@ -281,10 +297,19 @@
             <input id="u_pwd" type="password" placeholder="Password">
             <button class="btn" id="btnCreate" onclick="createUser()">Create account</button>
           </div>
+          <!-- THE EXTRA FIELDS ARE DRAWN FROM THE API, NOT WRITTEN HERE: each
+               module that takes part in the Users page declares what it needs
+               to create its account; renderUsers fills this box from that
+               declaration. An empty box is normal (no module declares any). -->
+          <div id="userFields"></div>
         </div>
         <div style="height:14px"></div>
+        <!-- A MODULE THAT FAILS TO REPORT ITS ACCOUNTS MUST NOT LOOK LIKE A
+             USER WITHOUT ONE: the API names the module and gives its reason, and
+             this banner shows both. Empty and hidden when every module answered. -->
+        <div id="usersAccountsErreurs" class="note warn" style="display:none"></div>
         <table class="table" id="usersTable">
-          <thead><tr><th>Username</th><th>Email</th><th>Status</th><th style="text-align:right">Actions</th></tr></thead>
+          <thead><tr><th>Username</th><th>Email</th><th>Status</th><th>Accounts</th><th style="text-align:right">Actions</th></tr></thead>
           <tbody></tbody>
         </table>
       </section>
@@ -735,6 +760,242 @@
     }
   }
 
+  // ── Accounts declared by modules: drawn from what the API returns ──────────
+  //
+  // THIS CODE KNOWS NO FEATURE. /api/users returns, next to the accounts, the
+  // fields each module declares for the creation form and what each module's
+  // account looks like for every user. The page draws that and posts it back;
+  // a module added tomorrow appears here without a line added below.
+  //
+  // WHY THE TITLES COME FROM /api/modules: the API identifies a module by its
+  // registry id, which is stable but not meant for the operator. The title is
+  // already served for the Modules section, so it is reused here; when it is
+  // not loaded yet (the operator opened Users first) the raw id is shown rather
+  // than an empty column — a cosmetic fallback must never hide the account.
+  let titresModules = {};     // module id -> title, filled lazily from /api/modules
+  // Ids /api/modules did not name (the last fetch succeeded, the module is
+  // simply absent from that list). Remembering them keeps a bad label from
+  // turning into one /api/modules request per render.
+  let titresAbsents = new Set();
+  // The actions of the accounts currently on screen, keyed by user id, module
+  // id and action id. Buttons carry IDs only: the action's fields (labels,
+  // types, defaults) stay in this table and are read back when clicked, so no
+  // module input is baked into the HTML.
+  let actionsComptes = {};
+  // Signature of the last creation-fields declaration drawn by
+  // renderChampsUtilisateur. Re-rendering the users table after an unrelated
+  // action must not wipe what the operator is typing in the creation form.
+  let signatureChamps = '';
+
+  async function chargerTitresModules() {
+    try {
+      const d = await api('/api/modules');
+      const titres = {};
+      for (const m of (d.modules || [])) { titres[m.id] = m.title || m.id; }
+      titresModules = titres;
+      titresAbsents = new Set();
+      return true;
+    } catch (e) {
+      // The titles are labels: the raw id below is a working page. The next
+      // render retries, without a toast per attempt.
+      return false;
+    }
+  }
+
+  // moduleTitreConnu says whether a title (or at least the module's presence)
+  // is already known, from /api/modules or from the Modules section's own list.
+  function moduleTitreConnu(id) {
+    if (titresModules[id]) return true;
+    return modulesData.some(m => m.id === id);
+  }
+
+  function titreDeModule(id) {
+    if (titresModules[id]) return titresModules[id];
+    // The Modules section has already fetched the list: reuse it when the
+    // operator opened that tab before this one.
+    const m = modulesData.find(x => x.id === id);
+    return (m && m.title) || id;
+  }
+
+  // A Bool field carrying replaces_email means the module computes the
+  // address itself. Sending the typed one anyway would create the account with
+  // an address the module does not own, so the input is hidden AND disabled —
+  // disabled is what makes the browser stop submitting it and createUser skip
+  // it.
+  function appliquerReplacesEmail() {
+    const box = $('userFields');
+    const email = $('u_email');
+    if (!box || !email) return;
+    // A checkbox hidden by show_when is DISABLED by appliquerConditions and its
+    // value is not submitted, so it must not keep the email hidden either: what
+    // the server will apply is the module's default, not a hidden answer.
+    const remplace = [...box.querySelectorAll('input[type="checkbox"][data-replaces-email="true"]')]
+      .some(c => c.checked && !c.disabled);
+    email.style.display = remplace ? 'none' : '';
+    email.disabled = remplace;
+    if (remplace) email.value = '';
+  }
+
+  // valeursModules reads the creation form back as the contract expects it:
+  // {moduleID: {key: "value"}}, every value a STRING — "true"/"false" for a
+  // Bool, the option value for a Choice. The conversion at this edge is what
+  // keeps the API free of per-type handling.
+  function valeursModules() {
+    const modules = {};
+    const box = $('userFields');
+    if (!box) return modules;
+    for (const groupe of box.querySelectorAll('[data-module]')) {
+      const valeurs = {};
+      for (const el of groupe.querySelectorAll('input[name], select[name]')) {
+        // A field hidden by show_when is disabled by appliquerConditions, and a
+        // hidden answer must not be sent: the module then applies its default,
+        // exactly as it does when a key is missing from the request.
+        if (el.disabled) continue;
+        valeurs[el.name] = el.type === 'checkbox' ? (el.checked ? 'true' : 'false') : el.value;
+      }
+      modules[groupe.dataset.module] = valeurs;
+    }
+    return modules;
+  }
+
+  // renderChampsUtilisateur draws the fields declared for the creation form,
+  // grouped under the title of the module that declares them.
+  //
+  // WHY IT REUSES settingsField: that function is the single place a declared
+  // type is turned into an input. Drawing the same contract twice (settings and
+  // account creation) would be two interpretations that drift apart, and a type
+  // added to internal/module would reach one form only.
+  function renderChampsUtilisateur(fields) {
+    const box = $('userFields');
+    if (!box) return;
+    // Canonical signature: an unchanged declaration must not be redrawn, or the
+    // values already typed in the form would disappear on every table refresh.
+    const signature = JSON.stringify(Object.keys(fields || {}).sort().map(k => [k, fields[k]]));
+    if (signature === signatureChamps) { appliquerReplacesEmail(); return; }
+    signatureChamps = signature;
+    box.innerHTML = '';
+    for (const moduleID of Object.keys(fields || {})) {
+      const declares = fields[moduleID] || [];
+      if (!declares.length) continue;
+      const groupe = document.createElement('div');
+      groupe.className = 'settings-group';
+      groupe.dataset.module = moduleID;
+      const titre = document.createElement('h4');
+      titre.textContent = titreDeModule(moduleID);
+      groupe.appendChild(titre);
+      // settingsField reads an initial value from this bag: the declared
+      // default is what the form starts with, including for a Bool (checked).
+      const valeurs = {};
+      for (const f of declares) valeurs[f.key] = f.default;
+      for (const f of declares) {
+        const wrap = settingsField(f, valeurs);
+        if (f.replaces_email) {
+          const input = wrap.querySelector('input');
+          if (input) input.dataset.replacesEmail = 'true';
+        }
+        groupe.appendChild(wrap);
+      }
+      // THE SAME VISIBILITY RULE AS THE SETTINGS FORMS, from the same function:
+      // a field whose show_when does not hold is hidden and disabled here, and
+      // valeursModules skips it — so a condition works on the creation form
+      // exactly as it does on a module's settings, with no second implementation.
+      appliquerConditions({ fields: declares }, groupe, valeurs);
+      box.appendChild(groupe);
+    }
+    // Delegated on the container: it survives the innerHTML replacement above,
+    // and a checkbox change must update the email input at once.
+    box.onchange = appliquerReplacesEmail;
+    box.oninput = appliquerReplacesEmail;
+    appliquerReplacesEmail();
+  }
+
+  // celluleComptes draws, for one user, one line per module that has an entry
+  // for them: the module title, its summary, a suspended marker, and its
+  // declared actions. A module with no entry is simply absent — the page does
+  // not invent what an account "should" look like.
+  function celluleComptes(u, accounts) {
+    const lignes = [];
+    for (const moduleID of Object.keys(accounts || {})) {
+      const info = accounts[moduleID] && accounts[moduleID][u.id];
+      if (!info) continue;
+      actionsComptes[u.id] = actionsComptes[u.id] || {};
+      actionsComptes[u.id][moduleID] = {};
+      const boutons = (info.actions || []).map(act => {
+        actionsComptes[u.id][moduleID][act.id] = act;
+        return `<button class="btn-ghost" onclick="accountAction('${esc(u.id)}','${esc(u.username)}','${esc(moduleID)}','${esc(act.id)}')">${esc(act.label || act.id)}</button>`;
+      }).join('');
+      lignes.push(`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:3px 0">
+        <span style="font-weight:600">${esc(titreDeModule(moduleID))}</span>
+        ${info.present
+          ? (info.summary ? `<span class="muted">${esc(info.summary)}</span>` : '')
+          : '<span class="muted">not provisioned</span>'}
+        ${info.suspended ? '<span class="badge ko">suspended</span>' : ''}
+        ${boutons}
+      </div>`);
+    }
+    return lignes.length ? lignes.join('') : '<span class="muted">—</span>';
+  }
+
+  // demanderValeurAction asks for ONE action input with prompt(), like the
+  // rest of this page (resetPwd, confirmations). The declared type decides the
+  // wording and the spelling sent back: a Bool is normalised to "true"/"false"
+  // so the server does not have to guess what "yes" meant.
+  function demanderValeurAction(f) {
+    const label = f.label || f.key;
+    if (f.type === 'bool') {
+      const reponse = prompt(label + ' (true/false)', f.default === 'true' ? 'true' : 'false');
+      if (reponse === null) return null;
+      return reponse.trim().toLowerCase() === 'true' ? 'true' : 'false';
+    }
+    if (f.type === 'choice') {
+      const choix = (f.options || []).map(o => o.value);
+      const reponse = prompt(label + ' (' + choix.join(', ') + ')', f.default || choix[0] || '');
+      return reponse === null ? null : reponse.trim();
+    }
+    const reponse = prompt(label + (f.help ? '\n' + f.help : ''), f.default || '');
+    return reponse === null ? null : reponse;
+  }
+
+  // valeursAction asks for the values of ONE account action, applying the same
+  // show_when rule as the settings forms: a field whose condition does not hold
+  // given the answers already given is not asked. champVisible IS that rule —
+  // calling it here rather than copying it keeps one behaviour for settings and
+  // accounts, the same reason renderChampsUtilisateur reuses settingsField.
+  //
+  // The bag starts from the declared defaults, like a form's first render, so a
+  // condition on a field declared later still decides from what the operator
+  // would see. A hidden field is left out of the answer: the module applies its
+  // default, exactly as for a form field disabled by a condition.
+  function valeursAction(action) {
+    const champs = action.fields || [];
+    const contexte = {};
+    for (const f of champs) if (f.default) contexte[f.key] = f.default;
+    const valeurs = {};
+    for (const f of champs) {
+      if (!champVisible({ fields: champs }, contexte, f.key, {})) continue;
+      const v = demanderValeurAction(f);
+      if (v === null) return null; // the operator cancelled: nothing is sent
+      valeurs[f.key] = v;
+      contexte[f.key] = v;
+    }
+    return valeurs;
+  }
+
+  // afficherErreursComptes says which modules could NOT report their accounts,
+  // and why. WHY IT MATTERS: without it a failing module leaves the Accounts
+  // column empty for everyone, and an empty column reads as "no one has an
+  // account" — a silent lie about a feature that may hold objects. The title
+  // names the module like every other line on this page; the message is the
+  // module's own and is shown verbatim.
+  function afficherErreursComptes(erreurs) {
+    const box = $('usersAccountsErreurs');
+    if (!box) return;
+    const ids = Object.keys(erreurs || {}).sort();
+    if (!ids.length) { box.innerHTML = ''; box.style.display = 'none'; return; }
+    box.innerHTML = ids.map(id => `<div>${esc(titreDeModule(id))}: ${esc(erreurs[id])}</div>`).join('');
+    box.style.display = '';
+  }
+
   async function renderUsers() {
     const d = await api('/api/users');
     const tous = d.users || [];
@@ -746,6 +1007,36 @@
     // buttons that the API would still execute.
     const admin = tous.filter(u => u.protege);
     const users = tous.filter(u => !u.protege);
+
+    // Every module's contribution to this page comes in the same answer as the
+    // users: fields for the creation form, accounts for the table. An absent
+    // key is a platform where no module takes part — the page must keep
+    // working, so both are normalised to an empty object here.
+    const fields = d.fields || {};
+    const accounts = d.accounts || {};
+    // A module whose AccountInfos failed is named here by the server, with the
+    // reason. It is rendered as a banner: an absent Accounts column must never
+    // be mistaken for "no account exists".
+    const erreursComptes = d.account_errors || {};
+
+    // Titles are fetched lazily, and again when a module id appears that the
+    // last answer did not name (a module installed since). The label is
+    // cosmetic: an id /api/modules really does not list keeps the raw id. A
+    // module that only appears in account_errors gets its title too: the banner
+    // names it, so it must be labelled like the rest of the page.
+    const idsModules = [...new Set([
+      ...Object.keys(fields), ...Object.keys(accounts), ...Object.keys(erreursComptes),
+    ])];
+    if (idsModules.some(id => !moduleTitreConnu(id) && !titresAbsents.has(id))) {
+      if (await chargerTitresModules()) {
+        for (const id of idsModules) if (!moduleTitreConnu(id)) titresAbsents.add(id);
+      }
+    }
+    renderChampsUtilisateur(fields);
+    afficherErreursComptes(erreursComptes);
+    // Buttons of the previous render point at this table: it is rebuilt below,
+    // so the previous actions must not survive and be resolved against it.
+    actionsComptes = {};
 
     const carte = $('adminCard');
     if (admin.length) {
@@ -769,27 +1060,84 @@
       <td style="font-weight:600">${esc(u.username)}</td>
       <td class="muted">${esc(u.email || '—')}</td>
       <td>${u.enabled ? '<span class="badge ok"><span class="bdot"></span>active</span>' : '<span class="badge ko"><span class="bdot"></span>deactivated</span>'}</td>
+      <td>${celluleComptes(u, accounts)}</td>
       <td style="text-align:right;white-space:nowrap">
         <button class="btn-ghost" onclick="resetPwd('${esc(u.id)}')">Reset pwd</button>
         ${u.enabled
           ? `<button class="btn-danger" onclick="deact('${esc(u.id)}','${esc(u.username)}')">Deactivate</button>`
           : `<button class="btn" onclick="react('${esc(u.id)}','${esc(u.username)}')">Reactivate</button>`}
+        <button class="btn-danger" onclick="deleteUser('${esc(u.id)}','${esc(u.username)}')">Delete</button>
       </td></tr>`).join('');
-    $('usersTable').querySelector('tbody').innerHTML = rows || `<tr><td colspan="4"><div class="empty">No other accounts — create the first one above.</div></td></tr>`;
+    $('usersTable').querySelector('tbody').innerHTML = rows || `<tr><td colspan="5"><div class="empty">No other accounts — create the first one above.</div></td></tr>`;
   }
 
   window.createUser = async () => {
-    const username = $('u_name').value.trim(), email = $('u_email').value.trim(), password = $('u_pwd').value;
+    // The email is read from the input only when it is not replaced: a module
+    // declaring `replaces_email` computes the address itself, and sending a
+    // typed one would contradict the account it is about to create.
+    const emailEl = $('u_email');
+    const email = emailEl.disabled ? '' : emailEl.value.trim();
+    const username = $('u_name').value.trim(), password = $('u_pwd').value;
     if (!username) { toast('Username required', 'ko'); return; }
     if (!password) { toast('Password required', 'ko'); return; }
     $('btnCreate').disabled = true;
     try {
-      await api('/api/users', { method: 'POST', body: JSON.stringify({ username, email, password }) });
+      await api('/api/users', { method: 'POST', body: JSON.stringify({ username, email, password, modules: valeursModules() }) });
       toast('Account "' + username + '" created');
       $('u_name').value = $('u_email').value = $('u_pwd').value = '';
+      // Ask the next render to redraw the module fields from their defaults:
+      // the values just used belong to the account that now exists, not to the
+      // next one.
+      signatureChamps = '';
       await renderUsers();
     } catch (e) { toast('Error: ' + e.message, 'ko'); }
     finally { $('btnCreate').disabled = false; }
+  };
+
+  // deleteUser asks the operator to TYPE the username: a plain confirm() is a
+  // habit, not a guard — one Enter keypress and the account is gone. The server
+  // refuses a confirm that does not match, so the page and the API agree on
+  // the same proof.
+  window.deleteUser = async (id, name) => {
+    const typed = prompt('Delete "' + name + '"? Everything its module accounts own goes with it.\nType the username to confirm:');
+    if (typed === null) return;
+    if (typed.trim() !== name) { toast('Confirmation does not match', 'ko'); return; }
+    try {
+      await api('/api/users/' + encodeURIComponent(id) + '/delete', {
+        method: 'POST', body: JSON.stringify({ confirm: typed.trim() }),
+      });
+      toast('Account "' + name + '" deleted');
+      await renderUsers();
+    } catch (e) { toast('Error: ' + e.message, 'ko'); }
+  };
+
+  // accountAction runs one action a module declares for one of its accounts.
+  // The action's inputs come from the declaration cached by the last render —
+  // the page has no idea what a quota, a mailbox flag or a plan is.
+  window.accountAction = async (userId, name, moduleID, actionID) => {
+    const parModule = actionsComptes[userId] && actionsComptes[userId][moduleID];
+    const action = parModule && parModule[actionID];
+    if (!action) { toast('This action is no longer available — reload the page', 'ko'); return; }
+    // The action's fields go through the same show_when rule as the forms, so
+    // the operator is not asked what the module would hide.
+    const values = valeursAction(action);
+    if (values === null) return; // the operator cancelled: nothing is sent
+    const body = { values };
+    if (action.confirm) {
+      const typed = prompt('Type "' + action.confirm + '" to confirm: ' + (action.label || actionID));
+      if (typed === null) return;
+      // Refuse locally on a mismatch: a round trip would only turn a typo into
+      // a server error, and the server refuses this same string anyway.
+      if (typed.trim() !== action.confirm) { toast('Confirmation does not match', 'ko'); return; }
+      body.confirm = typed.trim();
+    }
+    try {
+      await api('/api/users/' + encodeURIComponent(userId) + '/accounts/' +
+        encodeURIComponent(moduleID) + '/' + encodeURIComponent(actionID),
+        { method: 'POST', body: JSON.stringify(body) });
+      toast((action.label || actionID) + ' — ' + name);
+      await renderUsers();
+    } catch (e) { toast('Error: ' + e.message, 'ko'); }
   };
 
   window.deact = async (id, name) => {
@@ -1083,6 +1431,11 @@
   let modulesData = [];
   let modulePoll = null;          // setInterval handle, active only while an operation runs
   let moduleAwaiting = null;      // {id, action} of the inline confirmation currently open
+  // The rendered checks, keyed by module id. renderModules() replaces the grid's
+  // HTML on every poll (3 s while an operation runs), so what was loaded has to
+  // live outside the DOM: re-asking the server every 3 s would re-run DNS
+  // lookups and port dials for an answer that did not change.
+  let moduleChecks = {};
 
   function moduleStatusBadge(st) {
     switch (st.status) {
@@ -1145,6 +1498,7 @@
       </div>
       ${st.detail ? `<div class="muted" style="font-size:12px">${esc(st.detail)}</div>` : ''}
       ${m.warning && !awaiting ? `<div class="muted" style="font-size:11.5px">⚠ ${esc(m.warning)}</div>` : ''}
+      ${m.checkable ? `<div id="modChecks-${esc(m.id)}" class="mod-checks">${moduleChecks[m.id] || ''}</div>` : ''}
       ${confirmBox}
       <div id="modJournal-${esc(m.id)}"></div>
       ${buttons}
@@ -1157,6 +1511,91 @@
       ? opt.map(moduleCard).join('')
       : '<div class="empty">No optional module in the registry.</div>';
   }
+
+  // ── CHECKS ──
+  //
+  // THIS CODE KNOWS NO MODULE. A module that declares checks (module.Checker)
+  // gets a `checkable` flag from the API; the page asks for its list and draws
+  // it. The level is the only vocabulary: ok / warning / blocking /
+  // not_applicable. A module added tomorrow appears here unchanged.
+  //
+  // Detail and Fix are rendered differently ON PURPOSE: Detail is what was
+  // measured (read as text), Fix is what the operator does about it (a DNS
+  // record or a command, offered as a copyable block). Merging them would make
+  // every fix carry an observation, and the operator would paste the wrong
+  // paragraph into their zone file.
+  const CHECK_SYMBOL = { ok: '✓', warning: '⚠', blocking: '✗', not_applicable: '·' };
+  const CHECK_BADGE  = { ok: 'ok', warning: 'warn', blocking: 'ko', not_applicable: 'mut' };
+
+  function checkLine(c) {
+    const sym = CHECK_SYMBOL[c.level] || '?';
+    const cls = CHECK_BADGE[c.level] || 'mut';
+    const niveau = String(c.level || '').replace(/_/g, ' ');
+    const detail = c.detail ? ' — ' + esc(c.detail) : '';
+    const fix = c.fix ? `
+      <div class="check-fix-row">
+        <pre class="check-fix mono">${esc(c.fix)}</pre>
+        <button class="btn-ghost" data-fix="${esc(c.fix)}" onclick="copyCheckFix(this)">Copy fix</button>
+      </div>` : '';
+    return `<div class="check-row">
+      <span class="badge ${cls}">${sym} ${esc(niveau)}</span>
+      <div class="check-body">
+        <div class="check-label"><b>${esc(c.label || c.id)}</b>${detail}</div>
+        ${fix}
+      </div>
+    </div>`;
+  }
+
+  async function loadModuleChecks() {
+    for (const m of modulesData) {
+      if (!m.checkable) continue;
+      try {
+        const d = await api('/api/modules/' + m.id + '/checks');
+        const checks = d.checks || [];
+        moduleChecks[m.id] = checks.length ? checks.map(checkLine).join('') : '';
+      } catch (e) {
+        if (e.message === 'auth') return;
+        moduleChecks[m.id] = `<div class="muted">Could not read the checks: ${esc(e.message)}</div>`;
+      }
+      // Re-read the zone: the 3 s poll may have re-rendered the grid while the
+      // request was in flight, so the element captured before the await can be
+      // detached.
+      const zone = $('modChecks-' + m.id);
+      if (zone) zone.innerHTML = moduleChecks[m.id];
+    }
+  }
+
+  // Copying the fix is the only action this block offers: it is a DNS record,
+  // a port rule or a command, meant to be pasted into a zone file or a
+  // terminal.
+  //
+  // THE FALLBACK IS NOT LEGACY SUPPORT: the clipboard API only exists in a
+  // secure context, and the console is routinely reached over plain HTTP on a
+  // LAN address (the ingress terminates TLS only for the public host name).
+  // Without it the button would do nothing there — silently, which is the one
+  // failure mode this page must not have.
+  function copyCheckFix(btn) {
+    const texte = btn.dataset.fix || '';
+    const fait = () => toast('Fix copied');
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(texte).then(fait, () => copyCheckFixSecours(texte, fait));
+      return;
+    }
+    copyCheckFixSecours(texte, fait);
+  }
+
+  function copyCheckFixSecours(texte, fait) {
+    const zone = document.createElement('textarea');
+    zone.value = texte;
+    zone.style.position = 'fixed';
+    zone.style.opacity = '0';
+    document.body.appendChild(zone);
+    zone.select();
+    try { document.execCommand('copy'); fait(); } catch (e) { toast('Copy failed', 'ko'); }
+    zone.remove();
+  }
+
+  window.copyCheckFix = copyCheckFix;
 
   // ── MONITORING ──
   // The figures are read, never guessed: a value the API could not read shows
@@ -1279,6 +1718,11 @@
       const d = await api('/api/modules');
       modulesData = d.modules || [];
       renderModules();
+      // Checks are external measurements (DNS, ports, a reverse zone): they are
+      // loaded when the page opens and after an action, NEVER on the 3 s poll —
+      // re-running them while an install runs would hammer the resolver for an
+      // answer that has not changed.
+      if (!showJournal) loadModuleChecks();
       // Poll every 3 s WHILE an operation runs, and stop when none does:
       // a permanent poll would re-run the exec-based state reads (occ in the
       // Nextcloud pod) for nothing.
@@ -1346,6 +1790,9 @@
       await api('/api/modules/' + id, { method: 'POST', body: JSON.stringify({ action }) });
       toast(action === 'install' ? 'Installation started' : 'Uninstallation started');
       await loadModules(true);
+      // An install or a removal changes what the checks measure (a module that
+      // was absent now listens): refresh them once, after the action.
+      loadModuleChecks();
     } catch (e) {
       toast(e.message, 'ko');
       await loadModules();

@@ -82,13 +82,13 @@ func TestLeHeaderPorteLeLogoCeffio(t *testing.T) {
 // master realm's page is how Keycloak itself is administered, and an administrator
 // who lands on the wrong door must see it.
 func TestLeRealmNEstPasMaster(t *testing.T) {
-	if realmCeffio == "master" {
-		t.Fatal("realmCeffio is master: theming it would replace the page used to " +
+	if RealmCeffio == "master" {
+		t.Fatal("RealmCeffio is master: theming it would replace the page used to " +
 			"administer Keycloak, and an operator with a broken realm would have no " +
 			"recognisable way back in")
 	}
-	if realmCeffio != "ceffio" {
-		t.Errorf("realmCeffio = %q, expected ceffio", realmCeffio)
+	if RealmCeffio != "ceffio" {
+		t.Errorf("RealmCeffio = %q, expected ceffio", RealmCeffio)
 	}
 }
 
@@ -191,7 +191,7 @@ func TestCorpsJSONIsoleLeDocument(t *testing.T) {
 			"",
 		},
 	} {
-		if got := corpsJSON(cas.entree); got != cas.attendu {
+		if got := CorpsJSON(cas.entree); got != cas.attendu {
 			t.Errorf("%s :\n  obtenu  %q\n  attendu %q", cas.nom, got, cas.attendu)
 		}
 	}

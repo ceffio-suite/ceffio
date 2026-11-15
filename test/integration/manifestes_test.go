@@ -37,14 +37,20 @@ import (
 
 // The modules that carry a StorageClass, with the string expected in the
 // generated manifest.
-var modules = []struct {
+type moduleManifeste struct {
 	paquet string
 	nom    string
-}{
-	{"internal/files", "files"},
-	{"internal/mail", "mail"},
-	{"internal/office", "office"},
-	{"internal/data", "data"},
+	// fichier is the source carrying the StorageClass, without its extension.
+	// It is <nom> except for mail, whose claim moved to volume.go when its size
+	// became a setting: the test follows the manifest, not the file name.
+	fichier string
+}
+
+var modules = []moduleManifeste{
+	{"internal/files", "files", ""},
+	{"internal/mail", "mail", "volume"},
+	{"internal/office", "office", ""},
+	{"internal/data", "data", ""},
 }
 
 // TestAucunManifesteNADeFormatNonResolu scans the source of each module and
@@ -75,9 +81,20 @@ func TestAucunManifesteNADeFormatNonResolu(t *testing.T) {
 func TestStorageClassNumeroteeEtNommee(t *testing.T) {
 	for _, m := range modules {
 		t.Run(m.nom, func(t *testing.T) {
-			source := lireSource(t, m.paquet, m.nom)
+			source := lireSource(t, m.paquet, m.fichierDe(m.nom))
 
+			ligne := ligneStorageClass(t, m.nom, source)
 			idx := indexStorageClass(t, source)
+			if idx == 0 {
+				// Concatenation, not an indexed verb: no index can be wrong,
+				// but the value written after `storageClassName:` must still
+				// be the class and not another parameter.
+				if !strings.Contains(ligne, " classe") && !strings.Contains(ligne, "storage.Classe()") {
+					t.Errorf("%s: storageClassName recoit %q, qui ne designe pas la StorageClass",
+						m.nom, strings.TrimSpace(ligne))
+				}
+				return
+			}
 			args := argumentsSprintf(t, source)
 
 			if idx < 1 || idx > len(args) {
@@ -96,6 +113,28 @@ func TestStorageClassNumeroteeEtNommee(t *testing.T) {
 			}
 		})
 	}
+}
+
+// fichierDe is the file carrying the module's StorageClass.
+func (m moduleManifeste) fichierDe(nom string) string {
+	if m.fichier != "" {
+		return m.fichier
+	}
+	return nom
+}
+
+// ligneStorageClass returns the line that declares the class, and fails when the
+// module no longer has one: without it this test would pass by examining
+// nothing, which is worse than not having it.
+func ligneStorageClass(t *testing.T, nom, source string) string {
+	t.Helper()
+	for _, l := range strings.Split(source, "\n") {
+		if strings.Contains(l, "storageClassName:") || strings.Contains(l, "storageClass:") {
+			return l
+		}
+	}
+	t.Fatalf("%s: aucune StorageClass dans le source examine — le test n'a plus d'objet", nom)
+	return ""
 }
 
 func estArgumentDeClasse(arg string) bool {

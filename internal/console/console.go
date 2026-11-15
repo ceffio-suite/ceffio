@@ -198,6 +198,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/modules/{id}/settings", s.requireAuth(s.handleModuleSettings))
 	mux.HandleFunc("POST /api/modules/{id}/settings/{group}", s.requireAuth(s.handleModuleSettingsSave))
 	mux.HandleFunc("POST /api/modules/{id}/settings/{group}/test", s.requireAuth(s.handleModuleSettingsTest))
+	// The prerequisite checks a module declares (module.Checker). Generic: the
+	// console knows no module name here, and a module added tomorrow is served
+	// without touching this file.
+	mux.HandleFunc("GET /api/modules/{id}/checks", s.requireAuth(s.handleModuleChecks))
 	mux.HandleFunc("/api/admin", s.requireAuth(s.handleAdmin))
 	mux.HandleFunc("/api/admin/rotate", s.requireAuth(s.handleAdminRotate))
 	// NO /api/apps routes: application management happens in the INTERFACE OF

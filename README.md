@@ -119,7 +119,7 @@ Helm releases the platform needs.
 | Identity | `internal/identity` | Keycloak, realm, OIDC clients, the sign-in theme |
 | Files | `internal/files` | Nextcloud |
 | Office | `internal/office` | ONLYOFFICE + Nextcloud connector |
-| Mail | `internal/mail` | Stalwart |
+| Mail | `internal/mail`, behind the `mail` module | Stalwart: the workload, the zones it generates, its checks. Optional since 0.11.0, installed by default |
 | Talk + HPB | `internal/talk` | Janus (SFU), signaling, coturn, NATS |
 | Secrets | `internal/vault` | OpenBao + injector |
 | Console | `internal/console` | Administration console |
@@ -158,15 +158,16 @@ generated from it — no feature list is hardcoded anywhere. Adding a feature me
 module; see [`docs/adding-a-module.md`](docs/adding-a-module.md).
 
 **Core modules** are the product: `storage`, `platform`, `data`, `identity`, `files`,
-`office`, `talk`, `mail`, `vault`, `ingress`, `console`. `ceffio install` deploys them in
-its own sequence, and they are removed only with the cluster (`ceffio uninstall`) —
-`ceffio module remove` refuses them.
+`office`, `talk`, `vault`, `ingress`, `console`. `ceffio install` deploys them in its own
+sequence, and they are removed only with the cluster (`ceffio uninstall`) — `ceffio module
+remove` refuses them.
 
 **Optional modules** are chosen by the operator, at install time (`--with`/`--without`) or
 afterwards (`ceffio module install <id>`, or the console's Modules page):
 
 | ID | Role | Resources | Requires | Installed by default |
 |---|---|---|---|---|
+| `mail` | Mail server (Stalwart): mailboxes, webmail, the platform's own sender, and eleven checks that say whether the outside world can actually reach it — MX, PTR, port 25, TLS, the published DNS records. `--without mail` leaves it out; `ceffio module install mail` adds it later | a 20 GiB volume, and the public ports 25, 465, 993 (see [docs/mail.md](docs/mail.md)) | `identity`, `ingress`, `files` | **yes** (`--without mail` to skip) |
 | `recording` | Records Talk calls: a hidden participant joins the room, renders it and uploads the result to Nextcloud. A **relay** in the same pod forwards Talk's recording requests and tells the capture when a recording starts | — (workload limited to 2 GiB RAM, no model download) | — | **yes** (`--without recording` to skip) |
 | `exapps-daemon` | HaRP runs the containers Nextcloud asks for, speaking the Kubernetes API directly — prerequisite of every external application | — | — | no |
 | `live-transcription` | Transcribes speech live during a Talk call, on this server, with open source speech models; nothing is sent to a third party | ~9 GB disk, ~16 GB RAM | `exapps-daemon` (installed automatically with it) | no |
@@ -220,6 +221,7 @@ Prerequisites:
 | `ceffio module remove <id>` | remove an optional module (`--yes` to skip confirmation) |
 | `ceffio module status <id>` | detailed state of a module (status, detail, blocked) |
 | `ceffio module config <id>` | read or write a module's settings (`--test`, secrets from stdin) |
+| `ceffio module check <id>` | run a module's external checks (exit 1 when one is blocking) |
 | `ceffio backup` | backup (databases, secrets, volumes) |
 | `ceffio restore` | restore from a backup |
 | `ceffio upgrade --plan` | show what would change, before changing it |
@@ -255,7 +257,7 @@ and the administration console reads and rotates through the same vault. Human l
 through OIDC (Keycloak); services authenticate to the vault through Kubernetes auth — two
 doors, never a shared token in a file.
 
-**OpenBao is the only _source_ of secrets. It is not the only _place_ they appear.** Three
+**OpenBao is the only _source_ of secrets. It is not the only _place_ they appear.** Two
 Kubernetes Secrets are written **from the vault**, because the software that reads them
 cannot be reached by the injector:
 
@@ -263,7 +265,6 @@ cannot be reached by the injector:
 |---|---|
 | `cert-manager/ceffio-acme-dns` | cert-manager resolves the ClusterIssuer's `secretRef` itself and cannot reach OpenBao |
 | `ceffio-video/ghcr-pull` | a `dockerconfigjson`, read by the kubelet from the API |
-| `ceffio-mail/*` | Stalwart's administration needs a credential when no pod is available to inject into |
 
 Each is a copy with a short life, rewritten from OpenBao on the next `ceffio install` —
 never a second source. The console **cannot read a secret's value**, by design: reading the
@@ -509,8 +510,9 @@ OpenBao vault.
 Open points, stated plainly:
 
 - **Mail sending depends on your provider.** Port 25 outbound is blocked by many ISPs; the
-  suite supports a smart-host relay, but publishing MX, SPF, DKIM and DMARC correctly is an
-  operator task (`ceffio dns` checks it).
+  suite supports a smart-host relay, and `ceffio module check mail` measures what is
+  published (MX, SPF, DKIM, DMARC, MTA-STS, TLS-RPT) against the zone Stalwart generated —
+  but the records themselves are an operator task, and so is the reverse DNS.
 - **One node is not a cluster.** Longhorn replicates across disks; losing the machine loses
   the data. The monitoring page says so rather than implying redundancy.
 - **The public address lookup is the only external dependency** (several STUN servers,
@@ -532,6 +534,7 @@ Open points, stated plainly:
 | [docs/secrets.md](docs/secrets.md) | The vault, the injector, and the Secrets that exist anyway |
 | [docs/tls.md](docs/tls.md) | HTTP-01 or DNS-01, the providers, the renewal |
 | [docs/media-and-firewall.md](docs/media-and-firewall.md) | Talk's ports and the firewall traps |
+| [docs/mail.md](docs/mail.md) | The mail module: Stalwart, the checks, the DNS records, the relay, backup |
 | [docs/sign-in-page.md](docs/sign-in-page.md) | The login theme, and how to leave it |
 | [docs/console-image.md](docs/console-image.md) | How the console is built and what it may do |
 | [docs/keycloak-production.md](docs/keycloak-production.md) | Keycloak in production mode |

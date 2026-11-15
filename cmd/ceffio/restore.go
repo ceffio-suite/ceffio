@@ -25,7 +25,13 @@ func newRestoreCmd() *cobra.Command {
 Order of application, imposed by the dependencies:
   1. the Secrets       — otherwise the database passwords no longer match
   2. the databases     — identities, accounts, metadata
-  3. the volumes       — the documents, which reference that metadata
+  3. the vault's entries — the credentials the applications look for
+  4. the volumes       — the documents, which reference that metadata, and
+                         the mail store, restored with the server stopped
+
+A vault restore into a NEW cluster fails on the last step and says so: the
+archived token was issued by the vault that no longer exists. The entries are
+then written by hand from vault/kv-ceffio.json (docs/secrets.md).
 
 The archive is VERIFIED before any write (manifest fingerprints): an
 incomplete or corrupted backup is refused rather than partially applied.

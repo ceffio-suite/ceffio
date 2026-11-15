@@ -47,6 +47,11 @@ type Config struct {
 	// If empty, it is looked up automatically by its SANs.
 	CertificatRef string
 	SousDomaines  []string // e.g. cloud, keycloak, office, admin
+	// Ports: L4/TCP ports to forward to IPInterne, e.g. 25, 465, 993 for the
+	// mail module. Optional and defaulted to nothing: a configuration file
+	// written before this field existed still loads, and an installation
+	// without inbound mail forwards no port (see PublierPorts in ports.go).
+	Ports []int `json:"ports"`
 }
 
 // Resultat reports what was done — and what already existed.
@@ -56,6 +61,14 @@ type Resultat struct {
 	Existants    []string `json:"existants"`
 	Applique     bool     `json:"applique"`
 	Avertissemts []string `json:"avertissements,omitempty"`
+
+	// Port forwards, filled by PublierPorts only (see ports.go). They live on
+	// the same report because the command prints one report: the domains and
+	// the L4 ports are part of the same exposure, and a caller that reads only
+	// Certificat/Created keeps working — the zero values mean "no port work".
+	PortsOuverts    []int    `json:"ports_ouverts,omitempty"`
+	PortsExistants  []int    `json:"ports_existants,omitempty"`
+	ReglesManuelles []string `json:"regles_manuelles,omitempty"`
 }
 
 // Minimal client for the OPNsense API.

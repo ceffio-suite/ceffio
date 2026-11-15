@@ -62,7 +62,7 @@ the console's rights are derived from those declarations.
 | Files | `internal/files` | Nextcloud, wired to PostgreSQL, Valkey and the vault |
 | Office | `internal/office` | ONLYOFFICE DocumentServer, connected to Nextcloud |
 | Talk | `internal/talk` | Talk signaling, Janus, coturn, the High Performance Backend |
-| Mail | `internal/mail` | Stalwart, its domains, DKIM, and the OIDC directory |
+| Mail | `internal/mail`, behind the `mail` module | Stalwart: the workload, the zones it generates, its checks, and the OIDC directory. Optional since 0.11.0, installed by default |
 | Vault | `internal/vault` | OpenBao: the single source of every secret |
 | Console | `internal/console` | The administration interface |
 
@@ -84,7 +84,6 @@ them can be removed on its own.
 | `files` | Files (Nextcloud) | `ceffio-files` |
 | `office` | Document editing (ONLYOFFICE) | `ceffio-office` |
 | `talk` | Talk media server | `ceffio-video` |
-| `mail` | Mail server (Stalwart) | `ceffio-mail` |
 | `vault` | Secrets vault | `ceffio-vault` |
 | `ingress` | Ingress & TLS | `ceffio-system`, `cert-manager`, and every application namespace |
 | `console` | Administration console | `ceffio-system` |
@@ -96,6 +95,7 @@ Installed by choice, either at install time (`--with <id>`) or afterwards
 
 | ID | What it adds | Requires | Default |
 |---|---|---|---|
+| `mail` | Stalwart: mailboxes, webmail, the platform's own sender, and the checks that say whether the outside world can reach it | `identity`, `ingress`, `files` | **yes** (`--without mail` to skip) |
 | `recording` | Records Talk calls, and carries the relay that forwards Talk's requests and wakes the capture | — | **yes** (`--without recording` to skip) |
 | `capture` | One audio track per participant, transcribed on this server and written beside the recording — told when to start by the relay, never by the database | `recording` | no |
 | `exapps-daemon` | HaRP, for Nextcloud external applications | — | no |

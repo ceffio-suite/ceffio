@@ -4,10 +4,15 @@
 package console
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	appsv1 "k8s.io/api/apps/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 // serveurMessagerie mounts a fake mail server and returns it with the console
@@ -110,5 +115,38 @@ func TestBaseMessagerieParDefaut(t *testing.T) {
 	s := &Server{Domain: "exemple.org"}
 	if got := s.baseMessagerie(); got != "https://mail.exemple.org" {
 		t.Fatalf("baseMessagerie = %q", got)
+	}
+}
+
+// TestLeLienStalwartSuitLEtatDuModule: the mail administration link and the
+// rotation step only appear when the mail module is installed.
+//
+// WHY THE PING IS NOT ENOUGH: an uninstalled mail module leaves no Ingress, and
+// Traefik answers 404 for the host — a code below 500, so `stalwartJoignable`
+// alone would call it present and send the operator to a page that does not
+// exist. The module's state is the authority.
+func TestLeLienStalwartSuitLEtatDuModule(t *testing.T) {
+	absent := &Server{Domain: "example.com", kube: fake.NewSimpleClientset()}
+	if absent.mailEstInstalle(context.Background()) {
+		t.Error("no mail deployment: the module cannot be reported installed")
+	}
+
+	installe := &Server{Domain: "example.com", kube: fake.NewSimpleClientset(
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "stalwart", Namespace: "ceffio-mail"},
+			Status:     appsv1.DeploymentStatus{ReadyReplicas: 1},
+		})}
+	if !installe.mailEstInstalle(context.Background()) {
+		t.Error("the mail deployment is ready: the module must be reported installed")
+	}
+
+	// DEGRADED COUNTS TOO: a server that is starting still has an
+	// administration page, and that is exactly when the operator needs it.
+	degrade := &Server{Domain: "example.com", kube: fake.NewSimpleClientset(
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "stalwart", Namespace: "ceffio-mail"},
+		})}
+	if !degrade.mailEstInstalle(context.Background()) {
+		t.Error("a deployment with no ready replica is Degraded, which still has a page to show")
 	}
 }

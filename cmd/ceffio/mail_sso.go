@@ -28,14 +28,11 @@ package main
 // serving its internal directory and the sign-in will never leave the page.
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/spf13/cobra"
 
-	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"github.com/ceffio-suite/ceffio/internal/mail"
 )
 
@@ -77,7 +74,7 @@ what makes a pending change take effect.`,
 				fmt.Println("∙ reapplying the single sign-on configuration")
 				// The issuer and the client are read from what is already
 				// configured, so a repair never invents a provider.
-				issuer, clientID, err := lireSSOExistant(ctx)
+				issuer, clientID, err := mail.SSOExistant(ctx)
 				if err != nil {
 					return err
 				}
@@ -94,13 +91,13 @@ what makes a pending change take effect.`,
 				// minus the admin domain: those are the addresses the platform
 				// serves.
 				if domaineMessagerie == "" {
-					d, err := domaineMessagerieExistant(ctx, domaineAdmin)
+					d, err := mail.DomaineMessagerieExistant(ctx, domaineAdmin)
 					if err != nil {
 						return err
 					}
 					domaineMessagerie = d
 				}
-				hote, err := hoteStalwart(ctx)
+				hote, err := mail.HoteStalwart(ctx)
 				if err != nil {
 					return err
 				}
@@ -118,13 +115,13 @@ what makes a pending change take effect.`,
 			}
 
 			// --- THE CHECK ---------------------------------------------------
-			reponse, err := discover(ctx, compte)
+			reponse, err := mail.Decouvrir(ctx, compte)
 			if err != nil {
 				return fmt.Errorf("the server did not answer: %w", err)
 			}
 
-			issuer := chaine(reponse["issuer"])
-			authEndpoint := chaine(reponse["authorization_endpoint"])
+			issuer, _ := reponse["issuer"].(string)
+			authEndpoint, _ := reponse["authorization_endpoint"].(string)
 
 			// THE DISTINCTION THAT MATTERS, and it is a property of the ANSWER
 			// rather than of the configuration: a relative endpoint means
@@ -163,151 +160,4 @@ what makes a pending change take effect.`,
 	cmd.Flags().BoolVar(&reparer, "repair", false,
 		"Reapply the configuration and restart Stalwart, then check again")
 	return cmd
-}
-
-// discover calls /api/discover for an account and returns the parsed answer.
-//
-// THROUGH THE POD, not through the public address: the call stays on the
-// internal network, works even when the ingress or the certificate is broken,
-// and asks the server itself rather than a proxy in front of it.
-func discover(ctx context.Context, compte string) (map[string]interface{}, error) {
-	script := `curl -s --max-time 15 "http://localhost:8080/api/discover/` + compte + `"`
-	out, err := k8s.Command(ctx, "kubectl", "-n", "ceffio-mail", "exec", "deploy/stalwart",
-		"-c", "stalwart", "--", "sh", "-c", script).CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("%w: %s", err, tronquer(string(out), 200))
-	}
-	var reponse map[string]interface{}
-	if err := json.Unmarshal(out, &reponse); err != nil {
-		return nil, fmt.Errorf("unreadable answer (%s): %w", tronquer(string(out), 200), err)
-	}
-	return reponse, nil
-}
-
-// lireSSOExistant returns the issuer and the client already configured.
-//
-// READ FROM THE SERVER rather than from an option: a repair must not be able to
-// invent a provider. An operator who runs it on an installation pointed at
-// Authentik would otherwise silently get Keycloak.
-func lireSSOExistant(ctx context.Context) (string, string, error) {
-	script := `. /secrets/env 2>/dev/null; ` +
-		`curl -s --max-time 15 -u "$STALWART_RECOVERY_ADMIN" -H "Content-Type: application/json" ` +
-		`-X POST http://localhost:8080/jmap -d '{"using":[],"methodCalls":[["x:Directory/get",` +
-		`{"accountId":"d333333","properties":["@type","issuerUrl","requireAudience"]},"c1"]]}'`
-	out, err := k8s.Command(ctx, "kubectl", "-n", "ceffio-mail", "exec", "deploy/stalwart",
-		"-c", "stalwart", "--", "sh", "-c", script).CombinedOutput()
-	if err != nil {
-		return "", "", fmt.Errorf("reading the OIDC directory: %w: %s", err, tronquer(string(out), 200))
-	}
-	var reponse struct {
-		MethodResponses []json.RawMessage `json:"methodResponses"`
-	}
-	if err := json.Unmarshal(out, &reponse); err != nil || len(reponse.MethodResponses) == 0 {
-		return "", "", fmt.Errorf("unreadable directory answer: %s", tronquer(string(out), 200))
-	}
-	var couple []json.RawMessage
-	if err := json.Unmarshal(reponse.MethodResponses[0], &couple); err != nil || len(couple) < 2 {
-		return "", "", fmt.Errorf("unexpected answer: %s", tronquer(string(out), 200))
-	}
-	var corps struct {
-		List []struct {
-			Type     string `json:"@type"`
-			Issuer   string `json:"issuerUrl"`
-			Audience string `json:"requireAudience"`
-		} `json:"list"`
-	}
-	if err := json.Unmarshal(couple[1], &corps); err != nil {
-		return "", "", fmt.Errorf("unreadable directory body: %w", err)
-	}
-	for _, d := range corps.List {
-		if d.Type == "Oidc" && d.Issuer != "" {
-			return d.Issuer, d.Audience, nil
-		}
-	}
-	return "", "", nil
-}
-
-// domaineMessagerieExistant returns the mail domain the server already declares.
-//
-// THE DOMAIN OF THE ADDRESSES, read from the server rather than guessed from the
-// web host: they are different things, and mixing them creates a domain that
-// receives nothing. The admin domain is excluded — it carries accounts, not mail.
-func domaineMessagerieExistant(ctx context.Context, domaineAdmin string) (string, error) {
-	script := `. /secrets/env 2>/dev/null; ` +
-		`curl -s --max-time 15 -u "$STALWART_RECOVERY_ADMIN" -H "Content-Type: application/json" ` +
-		`-X POST http://localhost:8080/jmap -d '{"using":[],"methodCalls":[["x:Domain/get",` +
-		`{"accountId":"d333333","properties":["name"]},"c1"]]}'`
-	out, err := k8s.Command(ctx, "kubectl", "-n", "ceffio-mail", "exec", "deploy/stalwart",
-		"-c", "stalwart", "--", "sh", "-c", script).CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("reading the declared domains: %w: %s", err, tronquer(string(out), 200))
-	}
-	var reponse struct {
-		MethodResponses []json.RawMessage `json:"methodResponses"`
-	}
-	if err := json.Unmarshal(out, &reponse); err != nil || len(reponse.MethodResponses) == 0 {
-		return "", fmt.Errorf("unreadable domain answer: %s", tronquer(string(out), 200))
-	}
-	var couple []json.RawMessage
-	if err := json.Unmarshal(reponse.MethodResponses[0], &couple); err != nil || len(couple) < 2 {
-		return "", fmt.Errorf("unexpected answer: %s", tronquer(string(out), 200))
-	}
-	var corps struct {
-		List []struct {
-			Name string `json:"name"`
-		} `json:"list"`
-	}
-	if err := json.Unmarshal(couple[1], &corps); err != nil {
-		return "", fmt.Errorf("unreadable domain body: %w", err)
-	}
-	for _, d := range corps.List {
-		if d.Name != "" && d.Name != domaineAdmin {
-			return d.Name, nil
-		}
-	}
-	return "", fmt.Errorf("the server declares no mail domain other than %q: "+
-		"pass --domaine explicitly", domaineAdmin)
-}
-
-// hoteStalwart returns the public host the server publishes.
-//
-// FROM ITS OWN DISCOVERY DOCUMENT: the host is what the server believes it is,
-// and an operator who fronts it on another name would otherwise get a
-// configuration pointing at the wrong address.
-func hoteStalwart(ctx context.Context) (string, error) {
-	script := `curl -s --max-time 15 http://localhost:8080/.well-known/openid-configuration`
-	out, err := k8s.Command(ctx, "kubectl", "-n", "ceffio-mail", "exec", "deploy/stalwart",
-		"-c", "stalwart", "--", "sh", "-c", script).CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("reading the server's own discovery: %w: %s", err, tronquer(string(out), 200))
-	}
-	var doc struct {
-		Issuer string `json:"issuer"`
-	}
-	if err := json.Unmarshal(out, &doc); err != nil {
-		return "", fmt.Errorf("unreadable discovery (%s): %w", tronquer(string(out), 200), err)
-	}
-	hote := strings.TrimPrefix(strings.TrimPrefix(doc.Issuer, "https://"), "http://")
-	if hote == "" {
-		return "", fmt.Errorf("the server publishes no issuer: its public URL is not configured")
-	}
-	return hote, nil
-}
-
-// tronquer shortens an output for an error message.
-//
-// The console's helper is unexported and lives in another package; this command
-// needs the same behaviour for its own error paths.
-func tronquer(s string, n int) string {
-	s = strings.TrimSpace(s)
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
-}
-
-// chaine reads a string field, tolerating a null.
-func chaine(v interface{}) string {
-	s, _ := v.(string)
-	return s
 }

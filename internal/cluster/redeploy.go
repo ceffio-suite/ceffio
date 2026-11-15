@@ -16,7 +16,6 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/identity"
 	"github.com/ceffio-suite/ceffio/internal/ingress"
 	"github.com/ceffio-suite/ceffio/internal/k8sapi"
-	"github.com/ceffio-suite/ceffio/internal/mail"
 	"github.com/ceffio-suite/ceffio/internal/office"
 	"github.com/ceffio-suite/ceffio/internal/platform"
 	"github.com/ceffio-suite/ceffio/internal/publicip"
@@ -83,10 +82,19 @@ func Redeployer(ctx context.Context, domain string) error {
 	if err := apps.Deploy(ctx); err != nil {
 		return err
 	}
-	// THEMING, VAULT AND MAIL ARE CORE LAYERS TOO. They were in neither replay
-	// either: an upgrade left the mailbox and the vault on the version they were
-	// installed with, and finished with "openbao : still on 2.7.1 (target 2.7.2)".
-	// The order follows the install sequence.
+	// THEMING AND VAULT ARE CORE LAYERS TOO. They were in neither replay either:
+	// an upgrade left the vault on the version it was installed with, and
+	// finished with "openbao : still on 2.7.1 (target 2.7.2)". The order
+	// follows the install sequence.
+	//
+	// MAIL IS DELIBERATELY ABSENT FROM THIS LIST NOW. It used to be replayed
+	// here, unconditionally, because being a Core module it had no other replay
+	// path. It is an optional module since the mail plan, and the optional
+	// modules are replayed right after this function by module.RejouerInstalles
+	// — so keeping this call would deploy Stalwart twice per upgrade, and on a
+	// 0.10.x cluster it would deploy it even where the module is not installed.
+	// The relay and the SSO configuration follow the module's Install, which is
+	// the only place they are defined now.
 	if err := theming.Deploy(ctx); err != nil {
 		return err
 	}
@@ -95,22 +103,6 @@ func Redeployer(ctx context.Context, domain string) error {
 		// suivent lisent leurs secrets au démarrage), mais le taire ferait
 		// passer une installation dégradée pour une réussite.
 		fmt.Printf("  ! vault not ready after the replay (%s)\n", res.Adresse)
-	}
-	// THE SEND RELAY IS NOT REPLAYED: it lives in Stalwart's own configuration,
-	// written through its admin API, and the install path only verifies it. An
-	// empty relay here therefore changes nothing — it must not wipe what the
-	// operator configured.
-	if err := mail.Deploy(ctx, domain, "", 0, "", ""); err != nil {
-		return err
-	}
-	if err := mail.ConfigurerSSO(ctx, domain, mail.SSO{
-		Hote:         mail.DomaineMessagerie(domain),
-		Issuer:       "https://keycloak." + domain + "/realms/ceffio",
-		ClientID:     "stalwart-webui",
-		DomaineAdmin: "ceffio.local",
-		CompteAdmin:  "adminceffio",
-	}); err != nil {
-		return err
 	}
 
 	// 5. SSO then ingress: these steps write into the applications, so they

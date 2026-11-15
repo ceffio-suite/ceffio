@@ -16,7 +16,7 @@ import (
 // below stays readable like the product itself.
 var idsSocle = []string{
 	"storage", "platform", "data", "vault", "identity", "files",
-	"office", "public-ip", "talk", "ingress", "mail", "console",
+	"office", "public-ip", "talk", "ingress", "console",
 }
 
 // entreeCatalogue is the REFERENCE COPY of a row of catalogueServices
@@ -158,23 +158,38 @@ func TestLesCouchesDuSocleSontDesModulesCore(t *testing.T) {
 	}
 }
 
-// TestMailNeFaitPasSemblantDInstaller checks the delicate case of the
-// batch: mail.Deploy requires the SMTP relay settings that Env does not
-// carry. The module must refuse outright, with an error that names the REAL
-// installer — never delegate with an empty relay (a Stalwart without a
-// relay runs, receives, and sends nothing: a silently broken
-// installation).
-func TestMailNeFaitPasSemblantDInstaller(t *testing.T) {
+// TestMailANePlusFaireSemblantDInstaller.
+//
+// THE TEST IT REPLACES ASSERTED THE OPPOSITE, and that is the point of keeping
+// the name in the history: mail used to be a Core module whose Install refused
+// outright, because the SMTP relay lived in the install sequence and not in the
+// module's environment. The refusal was honest; it is also gone, and it must
+// not come back — mail now reads its own settings through Env.Settings (the
+// mail plan), so a fresh installation with mail selected really installs it.
+//
+// WHAT THIS CHECKS is the piece that survives: the module is Optional, it is
+// installed by default, and it declares its prerequisites instead of assuming
+// them. The installation itself needs a cluster and is exercised by the flags
+// tests and, live, on a dedicated host.
+func TestMailANePlusFaireSemblantDInstaller(t *testing.T) {
 	m, ok := module.Get("mail")
 	if !ok {
 		t.Fatal("module \"mail\" is not registered")
 	}
-	err := m.Install(context.Background(), module.Env{Domain: "ceffio.example.com"})
-	if err == nil {
-		t.Fatal("mail Install must return an error: the SMTP relay settings live in the install sequence, not in Env")
+	info := m.Info()
+	if info.Kind != module.Optional {
+		t.Errorf("Kind = %v, expected module.Optional: mail is installed like the other optional modules", info.Kind)
 	}
-	if !strings.Contains(err.Error(), "install sequence") {
-		t.Errorf("mail Install error must name the real installer, got: %v", err)
+	if !info.Default {
+		t.Error("Default is false: every installation used to have a mail server, so a default install must keep one")
+	}
+	voulu := []string{"identity", "ingress", "files"}
+	if strings.Join(info.Requires, ",") != strings.Join(voulu, ",") {
+		t.Errorf("Requires = %v, expected %v: the module needs identity (SSO), ingress (the public host) "+
+			"and files (the Nextcloud accounts) to exist before it installs", info.Requires, voulu)
+	}
+	if info.Warning != "" {
+		t.Errorf("Warning = %q: the old \"install from the main sequence\" warning no longer applies", info.Warning)
 	}
 }
 
@@ -199,7 +214,7 @@ func TestEtatSansClientDitInconnu(t *testing.T) {
 // startup on a collision, but a future rename must be caught here, with a
 // readable message, rather than in an init panic).
 func TestPasDeCollisionAvecLesModulesOptionnels(t *testing.T) {
-	optionnels := []string{"exapps-daemon", "live-transcription", "recording", "longhorn-ui"}
+	optionnels := []string{"exapps-daemon", "live-transcription", "recording", "longhorn-ui", "mail"}
 	vus := map[string]bool{}
 	for _, id := range append(append([]string{}, idsSocle...), optionnels...) {
 		if vus[id] {

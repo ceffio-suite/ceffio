@@ -69,6 +69,12 @@ type moduleView struct {
 	// settings, and it is the difference with the Modules section, where only
 	// Optional ones carry an Install button.
 	Configurable bool `json:"configurable"`
+	// Checkable tells the page whether the module declares prerequisite checks
+	// (module.Checker), and therefore whether to ask for its checks. Resolved
+	// the same way as Configurable: the page cannot ask "does this module
+	// implement an interface?", and a flag keeps the API the single source of
+	// truth for the shape of the page.
+	Checkable bool `json:"checkable"`
 }
 
 // kindName serializes the Kind: the browser filters the module cards on
@@ -133,6 +139,7 @@ func (s *Server) viewFor(ctx context.Context, m module.Module) moduleView {
 	// a flag. Resolved here, so the answer comes from the same registry the
 	// settings routes use.
 	_, v.Configurable = m.(module.Configurable)
+	_, v.Checkable = m.(module.Checker)
 	if op, ok := s.ops.current(info.ID); ok && op.running {
 		status := module.Installing
 		if op.action == actionUninstall {

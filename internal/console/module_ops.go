@@ -184,10 +184,19 @@ func (w journalWriter) Write(p []byte) (int, error) {
 // ends — which is immediate for a 202. Using it would kill the operation
 // the instant it was accepted.
 func (s *Server) runOperation(id string, m module.Module, a action) {
+	// THE ENVIRONMENT IS THE COMPLETE ONE, the same shape as the CLI's: a
+	// module installed from the console must be able to read and write its
+	// settings exactly like one installed from `ceffio install`. Without
+	// ModuleID, Settings and Secrets the mail module could not apply its server
+	// settings on install — the console would deploy a server around values it
+	// cannot see.
 	env := module.Env{
-		Domain: s.Domain,
-		Kube:   s.kube,
-		Out:    journalWriter{id: id, ops: s.ops},
+		Domain:   s.Domain,
+		Kube:     s.kube,
+		Out:      journalWriter{id: id, ops: s.ops},
+		ModuleID: id,
+		Settings: s.settingsCM,
+		Secrets:  s.settingsSec,
 	}
 	go func() {
 		// The operation outlives every request: a canceled parent would

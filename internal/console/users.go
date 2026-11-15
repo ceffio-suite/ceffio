@@ -24,6 +24,14 @@ type KCUser struct {
 	// to TAKE it OUT of the list of ordinary accounts: it is not managed like
 	// a user, it administers.
 	Protege bool `json:"protege,omitempty"`
+	// Attributes carries the Keycloak user attributes, so a module can
+	// recognize its own users (the mail module writes ceffio_kind=internal and
+	// reads it back to tell an internal user from an external one).
+	//
+	// They are read WITH the list (briefRepresentation=false) rather than in
+	// one request per user: the Users page lists every account, and a module
+	// asking "is this one of mine?" must not cost a round trip each.
+	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
 // estCompteProtege says whether an identifier designates the platform
@@ -125,17 +133,24 @@ func (s *Server) kcReq(r *http.Request, method, path, body string) (*http.Respon
 // one of the two changes, the other protects an account that no longer
 // exists — silently.
 func (s *Server) listUsers(r *http.Request) ([]KCUser, error) {
-	resp, err := s.kcReq(r, http.MethodGet, "/admin/realms/"+realm+"/users", "")
+	// briefRepresentation=false: the attributes a module needs are not part of
+	// the brief form, and asking per user would make the page load O(users).
+	resp, err := s.kcReq(r, http.MethodGet, "/admin/realms/"+realm+"/users?briefRepresentation=false", "")
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	var users []KCUser
-	if err := json.NewDecoder(resp.Body).Decode(&users); err != nil {
+	var bruts []kcUserComplet
+	if err := json.NewDecoder(resp.Body).Decode(&bruts); err != nil {
 		return nil, err
 	}
-	for i := range users {
-		users[i].Protege = estCompteProtege(users[i].Username)
+	users := make([]KCUser, 0, len(bruts))
+	for _, b := range bruts {
+		users = append(users, KCUser{
+			ID: b.ID, Username: b.Username, Email: b.Email, Enabled: b.Enabled,
+			Protege:    estCompteProtege(b.Username),
+			Attributes: premierAttribut(b.Attributes),
+		})
 	}
 	return users, nil
 }
@@ -151,24 +166,27 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			apiErr(w, 502, "list users: "+err.Error())
 			return
 		}
-		writeJSON(w, 200, map[string]any{"users": users})
+		// THE PAGE IS SERVED WHAT THE INSTALLED MODULES DECLARE, never a list
+		// the console wrote down: a module installed tomorrow adds its fields
+		// and its account column without this handler changing.
+		champs, comptes, errs := s.comptesPourPage(r.Context(), users)
+		reponse := map[string]any{"users": users, "fields": champs, "accounts": comptes}
+		if len(errs) > 0 {
+			reponse["account_errors"] = errs
+		}
+		writeJSON(w, 200, reponse)
 
 	case http.MethodPost:
-		var body struct {
-			Username string `json:"username"`
-			Email    string `json:"email"`
-			Password string `json:"password"`
-		}
+		var body creationUtilisateur
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Username) == "" {
 			apiErr(w, 400, "username required")
 			return
 		}
-		id, err := s.createUser(r, body.Username, body.Email, body.Password)
-		if err != nil {
-			apiErr(w, 502, "user creation: "+err.Error())
-			return
-		}
-		writeJSON(w, 201, map[string]any{"id": id, "username": body.Username, "created": true})
+		// The whole creation, module objects included, lives in
+		// users_accounts.go: this handler only decodes and refuses an empty
+		// username, so the console keeps ONE creation path whatever the number
+		// of modules taking part.
+		s.creerUtilisateurCompte(w, r, body)
 
 	default:
 		apiErr(w, 405, "method not supported")
@@ -221,7 +239,20 @@ func (s *Server) createUser(r *http.Request, username, email, password string) (
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusConflict {
-		return "", fmt.Errorf("user %q already exists", username)
+		// A RETRY OF A CREATION THAT FAILED LATER must finish, not stop on a
+		// conflict: the Keycloak account is the FIRST step, so the page's retry
+		// after a mailbox failure always finds it. Adopting the account and
+		// re-running the idempotent steps is what makes the retry converge —
+		// reporting "already exists" would leave the operator with a user and
+		// no way to finish it from the page.
+		id, err := s.idParNom(r, username)
+		if err != nil {
+			return "", fmt.Errorf("user %q already exists", username)
+		}
+		if err := s.creerCompteNextcloud(r.Context(), username, password); err != nil {
+			fmt.Printf("  ⚠ %s exists in Keycloak but not in Nextcloud: %v\n", username, err)
+		}
+		return id, nil
 	}
 	if resp.StatusCode != http.StatusCreated {
 		return "", fmt.Errorf("Keycloak responded %d", resp.StatusCode)
@@ -271,7 +302,7 @@ func (s *Server) creerCompteNextcloud(ctx context.Context, identifiant, mdp stri
 	script := "export OC_PASS=" + shellQuote(mdp) + "; " +
 		"php occ user:add --password-from-env " + shellQuote(identifiant) + " >/dev/null 2>&1 || true; " +
 		"php occ user:info " + shellQuote(identifiant) + " >/dev/null 2>&1 || { echo 'account absent after creation'; exit 1; }"
-	sortie, err := s.occScript(ctx, script)
+	sortie, err := executerOcc(s, ctx, script)
 	if err != nil {
 		return fmt.Errorf("creating %s in Nextcloud: %w: %s", identifiant, err, tronquer(sortie, 160))
 	}
@@ -292,10 +323,31 @@ func (s *Server) setPassword(r *http.Request, id, password string) error {
 	return nil
 }
 
-// POST /api/users/{id}/deactivate|password
+// POST /api/users/{id}/{action} and POST /api/users/{id}/accounts/{module}/{action}
+//
+// THE ROUTE LIST DOES NOT GROW: every user gesture is served under
+// /api/users/, which keeps the closed set of endpoints the console exposes
+// unchanged from the operator's point of view. The module actions are nested
+// because the module id is part of them, and a flat route
+// /api/users/{id}/{module}/{action} would collide with the lifecycle verbs.
 func (s *Server) handleUsersByID(w http.ResponseWriter, r *http.Request) {
 	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/users/"), "/")
 	parts := strings.Split(rest, "/")
+	if len(parts) == 4 && parts[1] == "accounts" && parts[0] != "" && parts[2] != "" && parts[3] != "" {
+		if r.Method != http.MethodPost {
+			apiErr(w, 405, "method not supported")
+			return
+		}
+		// The administration account is protected for the module actions too:
+		// suspending its mailbox would be a way around the refusal below.
+		if s.estUtilisateurProtege(r, parts[0]) {
+			apiErr(w, 403, "\""+compteAdmin+"\" is the platform administration account: "+
+				"its accounts cannot be modified here.")
+			return
+		}
+		s.handleActionCompte(w, r, parts[0], parts[2], parts[3])
+		return
+	}
 	if len(parts) != 2 || parts[0] == "" {
 		apiErr(w, 400, "expected path: /api/users/{id}/{action}")
 		return
@@ -330,6 +382,13 @@ func (s *Server) handleUsersByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		resp.Body.Close()
+		// THE MODULES FOLLOW: a deactivated user whose mailbox still receives
+		// mail is the exact hole this order closes — Keycloak first (no new
+		// sessions), then the objects the modules own.
+		if err := s.suspendreOuReprendre(r, id, true); err != nil {
+			apiErr(w, 502, "account deactivated, but its module accounts are not: "+err.Error())
+			return
+		}
 		writeJSON(w, 200, map[string]any{"deactivated": true, "id": id})
 	// REACTIVATE is the INVERSE of deactivate, and it did not exist:
 	// deactivating an account by mistake left no recourse from the interface,
@@ -343,6 +402,10 @@ func (s *Server) handleUsersByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		resp.Body.Close()
+		if err := s.suspendreOuReprendre(r, id, false); err != nil {
+			apiErr(w, 502, "account reactivated, but its module accounts are not: "+err.Error())
+			return
+		}
 		writeJSON(w, 200, map[string]any{"reactivated": true, "id": id})
 	case "password":
 		var body struct {
@@ -358,6 +421,10 @@ func (s *Server) handleUsersByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, 200, map[string]any{"passwordUpdated": true, "id": id})
+	// DELETION IS THE ONE GESTURE THAT CANNOT BE UNDONE: it removes the module
+	// objects, the Nextcloud account and the Keycloak account, in that order.
+	case "delete":
+		s.handleDelete(w, r, id)
 	default:
 		apiErr(w, 405, "unknown action")
 	}
