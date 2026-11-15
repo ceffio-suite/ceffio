@@ -1083,6 +1083,19 @@ func TestVerifierTestEntrant(t *testing.T) {
 		attendreContient(t, check, "detail", "is authenticated")
 	})
 
+	t.Run("verdict SPF de l'expéditeur", func(t *testing.T) {
+		s := installerSocle(t)
+		// The server reports the HELO identity first; SPF is about the MAIL FROM
+		// identity (RFC 7208), so its verdict is the one to display.
+		jmapEntrant(t, "alice@example.net",
+			"mx.example.net; spf=none (mx.example.net: no SPF records found for postmaster@mail.example.net) smtp.helo=mail.example.net; "+
+				"spf=pass (mx.example.net: domain of alice@example.net designates 203.0.113.10 as permitted sender) smtp.mailfrom=alice@example.net; "+
+				"dkim=pass header.d=example.net; dmarc=pass header.from=example.net")
+		check := verifierTestEntrant(context.Background(), s.contexte("ceffio.org", ReglagesParDefaut()))
+		attendreNiveau(t, check, module.CheckOK)
+		attendreContient(t, check, "detail", "SPF pass, DKIM pass, DMARC pass")
+	})
+
 	t.Run("messages illisibles", func(t *testing.T) {
 		s := installerSocle(t)
 		check := verifierTestEntrant(context.Background(), s.contexte("ceffio.org", ReglagesParDefaut()))

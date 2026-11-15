@@ -1646,9 +1646,15 @@ func expediteurDe(message map[string]any) string {
 // verdictsAuthentification extracts the SPF/DKIM/DMARC verdicts of the
 // Authentication-Results header(s).
 var (
-	motifSPF   = regexp.MustCompile(`(?i)\bspf=(\w+)`)
-	motifDKIM  = regexp.MustCompile(`(?i)\bdkim=(\w+)`)
-	motifDMARC = regexp.MustCompile(`(?i)\bdmarc=(\w+)`)
+	// motifSPF finds the first SPF result, whatever identity it evaluated.
+	motifSPF = regexp.MustCompile(`(?i)\bspf=(\w+)`)
+	// motifSPFAvecExpediteur finds the SPF result of the MAIL FROM identity: the
+	// one SPF is about (RFC 7208). A server may report the HELO identity first
+	// ("spf=none (… smtp.helo=…)"), which must not hide the verdict that
+	// authenticates the sender ("spf=pass (… smtp.mailfrom=…)").
+	motifSPFAvecExpediteur = regexp.MustCompile(`(?i)\bspf=(\w+)[^;]*\bsmtp\.mailfrom=`)
+	motifDKIM              = regexp.MustCompile(`(?i)\bdkim=(\w+)`)
+	motifDMARC             = regexp.MustCompile(`(?i)\bdmarc=(\w+)`)
 )
 
 // authentification holds the three verdicts, "absent" when not reported.
@@ -1662,7 +1668,9 @@ func verdictsAuthentification(entetes string) authentification {
 		return authentification{SPF: "absent", DKIM: "absent", DMARC: "absent"}
 	}
 	v := authentification{SPF: "absent", DKIM: "absent", DMARC: "absent"}
-	if m := motifSPF.FindStringSubmatch(entetes); m != nil {
+	if m := motifSPFAvecExpediteur.FindStringSubmatch(entetes); m != nil {
+		v.SPF = strings.ToLower(m[1])
+	} else if m := motifSPF.FindStringSubmatch(entetes); m != nil {
 		v.SPF = strings.ToLower(m[1])
 	}
 	if m := motifDKIM.FindStringSubmatch(entetes); m != nil {
