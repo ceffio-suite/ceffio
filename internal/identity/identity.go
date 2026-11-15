@@ -13,6 +13,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"github.com/ceffio-suite/ceffio/internal/identity/theme"
 	"github.com/ceffio-suite/ceffio/internal/k8s"
@@ -51,6 +52,7 @@ var keycloakImage = version.Image("keycloak")
 //  2. Keycloak admin secret (generated)
 //  3. Keycloak deployment (postgres) + service
 //  4. creation of the "ceffio" realm via kcadm + verification
+//  5. user-profile policy that lets the suite keep its account attributes
 func Deploy(ctx context.Context) error {
 	fmt.Println("\nDeploying the identity layer (Phase 4)...")
 
@@ -73,6 +75,27 @@ func Deploy(ctx context.Context) error {
 		return err
 	}
 	if err := verifyRealm(ctx); err != nil {
+		return err
+	}
+
+	// THE DIRECTORY MUST KEEP THE ATTRIBUTES THE SUITE WRITES.
+	//
+	// Keycloak 26 treats an attribute that its declarative user profile does not
+	// declare as UNMANAGED, and the default policy is DISABLED. The failure is
+	// silent and it is not the one you would expect: `kcadm create users` with an
+	// `attributes` map exits 0, and the account reads back with NO attributes at
+	// all. Measured on Keycloak 26.8.2, the version this release ships.
+	//
+	// WHY IT MATTERS HERE: the module contract (module.User.Attributes) is where
+	// a module marks an account as its own — the mail module stores
+	// `ceffio_kind: internal` there — and the console writes it. With the policy
+	// DISABLED, every one of those writes vanished while every call reported
+	// success.
+	//
+	// ADMIN_EDIT is the narrowest setting that works: administrators may write
+	// unmanaged attributes, end users may not. It is a convergence step (read,
+	// patch, write back), so it repairs realms installed before this fix.
+	if err := autoriserAttributsPlateforme(ctx); err != nil {
 		return err
 	}
 
@@ -542,6 +565,71 @@ func verifyRealm(ctx context.Context) error {
 		}
 	}
 	return fmt.Errorf("ceffio realm not found in the database after 30s")
+}
+
+// executerKcadm is the seam the user-profile convergence is tested through; it
+// points at the exported wrapper beside the theme code, which connects kcadm to
+// the realm with the bootstrap credential read from the pod's environment.
+var executerKcadm = ExecuterKcadm
+
+// autoriserAttributsPlateforme lets the ceffio realm keep the attributes the
+// module contract writes (`ceffio_kind`, and whatever the next module adds).
+//
+// THE PROFILE IS READ, PATCHED AND WRITTEN BACK AS A WHOLE, and that is not
+// caution: `kcadm update users/profile -f` REPLACES the representation. A
+// document carrying only the policy wiped the four default fields (username,
+// email, firstName, lastName) in a live probe on 2026-11-14 — the login page
+// would have rendered a form that cannot register anybody.
+//
+// THE VALUE IS VERIFIED, NOT ASSUMED: the profile is read even when the realm was
+// created by this very run, because the realm representation does not carry the
+// policy. A read that does not land on ADMIN_EDIT is corrected; a read-back that
+// still does not land is an error — the alternative is a release whose documented
+// account contract silently does nothing.
+func autoriserAttributsPlateforme(ctx context.Context) error {
+	const policy = "ADMIN_EDIT"
+	profil, err := lireProfilUtilisateur(ctx)
+	if err != nil {
+		return err
+	}
+	if profil["unmanagedAttributePolicy"] == policy {
+		fmt.Println("∙ user profile: administrator-managed attributes allowed, nothing to do")
+		return nil
+	}
+	profil["unmanagedAttributePolicy"] = policy
+	corps, err := json.Marshal(profil)
+	if err != nil {
+		return fmt.Errorf("encoding the user profile: %w", err)
+	}
+	if _, err := executerKcadm(ctx, ns, string(corps),
+		`/opt/keycloak/bin/kcadm.sh update users/profile -r `+RealmCeffio+` -f /dev/stdin`); err != nil {
+		return fmt.Errorf("allowing administrator-managed attributes: %w", err)
+	}
+	if relu, err := lireProfilUtilisateur(ctx); err != nil {
+		return err
+	} else if relu["unmanagedAttributePolicy"] != policy {
+		return fmt.Errorf("the user profile still does not allow administrator-managed attributes after the write")
+	}
+	fmt.Println("∙ user profile: administrator-managed attributes allowed")
+	return nil
+}
+
+// lireProfilUtilisateur returns the realm's declarative user profile, as kcadm
+// prints it (the progress lines around the document are stripped).
+func lireProfilUtilisateur(ctx context.Context) (map[string]any, error) {
+	out, err := executerKcadm(ctx, ns, "", `/opt/keycloak/bin/kcadm.sh get users/profile -r `+RealmCeffio)
+	if err != nil {
+		return nil, err
+	}
+	corps := CorpsJSON(out)
+	if strings.TrimSpace(corps) == "" {
+		return nil, fmt.Errorf("the user profile read-back returned no JSON document: %.200q", strings.TrimSpace(out))
+	}
+	var profil map[string]any
+	if err := json.Unmarshal([]byte(corps), &profil); err != nil {
+		return nil, fmt.Errorf("decoding the user profile: %w", err)
+	}
+	return profil, nil
 }
 
 func psqlExec(ctx context.Context, sql string) error {

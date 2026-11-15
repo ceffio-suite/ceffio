@@ -283,6 +283,64 @@ func TestValidationRefuseUneAdresseDejaPrise(t *testing.T) {
 	}
 }
 
+// TestValidationAdopteLaBoiteDuMemeNom: a creation that stopped between the
+// mailbox and its credential leaves the address taken BY THE USER'S OWN
+// ACCOUNT. The retry the CLI advertises ("run the same command again") must
+// complete that mailbox instead of refusing the address: refusing leaves an
+// account nobody can use and no gesture to finish it.
+func TestValidationAdopteLaBoiteDuMemeNom(t *testing.T) {
+	f := nouveauFauxBoites()
+	// Both addresses the name would take are already held by a mailbox bearing
+	// that name: the state a half-finished creation leaves behind.
+	f.pris["alice@example.com"] = "alice"
+	f.pris["alice@ceffio.local"] = "alice"
+	installerBoites(t, f)
+	err := (&mailModule{}).ValidateAccount(context.Background(), envCompte(&strings.Builder{}),
+		utilisateur("id", "alice", ""), module.Values{cleBoite: "true", cleQuotaGio: "1"})
+	if err != nil {
+		t.Fatalf("the retry was refused on the user's own mailbox: %v", err)
+	}
+
+	// And the retry CONVERGES: the module completes the existing mailbox, its
+	// credential and its Nextcloud Mail account, and creates no second account.
+	res, err := (&mailModule{}).EnsureAccount(context.Background(), envCompte(&strings.Builder{}),
+		utilisateur("id", "alice", ""), module.Values{cleBoite: "true", cleQuotaGio: "1"})
+	if err != nil {
+		t.Fatalf("completing the mailbox failed: %v", err)
+	}
+	if res.Email != "alice@example.com" {
+		t.Errorf("the result advertises %q, expected alice@example.com", res.Email)
+	}
+	if res.Attributes[attributInterne] != valeurInterne {
+		t.Errorf("the result does not mark the user internal: %v", res.Attributes)
+	}
+	for _, prefixe := range []string{"assurerCompteCourriel:alice", "assurerMotDePasseCompte:alice", "assurerMailNextcloud:alice"} {
+		trouve := false
+		for _, appel := range f.appels {
+			if strings.HasPrefix(appel, prefixe) {
+				trouve = true
+				break
+			}
+		}
+		if !trouve {
+			t.Errorf("the retry did not converge through %q: %v", prefixe, f.appels)
+		}
+	}
+}
+
+// TestValidationRefuseLaBoiteDUnAutreNom: adoption is limited to the mailbox of
+// the user being created; an address held by SOMEBODY ELSE stays a refusal.
+func TestValidationRefuseLaBoiteDUnAutreNom(t *testing.T) {
+	f := nouveauFauxBoites()
+	f.pris["alice@ceffio.local"] = "bob"
+	installerBoites(t, f)
+	err := (&mailModule{}).ValidateAccount(context.Background(), envCompte(&strings.Builder{}),
+		utilisateur("id", "alice", ""), module.Values{cleBoite: "true", cleQuotaGio: "1"})
+	if err == nil || !strings.Contains(err.Error(), "bob") {
+		t.Fatalf("an address held by another mailbox was accepted: %v", err)
+	}
+}
+
 // TestValidationRefuseUnCheckBloquant: a blocking deployment problem (no MX,
 // port 25 closed) is a reason NOT to create a mailbox, and the error lists the
 // checks so the operator does not have to open the checks tab to know why.
@@ -582,6 +640,10 @@ func TestActionSuspendPuisReprend(t *testing.T) {
 
 // TestActionQuotaBorneEtApplique: the quota action re-checks the volume bound
 // and writes the new value.
+//
+// THE VALUES ARE THE ACTION'S, not the creation form's: the page and the CLI
+// only send the fields the action declares, so `boite` is absent — passing it
+// here would hide the fact that the action must not require it (§8.2 step 10).
 func TestActionQuotaBorneEtApplique(t *testing.T) {
 	f := nouveauFauxBoites()
 	f.comptes = []mailcore.CompteCourriel{{ID: "u1", Nom: "alice", Adresse: "alice@example.com"}}
@@ -589,7 +651,7 @@ func TestActionQuotaBorneEtApplique(t *testing.T) {
 	env := envCompte(&strings.Builder{})
 	u := utilisateur("1", "alice", "")
 
-	if err := (&mailModule{}).AccountAction(context.Background(), env, u, "quota", module.Values{cleBoite: "true", cleQuotaGio: "4"}); err != nil {
+	if err := (&mailModule{}).AccountAction(context.Background(), env, u, "quota", module.Values{cleQuotaGio: "4"}); err != nil {
 		t.Fatalf("quota: %v", err)
 	}
 	if strings.Join(f.appels, ",") != "reglerQuotaCompte:alice:4" {
@@ -597,11 +659,22 @@ func TestActionQuotaBorneEtApplique(t *testing.T) {
 	}
 
 	f.appels = nil
-	if err := (&mailModule{}).AccountAction(context.Background(), env, u, "quota", module.Values{cleBoite: "true", cleQuotaGio: "21"}); err == nil {
+	if err := (&mailModule{}).AccountAction(context.Background(), env, u, "quota", module.Values{cleQuotaGio: "21"}); err == nil {
 		t.Fatal("a quota above the volume was accepted")
 	}
 	if len(f.appels) != 0 {
 		t.Errorf("the server was called with an out-of-bound quota: %v", f.appels)
+	}
+
+	// A MISSING QUOTA IS THE ACTION'S ERROR, and it must name the field the
+	// action asked for: naming `boite` would send the operator to a form that
+	// has nothing to do with the action.
+	err := (&mailModule{}).AccountAction(context.Background(), env, u, "quota", module.Values{})
+	if err == nil || !strings.Contains(err.Error(), cleQuotaGio) {
+		t.Fatalf("a quota change without a quota was accepted or misnamed: %v", err)
+	}
+	if strings.Contains(err.Error(), cleBoite) {
+		t.Errorf("the quota action complains about %s: %v", cleBoite, err)
 	}
 }
 

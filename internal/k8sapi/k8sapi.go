@@ -649,6 +649,13 @@ func (c *Client) AttendrePodInstalle(ctx context.Context, ns, pod string, limite
 //
 // We select on the same label the Deployment uses, and require the pod to be
 // Running: a Pending pod would accept nothing and the error would be obscure.
+//
+// A POD BEING DELETED IS NOT A TARGET, even though it still reports Running and
+// can still be Ready: its containers are being stopped, so a SEQUENCE of execs
+// against it fails in the middle instead of at the start. That is not
+// hypothetical — restarting an application and immediately configuring it picks
+// this pod up, and the failure then points at whatever the first lost command
+// was about. A Ready pod is preferred; an incomplete one is only the fallback.
 func (c *Client) PodDuDeploiement(ctx context.Context, ns, nom, etiquette string) (string, error) {
 	pods, err := c.cs.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: "app=" + etiquette,
@@ -656,12 +663,32 @@ func (c *Client) PodDuDeploiement(ctx context.Context, ns, nom, etiquette string
 	if err != nil {
 		return "", fmt.Errorf("listing pods in %s: %w", ns, err)
 	}
+	repli := ""
 	for _, p := range pods.Items {
-		if p.Status.Phase == corev1.PodRunning {
+		if p.Status.Phase != corev1.PodRunning || p.DeletionTimestamp != nil {
+			continue
+		}
+		if podPret(p) {
 			return p.Name, nil
 		}
+		if repli == "" {
+			repli = p.Name
+		}
+	}
+	if repli != "" {
+		return repli, nil
 	}
 	return "", fmt.Errorf("no %s pod in service in %s (deployment %s)", etiquette, ns, nom)
+}
+
+// podPret reports whether the pod's Ready condition is true.
+func podPret(p corev1.Pod) bool {
+	for _, condition := range p.Status.Conditions {
+		if condition.Type == corev1.PodReady {
+			return condition.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
 
 // DeploiementPret reports whether a Deployment has at least one Ready replica.

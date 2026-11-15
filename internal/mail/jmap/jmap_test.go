@@ -28,6 +28,7 @@ import (
 type serveurJMAP struct {
 	t          *testing.T
 	derniere   map[string]any // the last request body decoded
+	capacites  []string       // the last `using` list, verbatim
 	appels     int
 	nomReponse string // response name, when it differs from the method (an "error")
 	repondre   func(methode string, args map[string]any) any
@@ -57,6 +58,7 @@ func nouveauServeur(t *testing.T, repondre func(methode string, args map[string]
 			return
 		}
 		s.appels++
+		s.capacites = enveloppe.Using
 		var couple []json.RawMessage
 		if err := json.Unmarshal(enveloppe.MethodCalls[0], &couple); err != nil || len(couple) != 3 {
 			s.t.Errorf("methodCall = %s, want [method, args, callId]", enveloppe.MethodCalls[0])
@@ -256,6 +258,43 @@ func TestRefusalBecomesATypedError(t *testing.T) {
 // that is gone (measured, §9.I). The raw form therefore returns the body
 // without an error, which is what lets deletion decide on the read-back
 // instead of on a response that lies.
+// TestLesMethodesDeMessagerieDemandentLeurCapacite : JMAP declares capabilities
+// PER REQUEST, so the `using` list cannot be a constant. The management calls
+// (`x:`) answer an empty list on Stalwart 1.0.3; the RFC 8621 ones refuse without
+// `urn:ietf:params:jmap:mail` (`unknownMethod`, "requires capability … which is
+// not present in the \"using\" property"), measured on the live demo,
+// 2026-11-14, after the method names had already been fixed.
+func TestLesMethodesDeMessagerieDemandentLeurCapacite(t *testing.T) {
+	s := nouveauServeur(t, func(string, map[string]any) any {
+		return map[string]any{"list": []any{}}
+	})
+
+	if _, err := s.client().Appel(context.Background(), "Mailbox/get", map[string]any{}); err != nil {
+		t.Fatalf("Mailbox/get: %v", err)
+	}
+	for _, capacite := range []string{"urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"} {
+		if !contient(s.capacites, capacite) {
+			t.Fatalf("Mailbox/get declares %v, want %s in it", s.capacites, capacite)
+		}
+	}
+
+	if _, err := s.client().Appel(context.Background(), "x:Account/get", map[string]any{}); err != nil {
+		t.Fatalf("x:Account/get: %v", err)
+	}
+	if len(s.capacites) != 0 {
+		t.Fatalf("a management call declares %v, want no capability", s.capacites)
+	}
+}
+
+func contient(liste []string, valeur string) bool {
+	for _, v := range liste {
+		if v == valeur {
+			return true
+		}
+	}
+	return false
+}
+
 func TestAppelBrutDoesNotJudgeTheQuirk(t *testing.T) {
 	s := nouveauServeur(t, func(string, map[string]any) any {
 		return map[string]any{"notDestroyed": map[string]any{}}

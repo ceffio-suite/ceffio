@@ -39,11 +39,13 @@ func (k *kcadmFaux) exec(_ context.Context, _ string, entree, commande string) (
 		if k.ignoreEcriture {
 			return "", nil
 		}
-		var charge map[string]string
-		if err := json.Unmarshal([]byte(entree), &charge); err != nil {
+		var doc struct {
+			SmtpServer map[string]string `json:"smtpServer"`
+		}
+		if err := json.Unmarshal([]byte(entree), &doc); err != nil {
 			return "", err
 		}
-		k.realm = charge
+		k.realm = doc.SmtpServer
 		return "", nil
 	}
 	if k.muet {
@@ -142,12 +144,49 @@ func TestKeycloakWriterKeepsThePasswordOffTheCommandLine(t *testing.T) {
 	if !strings.Contains(faux.cmds[0], "rm -f") {
 		t.Fatalf("the temporary file is not removed: %s", faux.cmds[0])
 	}
-	var relu map[string]string
+	var relu struct {
+		SmtpServer map[string]string `json:"smtpServer"`
+	}
 	if err := json.Unmarshal([]byte(faux.entrees[0]), &relu); err != nil {
 		t.Fatalf("the document sent on stdin is not JSON: %v", err)
 	}
-	if relu["user"] != "noreply@example.com" || relu["password"] != "app-secret" {
-		t.Fatalf("the document lost its credential fields: %v", relu)
+	if relu.SmtpServer["user"] != "noreply@example.com" || relu.SmtpServer["password"] != "app-secret" {
+		t.Fatalf("the document lost its credential fields: %v", relu.SmtpServer)
+	}
+	// THE DOCUMENT IS A REALM REPRESENTATION: the settings live under `smtpServer`.
+	// A bare map makes `kcadm update realms/<realm> -f` fail with `Unrecognized
+	// field "auth"`, and the realm is left without a sender.
+	var brut map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(faux.entrees[0]), &brut); err != nil {
+		t.Fatalf("the document sent on stdin is not a JSON object: %v", err)
+	}
+	if _, ok := brut["smtpServer"]; !ok {
+		t.Fatalf("the document is not a realm representation (no smtpServer field): %s", faux.entrees[0])
+	}
+	if _, ok := brut["auth"]; ok {
+		t.Fatalf("the SMTP settings leak at the top level, where kcadm rejects them: %s", faux.entrees[0])
+	}
+}
+
+// TestKeycloakReadBackRequestsTheNestedMap : the read-back asks for the SMTP map
+// WITH ITS CHILDREN. `--fields smtpServer` makes Keycloak 26.8 answer
+// `{"smtpServer": {}}`, which reads as "no sender" on a configured realm and turns
+// every install into a mismatch; the bracketed form is the documented way to ask
+// for an object's fields.
+func TestKeycloakReadBackRequestsTheNestedMap(t *testing.T) {
+	faux := &kcadmFaux{realm: map[string]string{"host": "mail.example.com"}}
+	kcadmSilencieux(t, faux)
+
+	if _, err := lireSmtpServerKeycloak(context.Background()); err != nil {
+		t.Fatalf("lireSmtpServerKeycloak: %v", err)
+	}
+	if len(faux.cmds) != 1 {
+		t.Fatalf("kcadm was invoked %d time(s); want once", len(faux.cmds))
+	}
+	if !strings.Contains(faux.cmds[0], `--fields "smtpServer(*)"`) {
+		t.Fatalf("the read-back does not ask for the nested map: %s\nKeycloak 26.8 "+
+			"answers {\"smtpServer\": {}} for a bare --fields smtpServer, so a "+
+			"configured realm would be reported as having no sender", faux.cmds[0])
 	}
 }
 

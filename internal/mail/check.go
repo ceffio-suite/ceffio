@@ -1529,8 +1529,16 @@ func dernierMessageExterne(ctx context.Context, compte, domaine string) (map[str
 }
 
 // boitesEntrantes lists the mailboxes a delivered message can land in.
+//
+// THE METHOD IS `Mailbox/get`, NOT `x:Mailbox/get`. The `x:` namespace is
+// Stalwart's MANAGEMENT API (accounts, domains, directories); mailbox and message
+// data follow the standard JMAP names (RFC 8621). Reading mail through the
+// management prefix looks right — the neighbouring calls all carry `x:` — and
+// answers `{"type":"unknownMethod","description":"x:Mailbox/get"}` on Stalwart
+// 1.0.3, which is exactly what the live demo returned on 2026-11-14 when the
+// end-to-end inbound check ran for the first time.
 func boitesEntrantes(ctx context.Context, compte string) ([]string, error) {
-	corps, err := appelServeurJMAP(ctx, "x:Mailbox/get", map[string]any{
+	corps, err := appelServeurJMAP(ctx, "Mailbox/get", map[string]any{
 		"accountId":  compte,
 		"ids":        nil,
 		"properties": []string{"id", "name", "role"},
@@ -1638,9 +1646,15 @@ func expediteurDe(message map[string]any) string {
 // verdictsAuthentification extracts the SPF/DKIM/DMARC verdicts of the
 // Authentication-Results header(s).
 var (
-	motifSPF   = regexp.MustCompile(`(?i)\bspf=(\w+)`)
-	motifDKIM  = regexp.MustCompile(`(?i)\bdkim=(\w+)`)
-	motifDMARC = regexp.MustCompile(`(?i)\bdmarc=(\w+)`)
+	// motifSPF finds the first SPF result, whatever identity it evaluated.
+	motifSPF = regexp.MustCompile(`(?i)\bspf=(\w+)`)
+	// motifSPFAvecExpediteur finds the SPF result of the MAIL FROM identity: the
+	// one SPF is about (RFC 7208). A server may report the HELO identity first
+	// ("spf=none (… smtp.helo=…)"), which must not hide the verdict that
+	// authenticates the sender ("spf=pass (… smtp.mailfrom=…)").
+	motifSPFAvecExpediteur = regexp.MustCompile(`(?i)\bspf=(\w+)[^;]*\bsmtp\.mailfrom=`)
+	motifDKIM              = regexp.MustCompile(`(?i)\bdkim=(\w+)`)
+	motifDMARC             = regexp.MustCompile(`(?i)\bdmarc=(\w+)`)
 )
 
 // authentification holds the three verdicts, "absent" when not reported.
@@ -1654,7 +1668,9 @@ func verdictsAuthentification(entetes string) authentification {
 		return authentification{SPF: "absent", DKIM: "absent", DMARC: "absent"}
 	}
 	v := authentification{SPF: "absent", DKIM: "absent", DMARC: "absent"}
-	if m := motifSPF.FindStringSubmatch(entetes); m != nil {
+	if m := motifSPFAvecExpediteur.FindStringSubmatch(entetes); m != nil {
+		v.SPF = strings.ToLower(m[1])
+	} else if m := motifSPF.FindStringSubmatch(entetes); m != nil {
 		v.SPF = strings.ToLower(m[1])
 	}
 	if m := motifDKIM.FindStringSubmatch(entetes); m != nil {

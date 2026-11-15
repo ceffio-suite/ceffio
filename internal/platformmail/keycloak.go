@@ -120,6 +120,13 @@ func chargeKeycloak(s *Sender) map[string]string {
 
 // ecrireSmtpServerKeycloak sends the payload to kcadm.
 //
+// THE DOCUMENT IS A REALM REPRESENTATION THAT CARRIES `smtpServer`, not the bare
+// map. `kcadm update realms/<realm> -f` decodes its file into a
+// RealmRepresentation and rejects every unknown field, so sending the map itself
+// fails with `Unrecognized field "auth"` — the realm then keeps no sender at all,
+// which is the silent drop this function exists to prevent. (Found by the live
+// upgrade to 0.11.0-rc.1, not by the tests: they read the map's fields directly.)
+//
 // THE DOCUMENT GOES THROUGH A TEMPORARY FILE, NOT THROUGH `-s`. A `-s` argument puts
 // the SMTP password in kcadm's command line, which every process in the pod can read
 // (/proc/<pid>/cmdline) for as long as the call lasts; the codebase refuses that
@@ -127,7 +134,9 @@ func chargeKeycloak(s *Sender) map[string]string {
 // 0600 and removed in the same shell, and `-f` accepts a partial representation
 // exactly like `-s` does.
 func ecrireSmtpServerKeycloak(ctx context.Context, charge map[string]string) error {
-	doc, err := json.Marshal(charge)
+	doc, err := json.Marshal(struct {
+		SmtpServer map[string]string `json:"smtpServer"`
+	}{SmtpServer: charge})
 	if err != nil {
 		return fmt.Errorf("encoding the SMTP settings: %w", err)
 	}
@@ -142,15 +151,26 @@ func ecrireSmtpServerKeycloak(ctx context.Context, charge map[string]string) err
 
 // lireSmtpServerKeycloak reads the realm's SMTP settings back.
 //
-// IT ASKS FOR ONE FIELD. `kcadm get realms/ceffio` without `--fields` returns the
-// whole realm, including its clients and their secrets; the read-back needs nine
-// strings and nothing else.
+// THE FIELD FILTER NEEDS THE BRACKETS: `--fields "smtpServer(*)"`. Keycloak 26.8
+// answers `--fields smtpServer` with `{"smtpServer": {}}` — the server-side filter
+// empties the object it just selected — while the same realm answers the bracketed
+// form with all nine values. The rule is documented by kcadm itself ("if attribute
+// of object type is included, but its children are not specified by using brackets,
+// then an empty object will be returned") and was measured on the live demo,
+// 2026-11-14, after the bare filter had made every install report a mismatch it had
+// invented.
+//
+// THE NARROW DOCUMENT IS WHAT MAKES THIS COMPARABLE: the previous version read the
+// whole realm to work around the empty map, which worked but dragged 5 877 bytes of
+// unrelated settings into an SMTP read-back. The bracketed filter asks for the one
+// map this package owns.
 //
 // A REALM WITH NO SETTINGS ANSWERS `{}` (the field is absent), which decodes to an
 // empty map — the same value as an emptied one. Both mean "no sender", which is
 // exactly the comparison the caller needs.
 func lireSmtpServerKeycloak(ctx context.Context) (map[string]string, error) {
-	out, err := executerKcadm(ctx, nsIdentity, "", `/opt/keycloak/bin/kcadm.sh get realms/`+identity.RealmCeffio+` --fields smtpServer`)
+	out, err := executerKcadm(ctx, nsIdentity, "", `/opt/keycloak/bin/kcadm.sh get realms/`+
+		identity.RealmCeffio+` --fields "smtpServer(*)"`)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +179,9 @@ func lireSmtpServerKeycloak(ctx context.Context) (map[string]string, error) {
 	}
 	corps := identity.CorpsJSON(out)
 	if strings.TrimSpace(corps) == "" {
-		return nil, fmt.Errorf("the realm read-back returned no JSON document: %q", strings.TrimSpace(out))
+		// BOUNDED: the document is small but it is not quoted back in full — the
+		// caller's error travels into install logs.
+		return nil, fmt.Errorf("the realm read-back returned no JSON document: %.200q", strings.TrimSpace(out))
 	}
 	if err := json.Unmarshal([]byte(corps), &doc); err != nil {
 		return nil, fmt.Errorf("decoding the realm's SMTP settings: %w", err)

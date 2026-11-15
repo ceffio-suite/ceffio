@@ -1058,7 +1058,9 @@ func jmapEntrant(t *testing.T, expediteur, entetes string) {
 		"x:Domain/get": map[string]any{
 			"list": []any{map[string]any{"id": "d1", "name": "ceffio.org"}},
 		},
-		"x:Mailbox/get": map[string]any{
+		// MAILBOX DATA IS STANDARD JMAP, unlike the `x:` management calls above:
+		// Stalwart 1.0.3 answers `x:Mailbox/get` with `unknownMethod`.
+		"Mailbox/get": map[string]any{
 			"list": []any{map[string]any{"id": "m1", "name": "INBOX", "role": "inbox"}},
 		},
 		"Email/query": map[string]any{"ids": []any{"e1"}},
@@ -1079,6 +1081,19 @@ func TestVerifierTestEntrant(t *testing.T) {
 		check := verifierTestEntrant(context.Background(), s.contexte("ceffio.org", ReglagesParDefaut()))
 		attendreNiveau(t, check, module.CheckOK)
 		attendreContient(t, check, "detail", "is authenticated")
+	})
+
+	t.Run("verdict SPF de l'expéditeur", func(t *testing.T) {
+		s := installerSocle(t)
+		// The server reports the HELO identity first; SPF is about the MAIL FROM
+		// identity (RFC 7208), so its verdict is the one to display.
+		jmapEntrant(t, "alice@example.net",
+			"mx.example.net; spf=none (mx.example.net: no SPF records found for postmaster@mail.example.net) smtp.helo=mail.example.net; "+
+				"spf=pass (mx.example.net: domain of alice@example.net designates 203.0.113.10 as permitted sender) smtp.mailfrom=alice@example.net; "+
+				"dkim=pass header.d=example.net; dmarc=pass header.from=example.net")
+		check := verifierTestEntrant(context.Background(), s.contexte("ceffio.org", ReglagesParDefaut()))
+		attendreNiveau(t, check, module.CheckOK)
+		attendreContient(t, check, "detail", "SPF pass, DKIM pass, DMARC pass")
 	})
 
 	t.Run("messages illisibles", func(t *testing.T) {

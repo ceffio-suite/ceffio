@@ -200,12 +200,23 @@ func (m *mailModule) ValidateAccount(ctx context.Context, env module.Env, u modu
 	// THE ADDRESS MUST BE FREE, as an account address AND as an alias (AdressePrise
 	// looks at both): an address that only exists as an alias already receives
 	// somebody's mail.
+	//
+	// EXCEPT WHEN THE MAILBOX IS THIS USER'S OWN. The platform account exists
+	// before this module is called, and every step of a creation is idempotent,
+	// so a creation stopped half-way — the mailbox there, its credential not —
+	// must CONVERGE on the retry the CLI and the page advertise
+	// (`cmd/ceffio/users.go`: "run the same command again"). Refusing here would
+	// leave a mailbox with no credential and no way to finish it, which is the
+	// jail the account contract's ordering exists to prevent. A mailbox bearing
+	// the very name we are creating is that user's mailbox — this module names
+	// mailboxes after the platform username and nothing else — so completing it
+	// duplicates no object and takes nothing from anybody else.
 	for _, adresse := range adressesDuNom(nom, env.Domain) {
 		titulaire, prise, err := adressePriseCourriel(ctx, adresse)
 		if err != nil {
 			return fmt.Errorf("checking that the address %s is free: %w", adresse, err)
 		}
-		if prise {
+		if prise && !strings.EqualFold(titulaire, nom) {
 			return fmt.Errorf("%w: %s: the address %s is already used by the mailbox %q",
 				module.ErrInvalidSettings, cleBoite, adresse, titulaire)
 		}
@@ -574,8 +585,18 @@ func (m *mailModule) reprendreCompteBoite(ctx context.Context, env module.Env, u
 // THE BOUND IS CHECKED AGAIN, and not only at creation: the volume can have
 // been shrunk by an operator, and a quota the disk cannot hold would make the
 // server refuse mail in a way nobody asked for.
+//
+// ONLY THE ACTION'S OWN FIELDS ARE VALIDATED. The page and the CLI send exactly
+// the fields the action declares — the new quota — so validating the creation
+// group here would demand `boite`, which no quota form carries, and every quota
+// change would be refused with "comptes.boite ... is required". Found live in
+// §8.2 step 10.
 func (m *mailModule) changerQuota(ctx context.Context, env module.Env, u module.User, v module.Values) error {
-	if err := module.Validate(m.groupeCompte(), v); err != nil {
+	if err := module.Validate(module.Group{
+		ID:     groupeComptes,
+		Title:  "Mailbox",
+		Fields: actionQuotaMail().Fields,
+	}, v); err != nil {
 		return err
 	}
 	quota, err := m.quotaDemandee(ctx, env, v)
