@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/ceffio-suite/ceffio/internal/module"
 	"github.com/ceffio-suite/ceffio/internal/settings"
 	"github.com/ceffio-suite/ceffio/internal/website"
@@ -111,6 +114,27 @@ func (m *websiteModule) Apply(ctx context.Context, env module.Env, groupe string
 	if publiee && env.Domain == "" {
 		return fmt.Errorf("website: cannot re-render the page without the installation domain (use --domain)")
 	}
+	// THE PAGE BAKES ITS OWN HOST INTO ITS BYTES: canonical, hreflang, og:url,
+	// the console link and the security.txt link all come from Env.Domain. That
+	// value is a CLI flag whose default is the reference installation's domain
+	// (ceffio.example.com), so a save that omits --domain on an installation
+	// called company.fr would store the address AND repoint every self-reference
+	// of the public page at another host — valid HTML, correct address, wrong
+	// page. The Ingress this module owns records the host the page is actually
+	// served on, so the disagreement is caught BEFORE anything is written.
+	if publiee {
+		domainePublie, err := m.domainePublie(ctx, env)
+		if err != nil {
+			return err
+		}
+		if domainePublie != "" && domainePublie != env.Domain {
+			return fmt.Errorf("website: this installation publishes the page on %s, but the save was "+
+				"given %s; the page embeds its own host in every link and canonical URL, so saving "+
+				"would point the public page at another host. Re-run with `--domain %s` (the CLI "+
+				"defaults to the reference domain), or reinstall the module if the installation "+
+				"really moved", domainePublie, env.Domain, domainePublie)
+		}
+	}
 	if err := settings.Save(ctx, env, g, v); err != nil {
 		return err
 	}
@@ -142,6 +166,32 @@ func (m *websiteModule) pagePresente(ctx context.Context, env module.Env) bool {
 	}
 	etat := m.State(ctx, env)
 	return etat.Status == module.Installed || etat.Status == module.Degraded
+}
+
+// domainePublie returns the host the module's own Ingress serves the page on,
+// or "" when the page is not published yet (a fresh installation has no
+// Ingress, and a setting saved before install is legitimate).
+//
+// It reads only the object the module created: no discovery, no other
+// namespace, no permission beyond the `ingresses get` it already holds.
+func (m *websiteModule) domainePublie(ctx context.Context, env module.Env) (string, error) {
+	if env.Kube == nil {
+		return "", nil
+	}
+	ing, err := env.Kube.NetworkingV1().Ingresses(nsSite).Get(ctx, nomPage, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("website: cannot read the published page's Ingress to check the "+
+			"installation domain: %w", err)
+	}
+	for _, regle := range ing.Spec.Rules {
+		if regle.Host != "" {
+			return regle.Host, nil
+		}
+	}
+	return "", nil
 }
 
 // republierPage makes a saved address visible without reinstalling the module.
