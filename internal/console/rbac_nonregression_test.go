@@ -60,6 +60,18 @@ var legacyNamespaces = []string{
 	"ceffio-exapps",
 }
 
+// decidedNamespaces lists the namespaces the grant covers BESIDES the ten
+// legacy ones, each with the reason the widening was decided. A bare count
+// would accept a namespace nobody explained; a map cannot.
+//
+// ceffio-website (optional module "website"): the console installs the module
+// with its namespace-scoped identity, so that identity needs the module's own
+// namespace. The namespace is created by the platform chart, not by the
+// console — a namespaced Role could not create it anyway.
+var decidedNamespaces = map[string]string{
+	"ceffio-website": "module website: the optional landing page is installed from the console",
+}
+
 // legacyRules is the VERBATIM copy of the rules of the ClusterRole
 // ceffio-admin-namespaces (deploy.go before batch B6), which the ten
 // RoleBindings above applied identically in every platform namespace.
@@ -150,11 +162,29 @@ func legacyReference(t *testing.T) map[ruleTuple]bool {
 	// B5 remove pods/exec from the capture later.
 	ref[ruleTuple{"ceffio-video", "", "services/proxy", "get"}] = true
 
+	// DECIDED ADDITION (module website): the console must be able to install,
+	// update and remove the optional landing page. These rules are the copy of
+	// what was decided — configmaps (page + nginx config), services and
+	// deployments to serve it, ingresses to expose it — NOT read from the
+	// module under test, which is the whole point of the frozen reference.
+	for k := range expandTuples("ceffio-website", []rbacv1.PolicyRule{
+		{APIGroups: []string{""}, Resources: []string{"configmaps", "services"},
+			Verbs: []string{"get", "create", "update", "patch", "delete"}},
+		{APIGroups: []string{"apps"}, Resources: []string{"deployments"},
+			Verbs: []string{"get", "create", "update", "patch", "delete"}},
+		{APIGroups: []string{"networking.k8s.io"}, Resources: []string{"ingresses"},
+			Verbs: []string{"get", "create", "update", "patch", "delete"}},
+	}) {
+		ref[k] = true
+	}
+
 	// A reference of zero tuples would make the comparison vacuous (and an
 	// empty grant would "pass"). The count is the hand-computed product of
-	// the frozen lists above: 10 namespaces × 109 tuples per namespace.
-	if len(ref) != 1091 {
-		t.Fatalf("legacy reference holds %d tuples, expected 1091 (10 namespaces × 109 + 1 decided addition) — the frozen lists above were edited; fix them or fix the count", len(ref))
+	// the frozen lists above: 10 namespaces × 109 tuples per namespace, plus
+	// the capture tuple, plus 20 website tuples (2 resources × 5 verbs for
+	// configmaps and services, 5 for deployments, 5 for ingresses).
+	if len(ref) != 1111 {
+		t.Fatalf("legacy reference holds %d tuples, expected 1111 (10 × 109 + 1 capture + 20 website) — the frozen lists above were edited; fix them or fix the count", len(ref))
 	}
 	return ref
 }
@@ -209,8 +239,14 @@ func TestRBACNonRegression(t *testing.T) {
 			t.Errorf("namespace %q gained rights it never had (infrastructure namespaces stay out of the console's reach)", ns)
 		}
 	}
-	if len(gotNS) != len(legacyNamespaces) {
-		t.Errorf("grant covers %d namespaces, expected %d", len(gotNS), len(legacyNamespaces))
+	if len(gotNS) != len(legacyNamespaces)+len(decidedNamespaces) {
+		t.Errorf("grant covers %d namespaces, expected %d (10 legacy + %d decided)",
+			len(gotNS), len(legacyNamespaces)+len(decidedNamespaces), len(decidedNamespaces))
+	}
+	for ns, raison := range decidedNamespaces {
+		if !gotNS[ns] {
+			t.Errorf("namespace %q (decided addition) is not covered by the grant: %s", ns, raison)
+		}
 	}
 
 	// 1. The DATA: AdminRights flattened into tuples.

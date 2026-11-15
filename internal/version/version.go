@@ -206,6 +206,19 @@ var Registry = []Composant{
 		Module: "internal/modules/longhornui",
 		Role:   "Put a single sign-on in front of the Longhorn interface, which has none", Licence: "MIT",
 	},
+
+	// THE STATIC SERVER OF THE OPTIONAL "website" MODULE. It serves a handful
+	// of embedded files and executes no script, so nginx does the job with the
+	// smallest surface available; the module never talks to it beyond HTTP.
+	//
+	// WHY THE ALPINE VARIANT: the Debian-based tags ship a shell and a package
+	// manager the page does not need, and the scanned attack surface of a
+	// public-facing container is the whole argument.
+	{
+		Nom: "nginx", Image: "docker.io/library/nginx:1.29.8-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de",
+		Module: "internal/modules/website",
+		Role:   "Serve the static landing page of the optional website module, nothing else", Licence: "BSD-2-Clause",
+	},
 }
 
 // Helm charts used by the platform (operators).

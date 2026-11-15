@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ceffio — Your collaboration suite, on your own server</title>
+  <meta name="description" content="Ceffio installs a sovereign, self-hosted collaboration suite on your own server: files, mail, video meetings, editing, team chat, a secrets vault and SSO.">
+  <meta name="theme-color" content="#F6F5F1">
+  <link rel="canonical" href="https://{{DOMAIN}}/en/">
+  <link rel="alternate" hreflang="fr" href="https://{{DOMAIN}}/">
+  <link rel="alternate" hreflang="en" href="https://{{DOMAIN}}/en/">
+  <link rel="alternate" hreflang="x-default" href="https://{{DOMAIN}}/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Ceffio">
+  <meta property="og:title" content="Ceffio — Your collaboration suite, on your own server">
+  <meta property="og:description" content="Ceffio installs a sovereign, self-hosted collaboration suite on your own server: files, mail, video meetings, editing, team chat, a secrets vault and SSO.">
+  <meta property="og:url" content="https://{{DOMAIN}}/en/">
+  <meta property="og:locale" content="en_GB">
+  <meta property="og:locale:alternate" content="fr_FR">
+  <link rel="icon" href="../logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to content</a>
+
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="../index.html">
+        <img src="../logo.svg" alt="" width="30" height="30" aria-hidden="true">
+        <span class="wordmark">ceffio</span>
+      </a>
+      <div class="header-nav">
+        <nav aria-label="Language">
+          <ul class="lang-switch">
+            <li><a href="../index.html" hreflang="fr" lang="fr">FR</a></li>
+            <li><a href="index.html" hreflang="en" lang="en" aria-current="page">EN</a></li>
+          </ul>
+        </nav>
+        <a class="btn btn-primary btn-sm" href="{{ADMIN_URL}}">Console</a>
+      </div>
+    </div>
+  </header>
+
+  <main id="content">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="wrap">
+        <p class="eyebrow">Sovereign · self-hosted · open source</p>
+        <h1 id="hero-title">Your collaboration suite,<br>on your own server<span class="h1-dot">.</span></h1>
+        <p class="lede">Files, mail, video meetings, collaborative editing, chat and a secrets vault on your server — with identity, certificates and backups.</p>
+        <div class="actions">
+          <a class="btn btn-primary" href="{{ADMIN_URL}}">Open the console</a>
+          <a class="btn btn-ghost" href="https://github.com/ceffio-suite/ceffio" rel="noopener">View the source</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="modules-title">
+      <div class="wrap">
+        <div class="section-head">
+          <p class="eyebrow">01 — Modules</p>
+          <div>
+            <h2 id="modules-title">What you install</h2>
+            <p class="section-lede">Every building block is a module: enabled at install time, or added later — from the CLI or from the console.</p>
+          </div>
+        </div>
+        <ul class="modules">
+          <li class="module">
+            <h3>Files and documents</h3>
+            <p>Nextcloud: sync, sharing and online editing, on storage that stays with you.</p>
+          </li>
+          <li class="module">
+            <h3>Mail</h3>
+            <p>Stalwart: SMTP and IMAP, filters, webmail. The CLI checks the DNS records deliverability depends on.</p>
+          </li>
+          <li class="module">
+            <h3>Video meetings</h3>
+            <p>Nextcloud Talk with its SFU and TURN server: audio and video travel over your network, not a third-party platform's.</p>
+          </li>
+          <li class="module">
+            <h3>Document editing</h3>
+            <p>ONLYOFFICE: documents, spreadsheets and presentations edited together, without leaving the suite.</p>
+          </li>
+          <li class="module">
+            <h3>Team chat</h3>
+            <p>Nextcloud Talk: conversations and threads, behind the same sign-in as files.</p>
+          </li>
+          <li class="module">
+            <h3>Secrets vault</h3>
+            <p>OpenBao: credentials generated during install are sealed there, never asked for at the terminal.</p>
+          </li>
+          <li class="module">
+            <h3>Recording and transcription</h3>
+            <p>Meetings are recorded, then transcribed track by track on your own machine — nothing sent to an external service.</p>
+          </li>
+          <li class="module">
+            <h3>Administration console</h3>
+            <p>The real state of services, certificates and accounts, plus a documented JSON API.</p>
+          </li>
+          <li class="module">
+            <h3>Identity and SSO</h3>
+            <p>Keycloak: one account directory for every module, wired over OIDC.</p>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="steps-title">
+      <div class="wrap">
+        <div class="section-head">
+          <p class="eyebrow">02 — Installation</p>
+          <div>
+            <h2 id="steps-title">How it goes</h2>
+            <p class="section-lede">Three moments, from an empty server to a suite in production.</p>
+          </div>
+        </div>
+        <ol class="steps">
+          <li class="step">
+            <h3>Install the CLI</h3>
+            <p>One Go binary on your Linux server. It installs K3s and deploys the suite by talking straight to the Kubernetes API — no operator in between.</p>
+          </li>
+          <li class="step">
+            <h3>Run the installation</h3>
+            <p><code>ceffio install</code> deploys the modules, issues certificates and generates credentials, then seals them in the vault. The command is idempotent: running it again repairs, it does not break.</p>
+          </li>
+          <li class="step">
+            <h3>Administer from the console</h3>
+            <p>Service, certificate and account state is computed from the cluster, never copied by hand. The same actions exist as JSON.</p>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="guarantees-title">
+      <div class="wrap">
+        <div class="section-head">
+          <p class="eyebrow">03 — Guarantees</p>
+          <div>
+            <h2 id="guarantees-title">Serious, and checkable</h2>
+            <p class="section-lede">Promises an operator can verify in person, in the repository as well as on the machine.</p>
+          </div>
+        </div>
+        <ul class="checks">
+          <li><strong>Automatic HTTPS</strong><span>Certificates issued and renewed by cert-manager, with a choice of two validation methods: HTTP-01 or DNS-01.</span></li>
+          <li><strong>Machine-readable SBOM</strong><span><code>ceffio sbom</code> writes a CycloneDX document covering everything the installation can run, images pinned by digest.</span></li>
+          <li><strong>Vulnerability scan</strong><span>Every release is scanned with Grype; exceptions are written down, justified and versioned in the repository.</span></li>
+          <li><strong>Backups</strong><span><code>ceffio backup</code> and <code>ceffio restore</code>: databases, secrets and volumes.</span></li>
+          <li><strong>Documented API</strong><span>The console's JSON contract is described in the repository, along with the authentication it requires.</span></li>
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-top">
+      <div>
+        <a class="brand" href="../index.html">
+          <img src="../logo.svg" alt="" width="26" height="26" aria-hidden="true">
+          <span class="wordmark">ceffio</span>
+        </a>
+        <p class="footer-lede">A sovereign, self-hosted collaboration suite, published under the AGPL-3.0-or-later licence.</p>
+      </div>
+      <nav aria-label="Footer links">
+        <ul class="footer-links">
+          <li><a href="https://github.com/ceffio-suite/ceffio" rel="noopener">Source code</a></li>
+          <li><a href="{{SECURITY_URL}}">Security</a></li>
+        </ul>
+      </nav>
+    </div>
+    <div class="wrap">
+      <div class="footer-legal">
+        <p>This page is served from {{DOMAIN}}. The host's <code>security.txt</code>, published at the address behind the “Security” link, explains where and how to report a vulnerability.</p>
+        <p>No contact address is published here: the reporting channels are the ones in that file.</p>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>
