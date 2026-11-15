@@ -309,6 +309,50 @@ func TestApplySansDomaineRefuseAvantDEcrire(t *testing.T) {
 	}
 }
 
+// TestApplyRefuseUnDomaineQuiNEstPasCeluiPublie proves a save cannot move the
+// page's host by accident. The page embeds absolute URLs built from Env.Domain,
+// and that value is a CLI flag defaulting to the reference installation's
+// domain: forgetting --domain must not repoint the canonical URL, the hreflang
+// alternates, the console link and the security.txt link at another host while
+// the page itself keeps being served on the real one.
+func TestApplyRefuseUnDomaineQuiNEstPasCeluiPublie(t *testing.T) {
+	ctx := context.Background()
+	cs := fakeCluster(t)
+	store := nouveauMagasin()
+	env := testEnv(cs)
+	env.Settings = store
+	m := &websiteModule{}
+	installer(t, cs, m)
+	empreinteAvant := annotationDeploiement(t, cs)
+
+	// Exactly what a hand-run CLI does without --domain.
+	env.Domain = "ceffio.example.com"
+	err := m.Apply(ctx, env, groupePage, module.Values{cleContact: adresseTest})
+	if err == nil {
+		t.Fatal("Apply accepted a save that would republish the page on another host")
+	}
+	for _, attendu := range []string{domaineTest, "ceffio.example.com", "--domain " + domaineTest} {
+		if !strings.Contains(err.Error(), attendu) {
+			t.Errorf("the error does not mention %q: %v", attendu, err)
+		}
+	}
+	if len(store.ecritures) != 0 {
+		t.Errorf("%d writes recorded for a refused save, expected none", len(store.ecritures))
+	}
+	if got := annotationDeploiement(t, cs); got != empreinteAvant {
+		t.Error("the refused save rolled the pod: the checksum changed although nothing was written")
+	}
+
+	// The save the operator meant goes through, and it is the same page.
+	env.Domain = domaineTest
+	if err := m.Apply(ctx, env, groupePage, module.Values{cleContact: adresseTest}); err != nil {
+		t.Fatalf("Apply with the published domain: %v", err)
+	}
+	if page := pagePubliee(t, cs); !strings.Contains(page[site.CleIndexFR], "https://"+domaineTest+"/") {
+		t.Error("the page does not carry the installation's own canonical URL")
+	}
+}
+
 // TestApplySignaleUnePageNonRepubliee proves the one failure that happens
 // AFTER the store write is reported as what it is: the value is recorded and
 // the page is behind. The two wrong messages are both harmful — "failed"

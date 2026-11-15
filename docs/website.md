@@ -41,7 +41,7 @@ says so, in the page's language.
 An installation that *does* want to publish an address sets it as a setting:
 
 ```sh
-ceffio module config website landing_page contact_email=contact@company.fr
+ceffio module config website landing_page contact_email=contact@company.fr --domain company.fr
 ```
 
 or through the module's **Settings** tab in the console (the generic settings form: no
@@ -66,6 +66,16 @@ The address is validated in two places, with the same pattern (`website.MotifAdr
 settings form refuses a value that is not an address before writing it, and the renderer
 refuses it again before the bytes are published. A value that is not `name@host.tld` is an
 error, never a broken `mailto:` on the public page.
+
+**`--domain` is not decoration.** The page embeds its own host in absolute URLs (canonical,
+`hreflang` alternates, `og:url`, the console link, the `security.txt` link), and those come
+from the domain the save was given. The CLI default is the reference installation's domain
+(`ceffio.example.com`), so a save that omits `--domain` on an installation called
+`company.fr` would store the address *and* repoint every one of those URLs at another host.
+A published page therefore fixes its domain: the module compares the requested domain with
+the host of its own Ingress and refuses the save, before writing anything, with both hosts
+named; the console always passes the real domain. The same check is why a deliberate domain
+move goes through a reinstall of the module, not through a Settings save.
 
 A save has two writes — the store, then the page — and they can disagree only one way: the
 cluster may refuse the republish (a console identity without rights in `ceffio-website`, a
@@ -196,7 +206,7 @@ removal from the console converges instead of failing on the first missing objec
 |---|---|
 | `internal/website/site_test.go` | A published file with an unresolved `{{…}}` placeholder or a leftover contact marker; an embedded file missing from (or extra to) the declared list; a page with a second `<h1>`, a `<script>`, an inline `style=`, or a sub-resource that is not relative; a `mailto:` (or a named address) on an installation without one; an address published in only one language; a configured address that lands in the wrong number of places or is not the configured one; a non-address accepted as one; an IPv4 literal |
 | `internal/modules/website/module_test.go` | An install that does not create the namespace / ConfigMap / Service / Deployment / Ingress; a re-install that restarts the pod or leaves drifted content; a page change that does *not* roll the pod; `State` claiming `Absent` without looking (it must say `Unknown`); an `Uninstall` that is not re-runnable; `Info` that stops being optional, non-default, or that starts declaring a Service on the apex host |
-| `internal/modules/website/reglages_test.go` | A settings form whose address field is required, has a default, or uses a pattern other than the renderer's; a stored address the published page ignores; a save that does not change the ConfigMap or does not roll the pod; a save of the same value that rolls the pod for nothing; a removal that leaves the old address published; an invalid value written to the store; a save refused for want of the installation domain that writes anyway; a cluster refusal during the republish reported as "nothing changed" (the value is stored and the page is behind, and the error must say both) |
+| `internal/modules/website/reglages_test.go` | A settings form whose address field is required, has a default, or uses a pattern other than the renderer's; a stored address the published page ignores; a save that does not change the ConfigMap or does not roll the pod; a save of the same value that rolls the pod for nothing; a removal that leaves the old address published; an invalid value written to the store; a save refused for want of the installation domain that writes anyway; a save refused for a domain that is not the one the page is published on, which must write nothing and name both hosts; a cluster refusal during the republish reported as "nothing changed" (the value is stored and the page is behind, and the error must say both) |
 | `internal/version/version_test.go` | A hardcoded image outside the registry, a floating tag, an undocumented component |
 | `internal/charts/namespaces_test.go` | The `ceffio-website` namespace disappearing from the chart |
 
