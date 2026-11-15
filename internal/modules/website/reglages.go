@@ -84,10 +84,14 @@ func (m *websiteModule) Current(ctx context.Context, env module.Env, groupe stri
 // several (console, CLI), and a stored value that the renderer rejects would
 // break the next install with an error nobody can trace back to its input.
 //
-// A SAVE THAT COULD NOT BECOME VISIBLE IS REFUSED BEFORE IT IS WRITTEN.
-// "Apply failed" must mean "nothing changed": storing an address the page
-// cannot be re-rendered with would leave the store ahead of the public page,
-// and the operator would have no way to tell which of the two is current.
+// WHAT "Apply failed" MEANS, precisely: the refusals this function can decide
+// alone — an unknown group, an address that does not parse, a page that cannot
+// be re-rendered without the installation domain — all happen BEFORE anything
+// is written, so a rejected save changes nothing. A failure of the CLUSTER
+// while republishing comes after the store write and is reported as such (see
+// the wrapped error below): it is the one outcome where the value is recorded
+// and the page has not caught up yet, and pretending otherwise would send the
+// operator to re-enter a setting that is already saved.
 func (m *websiteModule) Apply(ctx context.Context, env module.Env, groupe string, v module.Values) error {
 	g, ok := m.groupe(groupe)
 	if !ok {
@@ -113,7 +117,18 @@ func (m *websiteModule) Apply(ctx context.Context, env module.Env, groupe string
 	if !publiee {
 		return nil
 	}
-	return m.republierPage(ctx, env, v[cleContact])
+	if err := m.republierPage(ctx, env, v[cleContact]); err != nil {
+		// THE VALUE IS STORED AT THIS POINT. Saying "failed" alone would have
+		// the operator retype an address that is already recorded and wonder
+		// why it comes back unchanged; saying "saved" alone would hide that
+		// visitors still see the previous page. Both facts, in that order,
+		// leave exactly one thing to do: fix the cluster cause, then save
+		// again (or reinstall) to publish it.
+		return fmt.Errorf("website: the contact address was saved, but the published page could not be "+
+			"re-rendered, so visitors still see the previous address; fix the cause below, then save "+
+			"again or run `ceffio module install website`: %w", err)
+	}
+	return nil
 }
 
 // pagePresente reports whether there is a page to re-render. False is a normal
