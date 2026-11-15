@@ -118,7 +118,11 @@ func (m *websiteModule) Install(ctx context.Context, env module.Env) error {
 	// State.Blocked for the console's greyed-out button), and a module that
 	// queried its own dependencies would fail in isolation — where the
 	// registry holds nothing but itself, as every module test does.
-	donnees, empreinte, err := rendre(env.Domain)
+	contact, err := m.contactPublie(ctx, env)
+	if err != nil {
+		return err
+	}
+	donnees, empreinte, err := rendre(env.Domain, contact)
 	if err != nil {
 		return err
 	}
