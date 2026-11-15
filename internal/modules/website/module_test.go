@@ -27,8 +27,12 @@ import (
 // installs it on its own.
 const domaineTest = "example.com"
 
+// testEnv builds the environment the runner hands a module: the installation's
+// domain, a client, and the module's own ID — settings are stored under it, so
+// a module that reads one during Install needs it (cmd/ceffio sets it for every
+// install path).
 func testEnv(cs *fake.Clientset) module.Env {
-	return module.Env{Domain: domaineTest, Kube: cs, Out: io.Discard}
+	return module.Env{Domain: domaineTest, Kube: cs, Out: io.Discard, ModuleID: "website"}
 }
 
 // fauxControleur plays the part of the Deployment controller, which the fake
@@ -229,7 +233,7 @@ func TestInstallRedemarreQuandLaPageChange(t *testing.T) {
 		t.Fatalf("Deployment not created: %v", err)
 	}
 
-	autre := module.Env{Domain: "autre.example.org", Kube: cs, Out: io.Discard}
+	autre := module.Env{Domain: "autre.example.org", Kube: cs, Out: io.Discard, ModuleID: "website"}
 	if err := m.Install(ctx, autre); err != nil {
 		t.Fatalf("Install on the new host: %v", err)
 	}

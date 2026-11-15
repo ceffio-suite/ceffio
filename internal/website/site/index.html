@@ -163,13 +163,21 @@
         <ul class="footer-links">
           <li><a href="https://github.com/ceffio-suite/ceffio" rel="noopener">Code source</a></li>
           <li><a href="{{SECURITY_URL}}">Sécurité</a></li>
+          <!-- contact:start -->
+          <li><a href="mailto:{{CONTACT_EMAIL}}">Nous écrire</a></li>
+          <!-- contact:end -->
         </ul>
       </nav>
     </div>
     <div class="wrap">
       <div class="footer-legal">
         <p>Cette page est servie depuis {{DOMAIN}}. Le fichier <code>security.txt</code> de cet hôte, publié à l'adresse indiquée par le lien «&nbsp;Sécurité&nbsp;», explique où et comment signaler une vulnérabilité.</p>
+        <!-- contact:start -->
+        <p>Pour toute autre question&nbsp;: <a href="mailto:{{CONTACT_EMAIL}}">{{CONTACT_EMAIL}}</a>.</p>
+        <!-- contact:end -->
+        <!-- no-contact:start -->
         <p>Aucune adresse de contact n'est publiée ici&nbsp;: les canaux de signalement sont ceux de ce fichier.</p>
+        <!-- no-contact:end -->
       </div>
     </div>
   </footer>

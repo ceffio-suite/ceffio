@@ -20,21 +20,51 @@ chart](#why-the-namespace-is-declared-in-the-chart)).
 
 | It publishes | It does not |
 |---|---|
-| One page in French (`/`) and one in English (`/en/`), each with a single `<h1>` | A form, a contact address, a newsletter |
+| One page in French (`/`) and one in English (`/en/`), each with a single `<h1>` | A form, a newsletter, a comment box |
 | The suite's modules, three steps to get started, five guarantees | Any script, tracker, cookie, analytics or third-party sub-resource |
 | `style.css` and `logo.svg`, served from the same namespace | A web font, an image CDN, a CSS framework |
-| `robots.txt` and `sitemap.xml` pointing at the same host | A public mail address, a phone number, a postal address |
+| `robots.txt` and `sitemap.xml` pointing at the same host | A phone number, a postal address, an address nobody configured |
+| A contact address **if the operator sets one** (see below) | An address derived from the host, the project or the editor |
 
 The page is written in semantic HTML5 with `<meta>` cards (`description`, Open Graph,
 canonical, `hreflang` alternates for `fr`, `en`, and `x-default`). Everything is embedded in
 the Ceffio binary with `go:embed` (`internal/website/site/`), so the published bytes are the
 bytes of a release — no build step, no asset pipeline, nothing fetched at install time.
 
-There is **no contact email** on the page on purpose: the ways to reach the operators are
-the console (`https://admin.<domain>`), the GitHub project, and
-`https://<domain>/.well-known/security.txt` (published by the ingress layer). A generic
-`contact@` address on a marketing page is a spam magnet that nobody reads, and inventing one
-here would be a claim the installation cannot honour.
+## The contact address
+
+The page publishes **no contact address by default**. The ways to reach the operators are
+then the console (`https://admin.<domain>`), the GitHub project, and
+`https://<domain>/.well-known/security.txt` (published by the ingress layer) — the footer
+says so, in the page's language.
+
+An installation that *does* want to publish an address sets it as a setting:
+
+```sh
+ceffio module config website landing_page contact_email=contact@company.fr
+```
+
+or through the module's **Settings** tab in the console (the generic settings form: no
+bespoke page). The value is stored in `ceffio-settings` under the `website.landing_page`
+key, like every other module setting, and the page is re-rendered in the same command: the
+ConfigMap changes, the `ceffio.io/page-checksum` changes with it, and the pod rolls — nginx
+has already read the old page, so a Settings save without the roll would change nothing
+visible. No reinstall is needed, and saving the same value twice rolls nothing.
+
+Setting it to the empty string (`contact_email=`) removes the address again and restores the
+"no address" sentence.
+
+**Why a setting and not a constant.** A published address is the installation's own
+identity: on the project's own domain it is `contact@mandem-it.com`, on a customer's
+installation it is the customer's. Committing an address here would publish one
+organisation's inbox from every installation, and deriving it from the host would invent an
+alias nobody reads. The empty default is the only value that is correct for an installation
+that never asked.
+
+The address is validated in two places, with the same pattern (`website.MotifAdresse`): the
+settings form refuses a value that is not an address before writing it, and the renderer
+refuses it again before the bytes are published. A value that is not `name@host.tld` is an
+error, never a broken `mailto:` on the public page.
 
 ## Why the page is on the apex host
 
@@ -68,7 +98,11 @@ One pod, `ceffio-website/ceffio-website`, running a **pinned** `nginx:1.29.8-alp
 - The page, the stylesheet, the logo, `robots.txt` and `sitemap.xml` live in a ConfigMap
   (`ceffio-website`, one key per file), generated at install time from the embedded files.
   The `{{DOMAIN}}`, `{{ADMIN_URL}}` and `{{SECURITY_URL}}` placeholders are resolved with the
-  installation's domain — nothing is hardcoded in the shipped HTML.
+  installation's domain — nothing is hardcoded in the shipped HTML. `{{CONTACT_EMAIL}}` is
+  the one placeholder that comes from a setting, not from the host: it is filled with
+  `landing_page.contact_email`, and the blocks that carry it (`<!-- contact:start -->` …
+  `<!-- contact:end -->`) are removed entirely when that setting is empty, together with
+  their markers.
 - The nginx server block is itself a ConfigMap key, mounted over `/etc/nginx/conf.d`: it is
   the *only* server block nginx loads.
 - A `ClusterIP` Service maps port 80 to the container's 8080. The container does not bind a
@@ -152,8 +186,9 @@ removal from the console converges instead of failing on the first missing objec
 
 | Test | What it prevents |
 |---|---|
-| `internal/website/site_test.go` | A published file with an unresolved `{{…}}` placeholder; an embedded file missing from (or extra to) the declared list; a page with a second `<h1>`, a `<script>`, an inline `style=`, a `mailto:`, an IPv4 literal, or a sub-resource that is not relative |
+| `internal/website/site_test.go` | A published file with an unresolved `{{…}}` placeholder or a leftover contact marker; an embedded file missing from (or extra to) the declared list; a page with a second `<h1>`, a `<script>`, an inline `style=`, or a sub-resource that is not relative; a `mailto:` (or a named address) on an installation without one; an address published in only one language; a configured address that lands in the wrong number of places or is not the configured one; a non-address accepted as one; an IPv4 literal |
 | `internal/modules/website/module_test.go` | An install that does not create the namespace / ConfigMap / Service / Deployment / Ingress; a re-install that restarts the pod or leaves drifted content; a page change that does *not* roll the pod; `State` claiming `Absent` without looking (it must say `Unknown`); an `Uninstall` that is not re-runnable; `Info` that stops being optional, non-default, or that starts declaring a Service on the apex host |
+| `internal/modules/website/reglages_test.go` | A settings form whose address field is required, has a default, or uses a pattern other than the renderer's; a stored address the published page ignores; a save that does not change the ConfigMap or does not roll the pod; a save of the same value that rolls the pod for nothing; a removal that leaves the old address published; an invalid value written to the store |
 | `internal/version/version_test.go` | A hardcoded image outside the registry, a floating tag, an undocumented component |
 | `internal/charts/namespaces_test.go` | The `ceffio-website` namespace disappearing from the chart |
 
@@ -162,8 +197,9 @@ removal from the console converges instead of failing on the first missing objec
 - **No CLI subcommand** (`ceffio website serve`): the module contract is `Install`/`State`/
   `Uninstall`; a feature that needs its own binary subcommand is a feature that was not
   expressed where the platform expects it (`docs/adding-a-module.md`, checklist item 11).
-- **No console page**: the page is static and has nothing to configure. Settings that exist
-  only to fill a form are a maintenance cost with no operator value.
+- **No bespoke console page**: the page is static, and its one datum is a setting the
+  generic Settings tab already renders (`Configurable`, like every other module). A page of
+  its own would be a second form for the same ConfigMap key.
 - **No `Info.Services` entry**: the console renders a Service as `<sub>.<domain>` and the
   apex has no `<sub>`, so the entry would show as `.<domain>`. The declared absence is
   documented here and pinned by the test.

@@ -193,8 +193,12 @@ func assurerNamespace(ctx context.Context, c kubernetes.Interface) error {
 // nothing rolls nothing. Kubernetes does not do that for ConfigMaps by
 // itself — a mounted ConfigMap is updated in place, but nginx has already
 // read it.
-func rendre(domaine string) (map[string]string, string, error) {
-	donnees, err := website.Files(domaine)
+//
+// The contact address comes from the module's settings and is empty when the
+// operator did not state one; see internal/website for what the empty value
+// removes from the page.
+func rendre(domaine, contact string) (map[string]string, string, error) {
+	donnees, err := website.Files(domaine, contact)
 	if err != nil {
 		return nil, "", err
 	}

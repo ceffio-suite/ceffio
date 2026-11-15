@@ -163,13 +163,21 @@
         <ul class="footer-links">
           <li><a href="https://github.com/ceffio-suite/ceffio" rel="noopener">Source code</a></li>
           <li><a href="{{SECURITY_URL}}">Security</a></li>
+          <!-- contact:start -->
+          <li><a href="mailto:{{CONTACT_EMAIL}}">Email us</a></li>
+          <!-- contact:end -->
         </ul>
       </nav>
     </div>
     <div class="wrap">
       <div class="footer-legal">
         <p>This page is served from {{DOMAIN}}. The host's <code>security.txt</code>, published at the address behind the “Security” link, explains where and how to report a vulnerability.</p>
+        <!-- contact:start -->
+        <p>For any other question: <a href="mailto:{{CONTACT_EMAIL}}">{{CONTACT_EMAIL}}</a>.</p>
+        <!-- contact:end -->
+        <!-- no-contact:start -->
         <p>No contact address is published here: the reporting channels are the ones in that file.</p>
+        <!-- no-contact:end -->
       </div>
     </div>
   </footer>
