@@ -12,7 +12,7 @@
 #   dist/ceffio-linux-amd64
 #   dist/ceffio-linux-arm64
 
-FROM alpine:3.20 AS certs
+FROM alpine:3.24 AS certs
 
 FROM scratch
 
