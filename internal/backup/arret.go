@@ -5,6 +5,7 @@ package backup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -75,13 +76,42 @@ func sortieKubectl(ctx context.Context, args ...string) (string, error) {
 	return b.String(), nil
 }
 
+// pvcExiste says whether the volume exists on this installation.
+//
+// THE QUESTION IS ASKED OF THE PVC, not of the pods: a module that is not
+// installed has neither, but a module whose workload is down still has its
+// volume — and mistaking that case for an absence would drop real data from
+// the archive without a word.
+func pvcExiste(ctx context.Context, v Volume) bool {
+	out, err := sortieKubectl(ctx, "get", "pvc", v.PVC, "-n", v.Namespace, "-o", "name")
+	return err == nil && strings.TrimSpace(out) != ""
+}
+
+// errVolumeAbsent says the PVC does not exist on this installation: the module
+// that would create it is not installed. Nothing is lost, so the caller skips
+// the volume. The distinction with a volume that exists but whose workload is
+// gone is deliberate — the second one holds data the backup must not drop.
+var errVolumeAbsent = errors.New("volume absent")
+
 // sauvegarderVolume copies a volume into dst, stopping its workload first when
 // the volume declares one.
+//
+// A VOLUME THAT DOES NOT EXIST IS SKIPPED, not failed: mail and openproject are
+// optional modules, so their volumes are absent on installations that do not
+// have them, and reporting that as an error would mark every backup incomplete
+// (Restaurer then refuses the archive). A volume that exists is backed up or
+// fails loudly; see pvcExiste.
 func sauvegarderVolume(ctx context.Context, v Volume, dst string, progress func(string)) error {
+	if !pvcExiste(ctx, v) {
+		return errVolumeAbsent
+	}
 	if v.StopWorkload == "" {
 		pod := podFor(ctx, v.Namespace, v.PodLabel)
 		if pod == "" {
-			return fmt.Errorf("no pod %s in %s", v.PodLabel, v.Namespace)
+			// The PVC exists, so the data is there: skipping it would be a
+			// silent loss. Say what is missing and what would be lost.
+			return fmt.Errorf("no pod %s in %s: %s exists and would be missing from the backup",
+				v.PodLabel, v.Namespace, v.PVC)
 		}
 		return tarVolume(ctx, v.Namespace, pod, v.Path, dst)
 	}
@@ -93,6 +123,9 @@ func sauvegarderVolume(ctx context.Context, v Volume, dst string, progress func(
 // restaurerVolume re-injects a tar into the volume, stopping its workload
 // first when the volume declares one.
 func restaurerVolume(ctx context.Context, v Volume, tarPath string, progress func(string)) error {
+	if !pvcExiste(ctx, v) {
+		return fmt.Errorf("volume %s does not exist: install the module before restoring it", v.PVC)
+	}
 	if v.StopWorkload == "" {
 		pod := podFor(ctx, v.Namespace, v.PodLabel)
 		if pod == "" {
