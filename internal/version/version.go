@@ -214,6 +214,12 @@ var Registry = []Composant{
 	// WHY THE ALPINE VARIANT: the Debian-based tags ship a shell and a package
 	// manager the page does not need, and the scanned attack surface of a
 	// public-facing container is the whole argument.
+	{
+		Nom: "nginx", Image: "docker.io/library/nginx:1.29.8-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de",
+		Module: "internal/modules/website",
+		Role:   "Serve the static landing page of the optional website module, nothing else", Licence: "BSD-2-Clause",
+	},
+
 	// PROJECT MANAGEMENT, the optional "openproject" module.
 	//
 	// THE -slim VARIANT, which is what the upstream Helm chart and compose files
@@ -228,12 +234,6 @@ var Registry = []Composant{
 		Nom: "openproject", Image: "docker.io/openproject/openproject:17.9.8-slim@sha256:9555489b1ec84c53275dbf63c4c101e7002222e6f273d7fc10e8ff18f8f726c0",
 		Module: "internal/modules/openproject",
 		Role:   "Project management: work packages, Gantt charts, boards, time tracking", Licence: "GPL-3.0-only",
-	},
-
-	{
-		Nom: "nginx", Image: "docker.io/library/nginx:1.29.8-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de",
-		Module: "internal/modules/website",
-		Role:   "Serve the static landing page of the optional website module, nothing else", Licence: "BSD-2-Clause",
 	},
 }
 
