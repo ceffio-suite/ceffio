@@ -77,6 +77,11 @@ func fauxVolume(errCopie error) *kubectlFactice {
 			if len(args) > 1 && args[1] == "deployment" {
 				return "example.com/mail:test", nil
 			}
+			if len(args) > 1 && args[1] == "pvc" {
+				// The volume exists: these tests are about a mail installation
+				// that really has its data, not about a module that is absent.
+				return "persistentvolumeclaim/" + args[2], nil
+			}
 			// The pods of the stopped workload: empty, so the wait for the
 			// volume to be free ends on the first poll.
 			return "", nil
@@ -172,6 +177,9 @@ func TestUnPodTemporaireQuiNeDemarrePasEstSupprimeEtLaChargeRedemarree(t *testin
 		}
 		if len(args) > 0 && args[0] == "get" && len(args) > 1 && args[1] == "deployment" {
 			return "example.com/mail:test", nil
+		}
+		if len(args) > 0 && args[0] == "get" && len(args) > 1 && args[1] == "pvc" {
+			return "persistentvolumeclaim/" + args[2], nil
 		}
 		if len(args) > 0 && args[0] == "exec" {
 			return "", fmt.Errorf("exec must not run: the pod was never ready")

@@ -11,12 +11,15 @@
 // What gets backed up, and why this choice:
 //
 //  1. The PostgreSQL databases (logical dump per database) — mysuite,
-//     keycloak, nextcloud. This is the heart of the platform: identities,
-//     accounts, file metadata, conversations.
+//     keycloak, nextcloud, openproject. This is the heart of the platform:
+//     identities, accounts, file metadata, conversations, projects. Some of
+//     them belong to OPTIONAL modules: a database that does not exist on the
+//     installation is skipped, not reported as a failure (see Bases).
 //  2. The volumes (tar) — nextcloud-data (users' actual files),
 //     onlyoffice-data, stalwart-data (the mail server's RocksDB store and
-//     blobs). A SQL dump is not enough: documents, attachments and messages
-//     live on disk.
+//     blobs), openproject-assets (projects' attachments, which no SQL dump
+//     carries). A SQL dump is not enough: documents, attachments and
+//     messages live on disk.
 //  3. The application Secrets — without them, a restore leaves orphaned
 //     data: the database passwords no longer match, the Matrix and
 //     ONLYOFFICE signing keys no longer agree.
@@ -52,10 +55,26 @@ import (
 // PostgreSQL databases of the platform. They all live in the CNPG cluster
 // ceffio-pg; naming them explicitly avoids depending on a dynamic discovery
 // that might one day include a technical database.
-var Bases = []string{"mysuite", "keycloak", "nextcloud"}
+//
+// THE LIST IS A CONSTANT, THE INSTALLATION DECIDES. nextcloud belongs to the
+// optional `files` chain and openproject to the optional `openproject` module:
+// on an installation without them, `pg_dump` would fail with "database does
+// not exist" and EVERY backup would be marked incomplete — which makes the
+// safety net look broken, and a restore refuse an archive that is in fact
+// fine. The presence of each database is therefore checked on the cluster
+// before dumping (see basesPresentes); a database that exists but cannot be
+// read stays an error.
+var Bases = []string{"mysuite", "keycloak", "nextcloud", "openproject"}
 
 // Volumes to back up: namespace, PVC name, and the useful subpath (some
 // volumes hold, alongside the data, state of no interest).
+//
+// A VOLUME WHOSE MODULE IS NOT INSTALLED IS SKIPPED, not failed: mail and
+// openproject are optional, so their volumes do not exist on every
+// installation. The distinction we keep is between "no PVC: nothing to save"
+// and "a PVC with no pod: data we cannot read" — the second is a real error,
+// because a backup that silently drops a volume existing on the cluster is
+// exactly the one discovered at restore time. See sauvegarderVolume.
 //
 // WHY stalwart-data DECLARES StopWorkload AND THE OTHERS DO NOT. Nextcloud and
 // ONLYOFFICE keep file trees: copying them while the application runs is
@@ -72,6 +91,19 @@ var Volumes = []Volume{
 		Path: "/var/lib/onlyoffice", UID: 0, GID: 0},
 	{Namespace: "ceffio-mail", PVC: "stalwart-data", PodLabel: "app=stalwart",
 		Path: "/var/lib/stalwart", UID: 2000, GID: 2000, StopWorkload: "stalwart"},
+	// OpenProject keeps its attachments outside the database: a dump alone
+	// restores projects whose work packages point at documents that are no
+	// longer there. A LIVE COPY IS ACCEPTED, like Nextcloud and ONLYOFFICE:
+	// each attachment is a whole file written once under its own name, so a
+	// copy taken while the application runs misses at worst the attachment
+	// being uploaded at that instant — stopping the application would cost
+	// more than it protects.
+	//
+	// The service account and the pod run as UID 1000 (fsGroup included): the
+	// restore chowns to that account, without which Puma and the worker lose
+	// write access to their own attachments.
+	{Namespace: "ceffio-system", PVC: "openproject-assets", PodLabel: "app=openproject",
+		Path: "/var/openproject/assets", UID: 1000, GID: 1000},
 }
 
 // Application Secrets: without them, the restored data is orphaned.
@@ -198,7 +230,22 @@ func Sauvegarder(ctx context.Context, dir string, progress func(string)) (string
 	if pod == "" {
 		man.Errors = append(man.Errors, "PostgreSQL pod not found: databases not backed up")
 	} else {
-		for _, base := range Bases {
+		// WHICH DATABASES THIS INSTALLATION HAS comes from the cluster, not
+		// from the list: an optional module that is not installed leaves no
+		// database behind, and dumping it would fail — which would mark every
+		// backup incomplete and make a restore refuse a sound archive. If the
+		// cluster cannot answer, every database of the list is still
+		// attempted: the error is reported here, and the dumps that fail say
+		// so too.
+		presentes, errListe := basesPresentes(ctx, pod)
+		if errListe != nil {
+			man.Errors = append(man.Errors, "bases : "+errListe.Error())
+		}
+		gardees, absentes := filtrerBases(presentes)
+		for _, base := range absentes {
+			progress("base " + base + " : absente, rien à sauvegarder")
+		}
+		for _, base := range gardees {
 			progress("base " + base)
 			rel := filepath.Join("db", base+".sql")
 			dst := filepath.Join(work, rel)
@@ -225,6 +272,14 @@ func Sauvegarder(ctx context.Context, dir string, progress func(string)) (string
 		os.MkdirAll(filepath.Dir(dst), 0o700)
 
 		if err := sauvegarderVolume(ctx, v, dst, progress); err != nil {
+			// No PVC means the module is not installed: nothing to save, and
+			// calling it a failure would make the archive unrestorable. A
+			// volume that exists but has no pod stays an error (see
+			// sauvegarderVolume).
+			if errors.Is(err, errVolumeAbsent) {
+				progress("volume " + v.PVC + " : absent, rien à sauvegarder")
+				continue
+			}
 			man.Errors = append(man.Errors, fmt.Sprintf("volume %s : %v", v.PVC, err))
 			continue
 		}
@@ -564,6 +619,45 @@ func query(ctx context.Context, pod, base, sql string) string {
 		return ""
 	}
 	return out
+}
+
+// basesPresentes lists the databases the cluster actually holds.
+//
+// ONE psql call, not one per database: asking "does this database exist?"
+// separately would make a failing connection indistinguishable from an
+// absence, and the wrong answer here silently drops data from the archive.
+func basesPresentes(ctx context.Context, pod string) (map[string]bool, error) {
+	out, err := sortieKubectl(ctx, "exec", "-c", "postgres", "-n", "ceffio-data", pod,
+		"--", "psql", "-U", "postgres", "-d", "postgres", "-tAc", "SELECT datname FROM pg_database")
+	if err != nil {
+		return nil, fmt.Errorf("listing the databases: %w", err)
+	}
+	presentes := map[string]bool{}
+	for _, ligne := range strings.Split(out, "\n") {
+		if nom := strings.TrimSpace(ligne); nom != "" {
+			presentes[nom] = true
+		}
+	}
+	return presentes, nil
+}
+
+// filtrerBases splits the constant list into the databases to dump and the
+// ones to skip.
+//
+// A nil map means the listing failed: every database of the list is then
+// attempted rather than silently dropped, and the caller reports the failure.
+func filtrerBases(presentes map[string]bool) (gardees, absentes []string) {
+	if presentes == nil {
+		return Bases, nil
+	}
+	for _, base := range Bases {
+		if presentes[base] {
+			gardees = append(gardees, base)
+		} else {
+			absentes = append(absentes, base)
+		}
+	}
+	return gardees, absentes
 }
 
 // DetectDomain infers the base domain from the ingresses.
