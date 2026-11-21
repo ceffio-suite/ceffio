@@ -23,6 +23,7 @@ the two drift apart.
 | [console-image.md](console-image.md) | How the console is built, published, and what it may do in the cluster |
 | [keycloak-production.md](keycloak-production.md) | Keycloak in production mode: options, hostname, and what was measured |
 | [website.md](website.md) | The optional `website` module: the bilingual landing page on the apex host, how it is served, hardened, verified and removed |
+| [openproject.md](openproject.md) | The optional `openproject` module: what it deploys, how the sign-in works without OpenProject's Enterprise OIDC, the accounts, backup, verification, removal, and what it does not do |
 | [cout-hebergement.md](cout-hebergement.md) | What the machine costs, month by month |
 
 ## The console
