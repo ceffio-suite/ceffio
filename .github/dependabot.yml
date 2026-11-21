@@ -17,6 +17,11 @@ version: 2
 updates:
   - package-ecosystem: gomod
     directory: /
+    # DEVELOP, NOT main: `develop` is what integrates (GitFlow) and `main` only
+    # receives release merges. Without this line Dependabot opens its PRs
+    # against the repository default branch (main), and a routine bump then sits
+    # outside the branch that every other change goes through — see #196.
+    target-branch: develop
     schedule:
       interval: weekly
       day: monday
@@ -33,6 +38,7 @@ updates:
   # The console image lives in build/console, not at the root.
   - package-ecosystem: docker
     directory: /build/console
+    target-branch: develop
     schedule:
       interval: weekly
       day: monday
@@ -48,6 +54,7 @@ updates:
 
   - package-ecosystem: github-actions
     directory: /
+    target-branch: develop
     schedule:
       interval: weekly
       day: monday
