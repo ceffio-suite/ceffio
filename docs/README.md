@@ -22,6 +22,7 @@ the two drift apart.
 | [sign-in-page.md](sign-in-page.md) | The login theme, and how to go back to Keycloak's |
 | [console-image.md](console-image.md) | How the console is built, published, and what it may do in the cluster |
 | [keycloak-production.md](keycloak-production.md) | Keycloak in production mode: options, hostname, and what was measured |
+| [website.md](website.md) | The optional `website` module: the bilingual landing page on the apex host, how it is served, hardened, verified and removed |
 | [cout-hebergement.md](cout-hebergement.md) | What the machine costs, month by month |
 
 ## The console

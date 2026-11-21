@@ -1,0 +1,226 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright © MANDEM
+
+package website
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/ceffio-suite/ceffio/internal/module"
+	"github.com/ceffio-suite/ceffio/internal/settings"
+	"github.com/ceffio-suite/ceffio/internal/website"
+)
+
+// groupePage is the settings group the console draws for the landing page.
+const groupePage = "landing_page"
+
+// cleContact is the field holding the address published in the footer.
+const cleContact = "contact_email"
+
+// Settings declares the landing page settings.
+//
+// WHY A DECLARED SETTING AND NOT A CONSTANT: the address belongs to the
+// OPERATOR of the installation, never to the editor. Committing one would
+// publish Mandem's address from every customer's server, and a customer who
+// received a report meant for them would have no way to know. The default is
+// therefore EMPTY — no address at all — and a domain that does want one sets
+// it here.
+//
+// The module implements Configurable and that is all it takes: the console
+// draws this form and the CLI prints it, with no code in either that knows the
+// word "website".
+func (m *websiteModule) Settings() []module.Group {
+	return []module.Group{{
+		ID:    groupePage,
+		Title: "Landing page",
+		Description: "The public page published on the installation's root host. " +
+			"Changing a value re-renders the page and replaces its pod: no reinstall, " +
+			"and the address visitors type does not change.",
+		Fields: []module.Field{{
+			Key:   cleContact,
+			Label: "Contact address",
+			Help: "Published in the footer, as a link and as text. Leave empty to publish no " +
+				"address: the page then says the reporting channels are the ones in security.txt. " +
+				"An address here is the installation's own, not the editor's.",
+			Type:    module.Text,
+			Pattern: website.MotifAdresse,
+		}},
+	}}
+}
+
+// groupe returns the declaration of one group, and whether it exists. Looking
+// it up instead of fabricating a Group means Current and Apply can never be
+// given a field list that Settings does not declare.
+func (m *websiteModule) groupe(id string) (module.Group, bool) {
+	for _, g := range m.Settings() {
+		if g.ID == id {
+			return g, true
+		}
+	}
+	return module.Group{}, false
+}
+
+// Current reads the stored contact address.
+//
+// IT READS THE STORE, NOT THE PUBLISHED PAGE: for this module the store IS the
+// truth — a page edited out of band would be overwritten by the next install,
+// and there is no other frontend that could change the address behind the
+// form's back. A missing entry reads as the empty default, which is what an
+// installation that never set one publishes.
+func (m *websiteModule) Current(ctx context.Context, env module.Env, groupe string) (module.Values, error) {
+	g, ok := m.groupe(groupe)
+	if !ok {
+		return nil, fmt.Errorf("website: unknown settings group %q (declared: %s)", groupe, groupePage)
+	}
+	return settings.Load(ctx, env, g)
+}
+
+// Apply stores the contact address and republishes the page when it exists.
+//
+// THE VALUE IS VALIDATED BEFORE IT IS STORED, and validated again by
+// website.Files when the page is rendered: the form is one frontend among
+// several (console, CLI), and a stored value that the renderer rejects would
+// break the next install with an error nobody can trace back to its input.
+//
+// WHAT "Apply failed" MEANS, precisely: the refusals this function can decide
+// alone — an unknown group, an address that does not parse, a page that cannot
+// be re-rendered without the installation domain — all happen BEFORE anything
+// is written, so a rejected save changes nothing. A failure of the CLUSTER
+// while republishing comes after the store write and is reported as such (see
+// the wrapped error below): it is the one outcome where the value is recorded
+// and the page has not caught up yet, and pretending otherwise would send the
+// operator to re-enter a setting that is already saved.
+func (m *websiteModule) Apply(ctx context.Context, env module.Env, groupe string, v module.Values) error {
+	g, ok := m.groupe(groupe)
+	if !ok {
+		return fmt.Errorf("website: unknown settings group %q (declared: %s)", groupe, groupePage)
+	}
+	if v == nil {
+		v = module.Values{}
+	}
+	// A text input carries what was typed, including surrounding spaces; they
+	// are not part of an address, and the pattern would reject a value the
+	// operator sees as correct.
+	v[cleContact] = strings.TrimSpace(v[cleContact])
+	if err := module.Validate(g, v); err != nil {
+		return err
+	}
+	publiee := m.pagePresente(ctx, env)
+	if publiee && env.Domain == "" {
+		return fmt.Errorf("website: cannot re-render the page without the installation domain (use --domain)")
+	}
+	// THE PAGE BAKES ITS OWN HOST INTO ITS BYTES: canonical, hreflang, og:url,
+	// the console link and the security.txt link all come from Env.Domain. That
+	// value is a CLI flag whose default is the reference installation's domain
+	// (ceffio.example.com), so a save that omits --domain on an installation
+	// called company.fr would store the address AND repoint every self-reference
+	// of the public page at another host — valid HTML, correct address, wrong
+	// page. The Ingress this module owns records the host the page is actually
+	// served on, so the disagreement is caught BEFORE anything is written.
+	if publiee {
+		domainePublie, err := m.domainePublie(ctx, env)
+		if err != nil {
+			return err
+		}
+		if domainePublie != "" && domainePublie != env.Domain {
+			return fmt.Errorf("website: this installation publishes the page on %s, but the save was "+
+				"given %s; the page embeds its own host in every link and canonical URL, so saving "+
+				"would point the public page at another host. Re-run with `--domain %s` (the CLI "+
+				"defaults to the reference domain), or reinstall the module if the installation "+
+				"really moved", domainePublie, env.Domain, domainePublie)
+		}
+	}
+	if err := settings.Save(ctx, env, g, v); err != nil {
+		return err
+	}
+	if !publiee {
+		return nil
+	}
+	if err := m.republierPage(ctx, env, v[cleContact]); err != nil {
+		// THE VALUE IS STORED AT THIS POINT. Saying "failed" alone would have
+		// the operator retype an address that is already recorded and wonder
+		// why it comes back unchanged; saying "saved" alone would hide that
+		// visitors still see the previous page. Both facts, in that order,
+		// leave exactly one thing to do: fix the cluster cause, then save
+		// again (or reinstall) to publish it.
+		return fmt.Errorf("website: the contact address was saved, but the published page could not be "+
+			"re-rendered, so visitors still see the previous address; fix the cause below, then save "+
+			"again or run `ceffio module install website`: %w", err)
+	}
+	return nil
+}
+
+// pagePresente reports whether there is a page to re-render. False is a normal
+// answer: a setting can legitimately be recorded before the module is installed
+// (`ceffio module config` has no install gate, and a script may prepare an
+// installation), and Install reads the store anyway — storing the value is then
+// the whole job.
+func (m *websiteModule) pagePresente(ctx context.Context, env module.Env) bool {
+	if env.Kube == nil {
+		return false
+	}
+	etat := m.State(ctx, env)
+	return etat.Status == module.Installed || etat.Status == module.Degraded
+}
+
+// domainePublie returns the host the module's own Ingress serves the page on,
+// or "" when the page is not published yet (a fresh installation has no
+// Ingress, and a setting saved before install is legitimate).
+//
+// It reads only the object the module created: no discovery, no other
+// namespace, no permission beyond the `ingresses get` it already holds.
+func (m *websiteModule) domainePublie(ctx context.Context, env module.Env) (string, error) {
+	if env.Kube == nil {
+		return "", nil
+	}
+	ing, err := env.Kube.NetworkingV1().Ingresses(nsSite).Get(ctx, nomPage, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("website: cannot read the published page's Ingress to check the "+
+			"installation domain: %w", err)
+	}
+	for _, regle := range ing.Spec.Rules {
+		if regle.Host != "" {
+			return regle.Host, nil
+		}
+	}
+	return "", nil
+}
+
+// republierPage makes a saved address visible without reinstalling the module.
+//
+// It does NOT wait for the replacement pod. The caller is an HTTP request or a
+// CLI command whose job is to record a decision; a rolling update takes a few
+// seconds, and blocking the console's request on it would time it out.
+func (m *websiteModule) republierPage(ctx context.Context, env module.Env, contact string) error {
+	donnees, empreinte, err := rendre(env.Domain, contact)
+	if err != nil {
+		return err
+	}
+	if err := assurerConfigMap(ctx, env.Kube, donnees); err != nil {
+		return err
+	}
+	return assurerDeploiement(ctx, env.Kube, empreinte)
+}
+
+// contactPublie reads the address Install must publish. Empty is a normal
+// answer: it is what an installation that never configured one publishes.
+func (m *websiteModule) contactPublie(ctx context.Context, env module.Env) (string, error) {
+	valeurs, err := m.Current(ctx, env, groupePage)
+	if err != nil {
+		return "", err
+	}
+	return valeurs[cleContact], nil
+}
+
+var (
+	_ module.Module       = (*websiteModule)(nil)
+	_ module.Configurable = (*websiteModule)(nil)
+)

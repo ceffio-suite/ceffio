@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ceffio — Votre suite collaborative, sur votre serveur</title>
+  <meta name="description" content="Ceffio installe sur votre serveur une suite collaborative souveraine et auto-hébergée : fichiers, mail, visioconférence, édition, chat, secrets et SSO.">
+  <meta name="theme-color" content="#F6F5F1">
+  <link rel="canonical" href="https://{{DOMAIN}}/">
+  <link rel="alternate" hreflang="fr" href="https://{{DOMAIN}}/">
+  <link rel="alternate" hreflang="en" href="https://{{DOMAIN}}/en/">
+  <link rel="alternate" hreflang="x-default" href="https://{{DOMAIN}}/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Ceffio">
+  <meta property="og:title" content="Ceffio — Votre suite collaborative, sur votre serveur">
+  <meta property="og:description" content="Ceffio installe sur votre serveur une suite collaborative souveraine et auto-hébergée : fichiers, mail, visioconférence, édition, chat, secrets et SSO.">
+  <meta property="og:url" content="https://{{DOMAIN}}/">
+  <meta property="og:locale" content="fr_FR">
+  <meta property="og:locale:alternate" content="en_GB">
+  <link rel="icon" href="logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip-link" href="#contenu">Aller au contenu</a>
+
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="index.html">
+        <img src="logo.svg" alt="" width="30" height="30" aria-hidden="true">
+        <span class="wordmark">ceffio</span>
+      </a>
+      <div class="header-nav">
+        <nav aria-label="Langue">
+          <ul class="lang-switch">
+            <li><a href="index.html" hreflang="fr" lang="fr" aria-current="page">FR</a></li>
+            <li><a href="en/index.html" hreflang="en" lang="en">EN</a></li>
+          </ul>
+        </nav>
+        <a class="btn btn-primary btn-sm" href="{{ADMIN_URL}}">Console</a>
+      </div>
+    </div>
+  </header>
+
+  <main id="contenu">
+    <section class="hero" aria-labelledby="titre-hero">
+      <div class="wrap">
+        <p class="eyebrow">Souveraine · auto-hébergée · logiciel libre</p>
+        <h1 id="titre-hero">Votre suite collaborative,<br>sur votre serveur<span class="h1-dot">.</span></h1>
+        <p class="lede">Fichiers, mail, visioconférence, édition collaborative, chat et coffre de secrets sur votre serveur — avec l'identité, les certificats et les sauvegardes.</p>
+        <div class="actions">
+          <a class="btn btn-primary" href="{{ADMIN_URL}}">Ouvrir la console</a>
+          <a class="btn btn-ghost" href="https://github.com/ceffio-suite/ceffio" rel="noopener">Voir le code</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="titre-modules">
+      <div class="wrap">
+        <div class="section-head">
+          <p class="eyebrow">01 — Modules</p>
+          <div>
+            <h2 id="titre-modules">Ce que vous installez</h2>
+            <p class="section-lede">Chaque brique est un module&nbsp;: activé à l'installation, ou ajouté plus tard — par la CLI ou depuis la console.</p>
+          </div>
+        </div>
+        <ul class="modules">
+          <li class="module">
+            <h3>Fichiers et documents</h3>
+            <p>Nextcloud&nbsp;: synchronisation, partage et édition en ligne, sur un stockage qui reste chez vous.</p>
+          </li>
+          <li class="module">
+            <h3>Messagerie</h3>
+            <p>Stalwart&nbsp;: SMTP et IMAP, filtres, webmail. La CLI vérifie les enregistrements DNS dont dépend la délivrabilité.</p>
+          </li>
+          <li class="module">
+            <h3>Visioconférence</h3>
+            <p>Nextcloud Talk avec son SFU et son serveur TURN&nbsp;: l'audio et la vidéo passent par votre réseau, pas par une plateforme tierce.</p>
+          </li>
+          <li class="module">
+            <h3>Édition de documents</h3>
+            <p>ONLYOFFICE&nbsp;: textes, tableurs et présentations édités à plusieurs, sans quitter la suite.</p>
+          </li>
+          <li class="module">
+            <h3>Chat d'équipe</h3>
+            <p>Nextcloud Talk&nbsp;: conversations et fils, derrière la même authentification que les fichiers.</p>
+          </li>
+          <li class="module">
+            <h3>Coffre de secrets</h3>
+            <p>OpenBao&nbsp;: les identifiants générés à l'installation y sont scellés, jamais demandés au terminal.</p>
+          </li>
+          <li class="module">
+            <h3>Captation et transcription</h3>
+            <p>Enregistrement des réunions puis transcription, piste par piste, sur la machine — sans envoi à un service externe.</p>
+          </li>
+          <li class="module">
+            <h3>Console d'administration</h3>
+            <p>L'état réel des services, des certificats et des comptes, plus une API JSON documentée.</p>
+          </li>
+          <li class="module">
+            <h3>Identité et SSO</h3>
+            <p>Keycloak&nbsp;: un annuaire unique de comptes pour tous les modules, relié en OIDC.</p>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="titre-etapes">
+      <div class="wrap">
+        <div class="section-head">
+          <p class="eyebrow">02 — Installation</p>
+          <div>
+            <h2 id="titre-etapes">Comment ça se passe</h2>
+            <p class="section-lede">Trois moments, du serveur vide à une suite en production.</p>
+          </div>
+        </div>
+        <ol class="steps">
+          <li class="step">
+            <h3>Installez la CLI</h3>
+            <p>Un binaire Go unique, posé sur votre serveur Linux. Il installe K3s et déploie la suite en parlant directement à l'API Kubernetes — sans opérateur intermédiaire.</p>
+          </li>
+          <li class="step">
+            <h3>Lancez l'installation</h3>
+            <p><code>ceffio install</code> déploie les modules, émet les certificats et génère les identifiants, puis les scelle dans le coffre. La commande est idempotente&nbsp;: la relancer répare, elle ne casse rien.</p>
+          </li>
+          <li class="step">
+            <h3>Administrez depuis la console</h3>
+            <p>L'état des services, des certificats et des comptes est calculé depuis le cluster, jamais recopié à la main. Les mêmes actions existent en JSON.</p>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="titre-garanties">
+      <div class="wrap">
+        <div class="section-head">
+          <p class="eyebrow">03 — Garanties</p>
+          <div>
+            <h2 id="titre-garanties">Sérieux et vérifiable</h2>
+            <p class="section-lede">Des promesses qu'un opérateur peut vérifier lui-même, dans le dépôt comme sur la machine.</p>
+          </div>
+        </div>
+        <ul class="checks">
+          <li><strong>HTTPS automatique</strong><span>Certificats émis et renouvelés par cert-manager, avec deux méthodes de validation au choix&nbsp;: HTTP-01 ou DNS-01.</span></li>
+          <li><strong>SBOM lisible par machine</strong><span><code>ceffio sbom</code> écrit un document CycloneDX de tout ce que l'installation peut exécuter, images épinglées par digest.</span></li>
+          <li><strong>Scan de vulnérabilités</strong><span>Chaque livraison passe par Grype&nbsp;; les exceptions sont écrites, justifiées et versionnées dans le dépôt.</span></li>
+          <li><strong>Sauvegardes</strong><span><code>ceffio backup</code> et <code>ceffio restore</code>&nbsp;: bases de données, secrets et volumes.</span></li>
+          <li><strong>API documentée</strong><span>Le contrat JSON de la console est décrit dans le dépôt, avec l'authentification qu'il exige.</span></li>
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-top">
+      <div>
+        <a class="brand" href="index.html">
+          <img src="logo.svg" alt="" width="26" height="26" aria-hidden="true">
+          <span class="wordmark">ceffio</span>
+        </a>
+        <p class="footer-lede">Suite collaborative souveraine et auto-hébergée, publiée sous licence AGPL-3.0-or-later.</p>
+      </div>
+      <nav aria-label="Liens de pied de page">
+        <ul class="footer-links">
+          <li><a href="https://github.com/ceffio-suite/ceffio" rel="noopener">Code source</a></li>
+          <li><a href="{{SECURITY_URL}}">Sécurité</a></li>
+          <!-- contact:start -->
+          <li><a href="mailto:{{CONTACT_EMAIL}}">Nous écrire</a></li>
+          <!-- contact:end -->
+        </ul>
+      </nav>
+    </div>
+    <div class="wrap">
+      <div class="footer-legal">
+        <p>Cette page est servie depuis {{DOMAIN}}. Le fichier <code>security.txt</code> de cet hôte, publié à l'adresse indiquée par le lien «&nbsp;Sécurité&nbsp;», explique où et comment signaler une vulnérabilité.</p>
+        <!-- contact:start -->
+        <p>Pour toute autre question&nbsp;: <a href="mailto:{{CONTACT_EMAIL}}">{{CONTACT_EMAIL}}</a>.</p>
+        <!-- contact:end -->
+        <!-- no-contact:start -->
+        <p>Aucune adresse de contact n'est publiée ici&nbsp;: les canaux de signalement sont ceux de ce fichier.</p>
+        <!-- no-contact:end -->
+      </div>
+    </div>
+  </footer>
+</body>
+</html>

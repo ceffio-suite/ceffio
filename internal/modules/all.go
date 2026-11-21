@@ -27,6 +27,7 @@ import (
 	_ "github.com/ceffio-suite/ceffio/internal/modules/longhornui"
 	_ "github.com/ceffio-suite/ceffio/internal/modules/mail"
 	_ "github.com/ceffio-suite/ceffio/internal/modules/office"
+	_ "github.com/ceffio-suite/ceffio/internal/modules/openproject"
 	_ "github.com/ceffio-suite/ceffio/internal/modules/platform"
 	_ "github.com/ceffio-suite/ceffio/internal/modules/publicip"
 	_ "github.com/ceffio-suite/ceffio/internal/modules/recording"
@@ -34,4 +35,5 @@ import (
 	_ "github.com/ceffio-suite/ceffio/internal/modules/talk"
 	_ "github.com/ceffio-suite/ceffio/internal/modules/transcription"
 	_ "github.com/ceffio-suite/ceffio/internal/modules/vault"
+	_ "github.com/ceffio-suite/ceffio/internal/modules/website"
 )

@@ -217,6 +217,10 @@ func newModuleInstallCmd(domain *string) *cobra.Command {
 			for _, pm := range plan {
 				pid := pm.Info().ID
 				pinfo := pm.Info()
+				// The module speaks about ITSELF: settings are stored under the
+				// module's ID, so an Install that reads one must be told whose
+				// settings these are (same rule as `module check` below).
+				env.ModuleID = pid
 
 				if pinfo.Kind == module.Core {
 					// A core dependency belongs to the product: `ceffio
