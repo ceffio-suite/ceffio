@@ -214,6 +214,22 @@ var Registry = []Composant{
 	// WHY THE ALPINE VARIANT: the Debian-based tags ship a shell and a package
 	// manager the page does not need, and the scanned attack surface of a
 	// public-facing container is the whole argument.
+	// PROJECT MANAGEMENT, the optional "openproject" module.
+	//
+	// THE -slim VARIANT, which is what the upstream Helm chart and compose files
+	// run: web, worker and seeder are separate processes, and the image carries
+	// no PostgreSQL or memcached of its own — the suite provides the database.
+	// PINNED BY DIGEST: the multi-architecture index of 17.9.8-slim (amd64 and
+	// arm64), read from Docker Hub on 2026-11-21.
+	//
+	// LICENCE: the project README says "the GNU General Public License version
+	// 3", with no "or any later version"; GitHub labels it GPL-3.0.
+	{
+		Nom: "openproject", Image: "docker.io/openproject/openproject:17.9.8-slim@sha256:9555489b1ec84c53275dbf63c4c101e7002222e6f273d7fc10e8ff18f8f726c0",
+		Module: "internal/modules/openproject",
+		Role:   "Project management: work packages, Gantt charts, boards, time tracking", Licence: "GPL-3.0-only",
+	},
+
 	{
 		Nom: "nginx", Image: "docker.io/library/nginx:1.29.8-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de",
 		Module: "internal/modules/website",

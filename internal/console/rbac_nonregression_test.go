@@ -178,13 +178,25 @@ func legacyReference(t *testing.T) map[ruleTuple]bool {
 		ref[k] = true
 	}
 
+	// DECIDED ADDITION (module openproject): OpenProject trusts the username
+	// header its sign-in proxy sets, so a NetworkPolicy lets only that proxy
+	// reach it. The console installs and removes the module, policy included,
+	// in ceffio-system. Seven tuples: one resource, every write verb.
+	for k := range expandTuples("ceffio-system", []rbacv1.PolicyRule{
+		{APIGroups: []string{"networking.k8s.io"}, Resources: []string{"networkpolicies"},
+			Verbs: []string{"get", "list", "watch", "create", "update", "patch", "delete"}},
+	}) {
+		ref[k] = true
+	}
+
 	// A reference of zero tuples would make the comparison vacuous (and an
 	// empty grant would "pass"). The count is the hand-computed product of
 	// the frozen lists above: 10 namespaces × 109 tuples per namespace, plus
 	// the capture tuple, plus 20 website tuples (2 resources × 5 verbs for
-	// configmaps and services, 5 for deployments, 5 for ingresses).
-	if len(ref) != 1111 {
-		t.Fatalf("legacy reference holds %d tuples, expected 1111 (10 × 109 + 1 capture + 20 website) — the frozen lists above were edited; fix them or fix the count", len(ref))
+	// configmaps and services, 5 for deployments, 5 for ingresses), plus 7
+	// openproject tuples (networkpolicies × 7 verbs in ceffio-system).
+	if len(ref) != 1118 {
+		t.Fatalf("legacy reference holds %d tuples, expected 1118 (10 × 109 + 1 capture + 20 website + 7 openproject) — the frozen lists above were edited; fix them or fix the count", len(ref))
 	}
 	return ref
 }

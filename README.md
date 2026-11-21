@@ -173,6 +173,7 @@ afterwards (`ceffio module install <id>`, or the console's Modules page):
 | `live-transcription` | Transcribes speech live during a Talk call, on this server, with open source speech models; nothing is sent to a third party | ~9 GB disk, ~16 GB RAM | `exapps-daemon` (installed automatically with it) | no |
 | `capture` | Captures one audio track per participant during a Talk recording, transcribes each track on the CPU and writes the named transcript next to the recording. Triggered by the recording relay: it reads **no database**, and holds no right on `ceffio-data` | ~1,5 GB image, 4 GB RAM during transcription | `recording` | no |
 | `longhorn-ui` | The storage interface at `longhorn.<domain>`, **behind the single sign-on** | negligible (one proxy pod) | `storage`, `identity`, `ingress` | no |
+| `openproject` | Project management (OpenProject Community) at `projects.<domain>`: work packages, Gantt charts, boards, time tracking. Signed in through Keycloak by oauth2-proxy and header SSO — OpenProject's own OIDC is an Enterprise add-on. Accounts are created from the Users page | ~4 GiB RAM, 10 GiB volume, one PostgreSQL database | `storage`, `data`, `identity`, `vault`, `ingress` | no |
 
 > **`longhorn-ui` can delete volumes, and therefore data.** It installs nothing without
 > being asked, and the interface it exposes sits behind Keycloak. The storage interface has
