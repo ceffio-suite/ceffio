@@ -46,6 +46,7 @@ Stalwart) behind a unified install and management experience.`,
 		newVaultCmd(),
 		newPublicIPCmd(),
 		newRecordingRelayCmd(),
+		newLDAPResponderCmd(),
 		newThemeCmd(),
 		newSBOMCmd(),
 	)

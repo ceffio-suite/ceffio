@@ -19,22 +19,19 @@
 // authenticated from outside, and it leaves the account WITHOUT a password, so
 // the OpenProject login form cannot be used against it.
 //
-// # The link is necessary, not sufficient
+// # The lookup the link triggers
 //
-// A linked account is not yet signable-in through the header. OpenProject
-// resolves the header's login THROUGH THE AUTH SOURCE, by an LDAP search
-// (auth_source_sso.rb → LdapAuthSource.find_user), and "Ceffio SSO" is declared
-// with host 127.0.0.1 and port 389, where nothing listens:
+// A linked account is not enough: OpenProject resolves the header's login
+// THROUGH THE AUTH SOURCE, by an LDAP search (auth_source_sso.rb →
+// LdapAuthSource.find_user). A source pointing at nothing makes every sign-in
+// fail with
 //
 //	Error during authentication: Connection refused - connect(2) for 127.0.0.1:389
 //
-// Measured against the demo installation on 2026-11-21: Keycloak signs the user
-// in, the proxy forwards the header, and OpenProject logs
-// action=auth_source_sso_failed then redirects to /sso. The upstream development
-// note (docs/development/kerberos) gets away with a source it creates in the
-// same script, against a directory it also starts; this module has no directory
-// to point at yet. Until it ships one, header sign-in only works for an account
-// whose auth source names a real LDAP server.
+// which is what this module did until it shipped a responder: the source now
+// names openproject-ldap, one pod answering that one search from the query
+// itself (repondant.go). No directory, no password, no state — the account row
+// is still what decides whether the answer opens a session.
 //
 // # How accounts are listed
 //
@@ -48,6 +45,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -137,12 +135,28 @@ func scriptCompte(c compteOP) (string, error) {
 d = JSON.parse(<<~'CEFFIO')
 ` + string(donnees) + `
 CEFFIO
-src = LdapAuthSource.find_or_create_by!(name: "Ceffio SSO") do |s|
-  s.host = "127.0.0.1"
-  s.port = 389
-  s.attr_login = "uid"
-  s.onthefly_register = false
-end
+# THE SOURCE POINTS AT THE MODULE'S OWN RESPONDER (repondant.go), and it is
+# UPDATED even when it already exists: an installation created by an earlier
+# release carries host "127.0.0.1", port 389 — the upstream documentation's
+# placeholder for a directory on the same machine — where this module runs
+# nothing. Every sign-in then failed with
+#   Error during authentication: Connection refused - connect(2) for 127.0.0.1:389
+# and the account page could not say why.
+src = LdapAuthSource.find_or_initialize_by(name: "Ceffio SSO")
+src.host = "` + hoteRespondant() + `"
+src.port = ` + strconv.Itoa(portRepondant) + `
+src.attr_login = "uid"
+# PLAIN LDAP IS DELIBERATE: the traffic never leaves the cluster — one pod
+# querying another in the same namespace, and a NetworkPolicy lets only the
+# application reach the responder. The default, start_tls, would make the client
+# negotiate TLS with a server that speaks no TLS, and the lookup would fail on
+# the handshake instead of answering.
+src.tls_mode = :plain_ldap
+# THE BASE IS NAMED because OpenProject only uses it to build the answer's DN: a
+# real directory narrows a search with it, the responder echoes it.
+src.base_dn = "dc=ceffio"
+src.onthefly_register = false
+src.save!
 u = User.find_by(login: d["login"])
 if u.nil?
   u = User.new(login: d["login"], mail: d["mail"], firstname: d["login"], lastname: d["login"])

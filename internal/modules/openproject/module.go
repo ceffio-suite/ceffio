@@ -81,6 +81,20 @@ const (
 	nomPolitique      = "openproject-only-from-proxy"
 	nomSecretTLS      = "projects-tls"
 
+	// nomRepondant is the LDAP responder OpenProject's header SSO looks the user
+	// up in (repondant.go). NOT A DIRECTORY: it answers one search, from the
+	// query itself, and holds nothing.
+	nomRepondant = "openproject-ldap"
+
+	// portRepondant is UNPRIVILEGED on purpose: the responder runs as an
+	// unprivileged user and 389 belongs to root. Nothing reads the port except
+	// this module — no LDAP client is configured with it by hand.
+	portRepondant = 1389
+
+	// uidRepondant is the unprivileged user the Ceffio image runs the responder
+	// as, the same one the public-IP reporter uses.
+	uidRepondant = 65532
+
 	// clientOIDC is the Keycloak client the PROXY uses. OpenProject itself
 	// never talks to Keycloak.
 	clientOIDC = "openproject"
@@ -120,6 +134,12 @@ var (
 	// with margin, and a later install converges in seconds.
 	attenteApp   = 15 * time.Minute
 	attenteProxy = 5 * time.Minute
+
+	// The responder has no volume, no migration and no secret to read: a
+	// second or two from scheduling to listening. A minute is the cluster's
+	// own slowness with margin, and the wait is what makes the first sign-in
+	// safe rather than lucky.
+	attenteRepondant = 1 * time.Minute
 )
 
 // nouveauClient is a variable so tests can run the contract without a cluster.
@@ -184,7 +204,9 @@ func (m *openprojectModule) Install(ctx context.Context, env module.Env) error {
 	return installer(ctx, env)
 }
 
-// State is Installed only when the application AND its proxy are ready.
+// State is Installed only when the application, its proxy AND its LDAP
+// responder are ready: the responder resolves the login of every sign-in, so
+// an installation without it signs nobody in.
 func (m *openprojectModule) State(ctx context.Context, env module.Env) module.State {
 	etat := module.State{Blocked: module.Blocked(ctx, env, m)}
 	e := lireEtat(ctx, env)

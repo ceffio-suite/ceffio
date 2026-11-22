@@ -137,6 +137,11 @@ func installer(ctx context.Context, env module.Env) error {
 	// BEFORE the application (so OpenProject is never reachable unguarded,
 	// not even during its first start), then the application, the proxy and
 	// the route. Appliquer creates or updates each object: re-running converges.
+	//
+	// THE RESPONDER COMES BEFORE THE APPLICATION, and its address is in the auth
+	// source the administrator step writes: a pod that starts while the lookup
+	// answers nothing signs nobody in, and the next account creation would point
+	// at a name that resolves.
 	fmt.Fprintln(out, "∙ openproject: "+imageOpenProject)
 	annProxy, err := annotationsProxy()
 	if err != nil {
@@ -145,6 +150,7 @@ func installer(ctx context.Context, env module.Env) error {
 	for _, doc := range []string{
 		manifesteBase(storage.Classe()),
 		manifestePolitique(),
+		manifesteRepondant(),
 		manifesteApp(domaine, annotationsApp(), imageOpenProject),
 		manifesteProxy(domaine, annProxy, imageProxy),
 		manifesteRoute(domaine, ingress.PourDomaine(domaine)),
@@ -157,6 +163,12 @@ func installer(ctx context.Context, env module.Env) error {
 	// 5. WAIT FOR BOTH, READ BACK. A successful apply means the API accepted
 	// the objects, not that OpenProject migrated its database.
 	fmt.Fprintln(out, "∙ openproject: waiting for the first start (migrations included)...")
+	// THE RESPONDER FIRST: it starts in a second and the application's sign-in
+	// depends on it, so waiting for it costs nothing and removes an ordering
+	// question from the first sign-in.
+	if err := cli.AttendreDeploiement(ctx, nsProjets, nomRepondant, attenteRepondant); err != nil {
+		return fmt.Errorf("openproject: the LDAP responder did not become ready: %w", err)
+	}
 	if err := cli.AttendreDeploiement(ctx, nsProjets, nomApp, attenteApp); err != nil {
 		return fmt.Errorf("openproject: the application did not become ready: %w — the "+
 			"seeder's log (init container \"seeder\") names the failing migration", err)
@@ -314,14 +326,23 @@ func lireEtat(ctx context.Context, env module.Env) module.State {
 	}
 	app, errApp := etatDeploiement(ctx, env, nomApp)
 	proxy, errProxy := etatDeploiement(ctx, env, nomProxy)
+	// THE RESPONDER IS PART OF THE SIGN-IN, so it is part of the state: an
+	// installation whose responder is down signs nobody in, and saying
+	// "installed" because the other two deployments are ready would hide
+	// exactly the failure this module was rebuilt to fix.
+	repondant, errRepondant := etatDeploiement(ctx, env, nomRepondant)
 	switch {
-	case errApp != nil || errProxy != nil:
+	case errApp != nil || errProxy != nil || errRepondant != nil:
 		return module.State{Status: module.Unknown,
-			Detail: "reading the deployments failed: " + premiereErreur(errApp, errProxy)}
-	case app == absent && proxy == absent:
+			Detail: "reading the deployments failed: " + premiereErreur(errApp, errProxy, errRepondant)}
+	case app == absent && proxy == absent && repondant == absent:
 		return module.State{Status: module.Absent}
-	case app == pret && proxy == pret:
+	case app == pret && proxy == pret && repondant == pret:
 		return module.State{Status: module.Installed}
+	case app == pret && proxy == pret:
+		return module.State{Status: module.Degraded,
+			Detail: "the sign-in proxy and OpenProject are ready but the LDAP responder is not: " +
+				"no account can sign in until \"openproject-ldap\" runs"}
 	case app != pret && proxy == pret:
 		return module.State{Status: module.Degraded,
 			Detail: "the sign-in works but OpenProject is not ready: users reach an error page " +
@@ -394,7 +415,13 @@ func desinstaller(ctx context.Context, env module.Env) error {
 		"Service/" + nomProxy,
 		"Deployment/" + nomApp,
 		"Service/" + nomApp,
+		// THE RESPONDER GOES WITH THE APPLICATION: without the application its
+		// only client is gone, and a name resolver left behind on the cluster
+		// answers nothing useful and gets no upgrade.
+		"Deployment/" + nomRepondant,
+		"Service/" + nomRepondant,
 		"NetworkPolicy/" + nomPolitique,
+		"NetworkPolicy/" + nomRepondant + "-only-from-app",
 		// THE VOLUME AFTER THE DEPLOYMENT: a PVC still mounted stays
 		// Terminating until its pod is gone, which is fine, but deleting it
 		// first would make the running pod's writes fail before it stops.
