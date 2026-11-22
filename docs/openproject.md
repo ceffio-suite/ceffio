@@ -43,6 +43,25 @@ spliced into a `postgres://` URL and into SQL, where hexadecimal needs no escapi
 Installing waits up to 15 minutes for the first start: a fresh database runs every
 migration and the seed, and a Longhorn volume attachment on a fresh disk adds minutes.
 
+**The install needs the vault, therefore the two variables the CLI reads.** The entries
+above are created by the module itself, and the CLI reaches OpenBao with `BAO_ADDR` and
+`BAO_TOKEN` — no default, no file, no cluster lookup. Without them the install stops before
+touching anything:
+
+```
+openproject: vault unreadable for openproject/db: no vault configured: cannot read openproject/db
+```
+
+```sh
+export BAO_ADDR=https://bao.<domain>
+export BAO_TOKEN=$(kubectl -n ceffio-vault get secret openbao-installation \
+  -o jsonpath='{.data.token}' | base64 -d)
+```
+
+`openbao-installation` is the installation token: the vault's own administrative token for
+non-interactive writes, still valid after the setup revoked the root token. The same two
+variables are what `ceffio upgrade` and the other modules read (see [upgrade.md](upgrade.md)).
+
 ## Signing in
 
 OpenProject's **OpenID Connect providers are an Enterprise add-on** — the Community edition
@@ -74,6 +93,11 @@ The proxy uses PKCE (`S256`), a secure cookie valid 8 hours and refreshed hourly
 end-session endpoint for the `openproject` client: the OpenProject session, the proxy
 session and the Keycloak session all end, instead of the first two only.
 
+**What this section describes is the transport, not the whole chain.** The header arrives
+safely; OpenProject then has to turn the login into a user, and that step goes through an
+LDAP auth source. On an installation of the current release that second step fails — see
+[Header sign-in is broken for these accounts](#header-sign-in-is-broken-for-these-accounts).
+
 ## Accounts
 
 **Header SSO creates no account.** OpenProject looks the login up and redirects to a failure
@@ -88,11 +112,31 @@ page when nobody matches. The module therefore takes part in the Users page:
 
 Accounts are created through Rails (`rails runner` in the application pod), not with SQL:
 OpenProject's validations, defaults and callbacks belong to the application. Each account is
-linked to an LDAP auth source named `Ceffio SSO` that points nowhere — what the upstream
-documentation does to set up header SSO. The link is what marks the account as
+linked to an LDAP auth source named `Ceffio SSO`. The link is what marks the account as
 authenticated from outside and leaves it **without a password**, so the OpenProject login
 form cannot be used against it. Listing accounts, which happens on every page load, is one
 SQL query instead: a Rails boot per page load would cost tens of seconds.
+
+### Header sign-in is broken for these accounts
+
+The link is **necessary but not sufficient**, and the module does not say so loudly enough
+anywhere else. OpenProject resolves the header's login *through the auth source*, with an
+LDAP search (`auth_source_sso.rb` calls `LdapAuthSource.find_user`), and `Ceffio SSO` is
+declared with host `127.0.0.1`, port `389` — where nothing listens. Measured on the demo
+installation: Keycloak signs the user in, the proxy forwards the header, and OpenProject
+answers `action=auth_source_sso_failed` then redirects to `/sso`, logging:
+
+```
+Error during authentication: Connection refused - connect(2) for 127.0.0.1:389
+```
+
+Consequence: on a module installed by the current release, **no account provisioned here
+can sign in through the header**; the account exists, is active, has the right
+administrator flag, and still cannot get in. The upstream development note that this module
+followed starts its own LDAP server in the same breath; Ceffio has none yet. Pointing the
+auth source at a real directory (the `host`, `port`, `attr_login` and `base_dn` columns of
+`ldap_auth_sources`) is what makes header sign-in work — tracked as the next fix for this
+module, and the reason it is documented here rather than discovered in production.
 
 The seeded local `admin` account is **locked on purpose**, and `admin`, `system` and
 `anonymous` cannot be provisioned: a Keycloak user named `admin` would otherwise become the
