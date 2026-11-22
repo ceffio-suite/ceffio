@@ -7,6 +7,7 @@ import (
 	"context"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -16,6 +17,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/ceffio-suite/ceffio/internal/module"
+	"github.com/ceffio-suite/ceffio/internal/version"
 )
 
 // TestInfoValide pins the display contract and the two values that silently
@@ -69,6 +71,7 @@ func documents(t *testing.T) map[string]map[string]interface{} {
 	brut := strings.Join([]string{
 		manifesteBase("longhorn"),
 		manifestePolitique(),
+		manifesteRepondant(),
 		manifesteApp("example.com", annotationsApp(), "docker.io/openproject/openproject:1-slim@sha256:0"),
 		manifesteProxy("example.com", ap, "quay.io/oauth2-proxy/oauth2-proxy:v1@sha256:0"),
 		manifesteRoute("example.com", "letsencrypt-prod"),
@@ -123,14 +126,16 @@ func TestManifestesComplets(t *testing.T) {
 		"NetworkPolicy/openproject-only-from-proxy",
 		"Deployment/openproject", "Service/openproject",
 		"Deployment/openproject-proxy", "Service/openproject-proxy",
+		"Deployment/openproject-ldap", "Service/openproject-ldap",
+		"NetworkPolicy/openproject-ldap-only-from-app",
 		"Ingress/openproject",
 	} {
 		if docs[cle] == nil {
 			t.Errorf("manifest %s is missing", cle)
 		}
 	}
-	if len(docs) != 8 {
-		t.Errorf("%d documents rendered, expected 8", len(docs))
+	if len(docs) != 11 {
+		t.Errorf("%d documents rendered, expected 11", len(docs))
 	}
 }
 
@@ -276,6 +281,97 @@ func TestScriptCompteNInterpreteRien(t *testing.T) {
 	}
 }
 
+// TestLaSourceLDAPViseLeRepondant: the auth source every account is linked to
+// must point at the responder this module ships, and it must be UPDATED — not
+// only created — or an installation from an earlier release keeps pointing at
+// 127.0.0.1:389, where the lookup answers "Connection refused" and nobody can
+// sign in.
+func TestLaSourceLDAPViseLeRepondant(t *testing.T) {
+	s, err := scriptCompte(compteOP{Login: "okba", Mail: "okba@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, attendu := range []string{
+		`src.host = "` + hoteRespondant() + `"`,
+		"src.port = " + strconv.Itoa(portRepondant),
+		`src.attr_login = "uid"`,
+		"src.tls_mode = :plain_ldap",
+		"src.onthefly_register = false",
+		"src.save!",
+	} {
+		if !strings.Contains(s, attendu) {
+			t.Errorf("the auth source script lacks %q:\n%s", attendu, s)
+		}
+	}
+	// THE SOURCE IS FOUND OR INITIALISED, never "found or created": a created
+	// row keeps its old values, so the update would silently not happen.
+	if !strings.Contains(s, `find_or_initialize_by(name: "Ceffio SSO")`) {
+		t.Error("the source must be initialised and then saved, so an existing row is corrected")
+	}
+	if strings.Contains(s, "find_or_create_by!") {
+		t.Error("find_or_create_by! would leave an existing source untouched")
+	}
+	// THE LOOPBACK MAY APPEAR IN THE COMMENT that explains the old defect, never
+	// as the value assigned.
+	if strings.Contains(s, `src.host = "127.0.0.1"`) {
+		t.Error("the source must not point at the loopback address: nothing listens there")
+	}
+}
+
+// TestLeRepondantEstJoignableDepuisLApplication: the responder's own policy must
+// admit the application pod on the responder's port. A policy selecting a label
+// the pods do not carry, or a port nothing listens on, would make every sign-in
+// fail while the manifests still apply cleanly.
+func TestLeRepondantEstJoignableDepuisLApplication(t *testing.T) {
+	docs := documents(t)
+	dep := docs["Deployment/"+nomRepondant]
+	labels := champ(t, dep, "spec", "template", "metadata", "labels", "app")
+	if labels != nomRepondant {
+		t.Errorf("the responder pods carry %v, expected %s", labels, nomRepondant)
+	}
+	conteneur := champ(t, dep, "spec", "template", "spec", "containers").([]interface{})[0]
+	if !strings.HasSuffix(champ(t, conteneur, "image").(string), version.ImageTag()) {
+		t.Errorf("the responder must run the Ceffio image itself, got %v", champ(t, conteneur, "image"))
+	}
+	if champ(t, conteneur, "imagePullPolicy") != "IfNotPresent" {
+		t.Errorf("the responder image must be pinned, got pull policy %v", champ(t, conteneur, "imagePullPolicy"))
+	}
+	// AN EXEC PROBE WOULD NEVER RUN: the image is FROM scratch, so a probe that
+	// needs a shell reports the pod unhealthy for the rest of its life.
+	if champ(t, conteneur, "readinessProbe", "tcpSocket", "port") != "ldap" {
+		t.Error("the readiness probe must be a TCP probe on the named ldap port")
+	}
+	if _, present := conteneur.(map[string]interface{})["command"]; present {
+		t.Error("the responder must be started by the image's own entrypoint")
+	}
+	np := docs["NetworkPolicy/"+nomRepondant+"-only-from-app"]
+	if champ(t, np, "spec", "podSelector", "matchLabels", "app") != nomRepondant {
+		t.Error("the responder's policy must select the responder pods")
+	}
+	regles := champ(t, np, "spec", "ingress").([]interface{})
+	if len(regles) != 1 {
+		t.Fatalf("exactly one ingress rule expected, got %d", len(regles))
+	}
+	sources := champ(t, regles[0], "from").([]interface{})
+	if len(sources) != 1 || champ(t, sources[0], "podSelector", "matchLabels", "app") != nomApp {
+		t.Errorf("the only allowed source must be the application: %v", sources)
+	}
+	ports := champ(t, regles[0], "ports").([]interface{})
+	if len(ports) != 1 || champ(t, ports[0], "port") != float64(portRepondant) {
+		t.Errorf("the policy must admit the responder's port: %v", ports)
+	}
+	// THE SERVICE IS WHAT THE AUTH SOURCE NAMES: it must exist, select the same
+	// pods, and expose the port the source dials.
+	svc := docs["Service/"+nomRepondant]
+	if champ(t, svc, "spec", "selector", "app") != nomRepondant {
+		t.Error("the Service must select the responder pods")
+	}
+	svcPorts := champ(t, svc, "spec", "ports").([]interface{})
+	if len(svcPorts) != 1 || champ(t, svcPorts[0], "port") != float64(portRepondant) {
+		t.Errorf("the Service must expose port %d: %v", portRepondant, svcPorts)
+	}
+}
+
 // TestSQLBaseRefuseUnMotDePasseInattendu: only the hexadecimal value the
 // module generates may enter the SQL literal.
 func TestSQLBaseRefuseUnMotDePasseInattendu(t *testing.T) {
@@ -328,7 +424,9 @@ func TestAccountActionInconnue(t *testing.T) {
 }
 
 // TestEtatLitLeCluster: Unknown without a client (never Absent), Absent with
-// nothing deployed, Degraded with one half, Installed with both ready.
+// nothing deployed, Degraded as soon as ONE of the three deployments is not
+// ready, Installed only with all three — the responder included, because it is
+// what makes a sign-in possible.
 func TestEtatLitLeCluster(t *testing.T) {
 	ctx := context.Background()
 	if e := lireEtat(ctx, module.Env{}); e.Status != module.Unknown {
@@ -356,7 +454,11 @@ func TestEtatLitLeCluster(t *testing.T) {
 		t.Errorf("proxy ready, application not: %s %q, expected degraded with a detail", e.Status, e.Detail)
 	}
 	poser(nomApp, 1)
+	if e := lireEtat(ctx, env); e.Status != module.Degraded {
+		t.Errorf("application and proxy ready, responder not: %s, expected degraded", e.Status)
+	}
+	poser(nomRepondant, 1)
 	if e := lireEtat(ctx, env); e.Status != module.Installed {
-		t.Errorf("both ready: %s, expected installed", e.Status)
+		t.Errorf("all three ready: %s, expected installed", e.Status)
 	}
 }
