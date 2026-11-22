@@ -227,6 +227,24 @@ container's log names the failing migration).
 End-to-end: open `https://projects.<domain>`, sign in through Keycloak, create a project,
 upload an attachment, then sign out and check that Keycloak's session is closed too.
 
+**A newly provisioned account signs in on the first attempt**, with nothing to activate
+beforehand: the console creates it, the header resolves to it, and OpenProject records the
+sign-in itself. Two facts check that without a browser — the responder line above, and the
+account's own timestamp:
+
+```sh
+kubectl -n ceffio-data exec -i ceffio-pg-1 -c postgres -- \
+  psql -U postgres -d openproject -c \
+  "SELECT login, last_login_on FROM users WHERE login = '<login>';"
+```
+
+An empty `last_login_on` after an attempt means the header never reached an **active**
+account: check, in this order, that the account is `present` on the Users page, that the
+person is enabled in Keycloak, and that the responder answered the lookup. When the
+two-factor module is enabled but not enforced and the person has no device yet, its stage
+runs inside the same sign-in and completes on the same request chain, leaving the person on
+the page they were heading for.
+
 When a sign-in fails, the responder says which lookup it answered:
 
 ```sh
