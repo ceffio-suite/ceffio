@@ -11,6 +11,9 @@
 # Binaire produit par `make pin-digests` à la racine
 /pin-digests
 
+# Binaires de distribution (cross-compilation, contexte de build de l'image console)
+/dist/
+
 # Caches locaux quand $HOME n'est pas inscriptible (bac à sable)
 /.gomodcache/
 /.gopath/
