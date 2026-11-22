@@ -36,6 +36,12 @@
 // takes part in the Users page (module.Accounts): creating a Ceffio user
 // creates the OpenProject account, and the page offers a "create" action for
 // users that existed before the module was installed.
+//
+// AND THE LOOKUP ITSELF IS AN LDAP SEARCH: OpenProject resolves the header's
+// login through the account's auth source (LdapAuthSource.find_user), not
+// against its own database. An account linked to a source that names no
+// reachable directory is active, has the right flags, and still cannot sign
+// in — the state the module ships today, documented in docs/openproject.md.
 package openproject
 
 import (

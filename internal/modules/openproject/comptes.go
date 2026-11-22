@@ -15,11 +15,26 @@
 // Through Rails, in the application pod (`rails runner`), and not with SQL:
 // OpenProject's validations, defaults and callbacks (preferences, notification
 // settings) belong to the application. Each account is linked to an LDAP auth
-// source named "Ceffio SSO" that points nowhere — exactly what the upstream
-// documentation does to set up header SSO (docs/development/kerberos): the link
-// is what marks the account as authenticated from outside, and it leaves the
-// account WITHOUT a password, so the OpenProject login form cannot be used
-// against it.
+// source named "Ceffio SSO": the link is what marks the account as
+// authenticated from outside, and it leaves the account WITHOUT a password, so
+// the OpenProject login form cannot be used against it.
+//
+// # The link is necessary, not sufficient
+//
+// A linked account is not yet signable-in through the header. OpenProject
+// resolves the header's login THROUGH THE AUTH SOURCE, by an LDAP search
+// (auth_source_sso.rb → LdapAuthSource.find_user), and "Ceffio SSO" is declared
+// with host 127.0.0.1 and port 389, where nothing listens:
+//
+//	Error during authentication: Connection refused - connect(2) for 127.0.0.1:389
+//
+// Measured against the demo installation on 2026-11-21: Keycloak signs the user
+// in, the proxy forwards the header, and OpenProject logs
+// action=auth_source_sso_failed then redirects to /sso. The upstream development
+// note (docs/development/kerberos) gets away with a source it creates in the
+// same script, against a directory it also starts; this module has no directory
+// to point at yet. Until it ships one, header sign-in only works for an account
+// whose auth source names a real LDAP server.
 //
 // # How accounts are listed
 //
