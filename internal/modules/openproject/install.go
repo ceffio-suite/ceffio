@@ -187,7 +187,22 @@ func installer(ctx context.Context, env module.Env) error {
 		return err
 	}
 
-	fmt.Fprintf(out, "✓ OpenProject: https://%s — accounts are created from the Users page\n", nomHote(domaine))
+	// 7. EVERY OTHER USER OF THE REALM. Steps 6 and the Users page cover the
+	// administrator and the users the console creates; neither covers a user who
+	// existed before this module was installed, nor one created straight in
+	// Keycloak. Header SSO creates no account, so those users reached the site
+	// and read "Nom d'utilisateur ou mot de passe incorrect" — with no way to
+	// know that the account was simply absent.
+	//
+	// IT IS ALSO THE REPAIR PATH: re-running the installation on an instance
+	// from an earlier release creates the accounts it missed. Idempotent, like
+	// every account call.
+	fmt.Fprintln(out, "∙ openproject: accounts for the realm's users")
+	if err := assurerComptesDuRealm(ctx, cli, out); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(out, "✓ OpenProject: https://%s — the realm's users have their accounts\n", nomHote(domaine))
 	return nil
 }
 

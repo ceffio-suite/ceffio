@@ -287,34 +287,48 @@ func TestScriptCompteNInterpreteRien(t *testing.T) {
 // 127.0.0.1:389, where the lookup answers "Connection refused" and nobody can
 // sign in.
 func TestLaSourceLDAPViseLeRepondant(t *testing.T) {
+	// BOTH PATHS ARE CHECKED: the console creates one account, the installation
+	// reconciles many, and the source block they render must not drift apart.
 	s, err := scriptCompte(compteOP{Login: "okba", Mail: "okba@example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, attendu := range []string{
-		`src.host = "` + hoteRespondant() + `"`,
-		"src.port = " + strconv.Itoa(portRepondant),
-		`src.attr_login = "uid"`,
-		"src.tls_mode = :plain_ldap",
-		"src.onthefly_register = false",
-		"src.save!",
-	} {
-		if !strings.Contains(s, attendu) {
-			t.Errorf("the auth source script lacks %q:\n%s", attendu, s)
+	lot, err := scriptComptes([]compteOP{
+		{Login: "okba", Mail: "okba@example.com"},
+		{Login: "amina", Mail: "amina@example.com"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for nom, script := range map[string]string{"one account": s, "many accounts": lot} {
+		for _, attendu := range []string{
+			`src.host = "` + hoteRespondant() + `"`,
+			"src.port = " + strconv.Itoa(portRepondant),
+			`src.attr_login = "uid"`,
+			"src.tls_mode = :plain_ldap",
+			"src.onthefly_register = false",
+			"src.save!",
+		} {
+			if !strings.Contains(script, attendu) {
+				t.Errorf("[%s] the auth source script lacks %q:\n%s", nom, attendu, script)
+			}
 		}
-	}
-	// THE SOURCE IS FOUND OR INITIALISED, never "found or created": a created
-	// row keeps its old values, so the update would silently not happen.
-	if !strings.Contains(s, `find_or_initialize_by(name: "Ceffio SSO")`) {
-		t.Error("the source must be initialised and then saved, so an existing row is corrected")
-	}
-	if strings.Contains(s, "find_or_create_by!") {
-		t.Error("find_or_create_by! would leave an existing source untouched")
-	}
-	// THE LOOPBACK MAY APPEAR IN THE COMMENT that explains the old defect, never
-	// as the value assigned.
-	if strings.Contains(s, `src.host = "127.0.0.1"`) {
-		t.Error("the source must not point at the loopback address: nothing listens there")
+		// THE SOURCE IS FOUND OR INITIALISED, never "found or created": a
+		// created row keeps its old values, so the update would silently not
+		// happen.
+		if !strings.Contains(script, `find_or_initialize_by(name: "Ceffio SSO")`) {
+			t.Errorf("[%s] the source must be initialised and then saved, so an existing "+
+				"row is corrected", nom)
+		}
+		if strings.Contains(script, "find_or_create_by!") {
+			t.Errorf("[%s] find_or_create_by! would leave an existing source untouched", nom)
+		}
+		// THE LOOPBACK MAY APPEAR IN THE COMMENT that explains the old defect,
+		// never as the value assigned.
+		if strings.Contains(script, `src.host = "127.0.0.1"`) {
+			t.Errorf("[%s] the source must not point at the loopback address: nothing "+
+				"listens there", nom)
+		}
 	}
 }
 

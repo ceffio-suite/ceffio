@@ -44,6 +44,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"regexp"
 	"strconv"
 	"strings"
@@ -54,6 +55,7 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/k8s"
 	"github.com/ceffio-suite/ceffio/internal/k8sapi"
 	"github.com/ceffio-suite/ceffio/internal/module"
+	"github.com/ceffio-suite/ceffio/internal/sso"
 )
 
 var metaGet = metav1.GetOptions{}
@@ -110,15 +112,6 @@ func verifierLogin(login string) error {
 
 // scriptCompte renders the Ruby that ensures one account. IDEMPOTENT: it finds
 // the account by login and only fills what is missing.
-//
-// THE DATA TRAVELS AS JSON IN A SINGLE-QUOTED HEREDOC: <<~'CEFFIO' disables
-// interpolation, so nothing in a username or an address can become Ruby code —
-// not even "#{...}". json.Marshal never emits a newline, so the terminator
-// cannot appear inside the data.
-//
-// THE NAME: Keycloak's first and last names are not part of module.User, and
-// OpenProject requires both. The login fills them; the user can change them in
-// OpenProject, and a later ensure never overwrites them.
 func scriptCompte(c compteOP) (string, error) {
 	if err := verifierLogin(c.Login); err != nil {
 		return "", err
@@ -131,9 +124,69 @@ func scriptCompte(c compteOP) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return enteteScript("d", string(donnees)) + corpsCompte("d", false) + `puts "CEFFIO_OK #{u.id}"
+`, nil
+}
+
+// scriptComptes renders the Ruby that ensures MANY accounts in ONE Rails boot.
+// The installation uses it to provision every user of the realm that has no
+// account yet (assurerComptesDuRealm).
+//
+// ONE BOOT FOR ALL OF THEM: `rails runner` spends tens of seconds starting the
+// application, so provisioning a hundred users one boot at a time would look
+// hung — and be one failure point per user.
+//
+// ONE FAILURE DOES NOT STOP THE OTHERS: an address already taken in OpenProject
+// (two realm accounts sharing one) raises on save!, and every remaining user
+// must still get an account. The failures are printed one per line and counted;
+// the caller reports them as warnings.
+func scriptComptes(comptes []compteOP) (string, error) {
+	if len(comptes) == 0 {
+		return "", fmt.Errorf("openproject: no account to create")
+	}
+	for _, c := range comptes {
+		if err := verifierLogin(c.Login); err != nil {
+			return "", err
+		}
+		if c.Mail == "" {
+			return "", fmt.Errorf("openproject: user %q has no e-mail address, and OpenProject "+
+				"refuses an account without one", c.Login)
+		}
+	}
+	donnees, err := json.Marshal(comptes)
+	if err != nil {
+		return "", err
+	}
+	return enteteScript("cs", string(donnees)) + `crees = 0
+presents = 0
+echecs = []
+cs.each do |c|
+  begin
+` + indenter(corpsCompte("c", true), "    ") + `  rescue => e
+    echecs << (c["login"] + ": " + e.message)
+  end
+end
+puts "CEFFIO_COMPTES created=#{crees} present=#{presents} failed=#{echecs.size}"
+echecs.each { |e| puts "CEFFIO_ECHEC " + e }
+puts "CEFFIO_OK"
+`, nil
+}
+
+// enteteScript returns the preamble shared by every account script: the JSON
+// document `donnees`, parsed into the variable `variable`, then the LDAP auth
+// source, created or corrected.
+//
+// ONE RENDERING FOR EVERY PATH: the source block is where a sign-in breaks when
+// it is wrong, and two copies of it drift.
+//
+// THE DATA TRAVELS AS JSON IN A SINGLE-QUOTED HEREDOC: <<~'CEFFIO' disables
+// interpolation, so nothing in a username or an address can become Ruby code —
+// not even "#{...}". json.Marshal never emits a newline, so the terminator
+// cannot appear inside the data.
+func enteteScript(variable, donnees string) string {
 	return `require "json"
-d = JSON.parse(<<~'CEFFIO')
-` + string(donnees) + `
+` + variable + ` = JSON.parse(<<~'CEFFIO')
+` + donnees + `
 CEFFIO
 # THE SOURCE POINTS AT THE MODULE'S OWN RESPONDER (repondant.go), and it is
 # UPDATED even when it already exists: an installation created by an earlier
@@ -155,32 +208,84 @@ src.tls_mode = :plain_ldap
 # THE BASE IS NAMED because OpenProject only uses it to build the answer's DN: a
 # real directory narrows a search with it, the responder echoes it.
 src.base_dn = "dc=ceffio"
+# ON-THE-FLY REGISTRATION STAYS OFF, and that is deliberate: with it on,
+# OpenProject creates the user from the LDAP answer, which carries neither name
+# nor address (the responder serves uid and objectClass by design), so the
+# creation fails with "First name can't be blank. Last name can't be blank.
+# Email can't be blank." — measured on a live instance. Accounts are created
+# here, with the address the person actually has.
 src.onthefly_register = false
 src.save!
-u = User.find_by(login: d["login"])
+`
+}
+
+// corpsCompte is the Ruby that ensures ONE account from the hash held by `h`
+// (the variable naming it), against the source in `src`.
+//
+// `compte` adds the batch counters: the reconciliation reports what it created
+// and what was already there, so the installation says what it did instead of
+// only that it finished.
+//
+// THE NAME: Keycloak's first and last names are not part of module.User, and
+// OpenProject requires both. The login fills them; the user can change them in
+// OpenProject, and a later ensure never overwrites them.
+func corpsCompte(h string, compte bool) string {
+	cree, present := "", ""
+	if compte {
+		// THE COUNTERS ARE INCREMENTED EXACTLY ONCE PER ACCOUNT, whichever
+		// branch ran: an uncounted branch would make the reconciliation report
+		// fewer accounts than it saw.
+		cree, present = "  crees += 1\n", "  presents += 1\n"
+	}
+	return `u = User.find_by(login: ` + h + `["login"])
 if u.nil?
-  u = User.new(login: d["login"], mail: d["mail"], firstname: d["login"], lastname: d["login"])
+  u = User.new(login: ` + h + `["login"], mail: ` + h + `["mail"], firstname: ` + h + `["login"], lastname: ` + h + `["login"])
   u.ldap_auth_source = src
-  u.admin = d["admin"]
+  u.admin = ` + h + `["admin"]
   u.status = User.statuses[:active]
   u.save!
-elsif u.ldap_auth_source_id != src.id
-  # AN ACCOUNT CREATED BY HAND IN OPENPROJECT is adopted, not duplicated: it
-  # becomes reachable through the sign-in and loses nothing it already had.
-  u.ldap_auth_source = src
-  u.admin = true if d["admin"]
-  u.save!
-elsif d["admin"] && !u.admin?
-  u.update!(admin: true)
-end
-puts "CEFFIO_OK #{u.id}"
-`, nil
+` + cree + `else
+  if u.ldap_auth_source_id != src.id
+    # AN ACCOUNT CREATED BY HAND IN OPENPROJECT is adopted, not duplicated: it
+    # becomes reachable through the sign-in and loses nothing it already had.
+    u.ldap_auth_source = src
+    u.admin = true if ` + h + `["admin"]
+    u.save!
+  end
+  if ` + h + `["admin"] && !u.admin?
+    u.update!(admin: true)
+  end
+` + present + `end
+`
+}
+
+// indenter prefixes every non-empty line of a script block.
+func indenter(corps, prefixe string) string {
+	lignes := strings.Split(strings.TrimSuffix(corps, "\n"), "\n")
+	for i, l := range lignes {
+		if l != "" {
+			lignes[i] = prefixe + l
+		}
+	}
+	return strings.Join(lignes, "\n") + "\n"
 }
 
 // scriptSuppression renders the Ruby that deletes one account through
 // OpenProject's own service, so its memberships and references are handled the
 // way the application handles them. An absent account is the normal case on a
 // retry.
+//
+// THE SETTING IS OPENED FOR THE DURATION OF THE CALL. OpenProject decides who
+// may delete an account in Users::DeleteContract#deletion_allowed?, which asks
+// Setting.users_deletable_by_admins — and that setting ships FALSE. With it
+// false, no administrator may delete anybody, so every deletion was refused
+// with "may not be accessed." and the account stayed: the console reported a
+// failure it could not explain, and a user whose duplicate had to go was stuck.
+//
+// IT IS RESTORED AFTERWARDS, in an ensure: the setting belongs to the instance,
+// not to this script, and leaving it flipped would widen what every
+// administrator may delete from then on. The restore runs even when the
+// deletion raises, which is why it is an ensure and not a plain reassignment.
 func scriptSuppression(login string) (string, error) {
 	if err := verifierLogin(login); err != nil {
 		return "", err
@@ -192,8 +297,14 @@ d = JSON.parse(<<~'CEFFIO')
 CEFFIO
 u = User.find_by(login: d["login"])
 if u
-  r = Users::DeleteService.new(model: u, user: User.system).call
-  raise "deletion refused: #{r.errors.full_messages.join(', ')}" unless r.success?
+  precedent = Setting.users_deletable_by_admins
+  Setting.users_deletable_by_admins = true
+  begin
+    r = Users::DeleteService.new(model: u, user: User.system).call
+    raise "deletion refused: #{r.errors.full_messages.join(', ')}" unless r.success?
+  ensure
+    Setting.users_deletable_by_admins = precedent
+  end
 end
 puts "CEFFIO_OK"
 `, nil
@@ -201,27 +312,34 @@ puts "CEFFIO_OK"
 
 // executerRails runs a Ruby script in the web container, with the injected
 // secrets sourced (DATABASE_URL lives in /secrets/env, see k8s.AvecSecrets).
+func executerRails(ctx context.Context, cli *k8sapi.Client, script string) error {
+	_, err := executerRailsSortie(ctx, cli, script)
+	return err
+}
+
+// executerRailsSortie is executerRails, returning what the script printed: the
+// reconciliation reports its counts there.
 //
-// THE SCRIPT GOES THROUGH STANDARD INPUT (`rails runner -`): it carries an
-// address, and stdin leaves nothing in the process table.
+// THE SCRIPT GOES THROUGH STANDARD INPUT (`rails runner -`): it carries
+// addresses, and stdin leaves nothing in the process table.
 //
 // THE MARKER IS CHECKED, not the exit code alone: Rails prints deprecation
 // warnings on stderr and a script that raised still prints them — "CEFFIO_OK"
 // is the proof the last line ran.
-func executerRails(ctx context.Context, cli *k8sapi.Client, script string) error {
+func executerRailsSortie(ctx context.Context, cli *k8sapi.Client, script string) (string, error) {
 	pod, err := cli.PodDuDeploiement(ctx, nsProjets, nomApp, nomApp)
 	if err != nil {
-		return fmt.Errorf("openproject: no application pod to create the account in: %w", err)
+		return "", fmt.Errorf("openproject: no application pod to create the account in: %w", err)
 	}
 	out, err := cli.ExecuterAvecEntree(ctx, nsProjets, pod, "web", script,
 		"bash", "-c", k8s.AvecSecrets("cd /app && bundle exec rails runner -"))
 	if err != nil {
-		return fmt.Errorf("openproject: rails runner: %w: %.400s", err, out)
+		return out, fmt.Errorf("openproject: rails runner: %w: %.400s", err, out)
 	}
 	if !strings.Contains(out, "CEFFIO_OK") {
-		return fmt.Errorf("openproject: rails runner did not confirm the change: %.400s", out)
+		return out, fmt.Errorf("openproject: rails runner did not confirm the change: %.400s", out)
 	}
-	return nil
+	return out, nil
 }
 
 func assurerCompteOpenProject(ctx context.Context, cli *k8sapi.Client, c compteOP) error {
@@ -230,6 +348,112 @@ func assurerCompteOpenProject(ctx context.Context, cli *k8sapi.Client, c compteO
 		return err
 	}
 	return executerRails(ctx, cli, script)
+}
+
+// utilisateursDuRealm is the seam the reconciliation is tested through.
+var utilisateursDuRealm = sso.UtilisateursRealm
+
+// comptesDuRealm turns the realm's accounts into the ones OpenProject must
+// have, SKIPPING WHAT IT CANNOT REPRESENT — and saying so, because a silent
+// skip is a user who will read "Nom d'utilisateur ou mot de passe incorrect"
+// and have nothing to act on.
+//
+// THE ADMINISTRATOR IS STEP 6'S JOB: it is created there as an administrator.
+// Reconciling it here would either duplicate the call or, worse, disagree with
+// it — one place decides what the administrator is.
+func comptesDuRealm(utilisateurs []sso.UtilisateurRealm, out io.Writer) []compteOP {
+	comptes := make([]compteOP, 0, len(utilisateurs))
+	for _, u := range utilisateurs {
+		switch {
+		case u.Login == "" || strings.HasPrefix(u.Login, "service-account-"):
+			// A CLIENT'S SERVICE ACCOUNT IS NOT A PERSON: it never signs in
+			// through the browser, so it needs no OpenProject account.
+			continue
+		case u.Login == compteAdmin:
+			continue
+		case !u.Enabled:
+			fmt.Fprintf(out, "  ⚠ %s is disabled in Keycloak: no OpenProject account "+
+				"(re-run the installation once it is enabled)\n", u.Login)
+			continue
+		}
+		if err := verifierLogin(u.Login); err != nil {
+			fmt.Fprintf(out, "  ⚠ %s gets no OpenProject account: %v\n", u.Login, err)
+			continue
+		}
+		if u.Mail == "" {
+			fmt.Fprintf(out, "  ⚠ %s gets no OpenProject account: it has no e-mail address "+
+				"in Keycloak, and OpenProject refuses an account without one — set it on "+
+				"the Users page\n", u.Login)
+			continue
+		}
+		comptes = append(comptes, compteOP{Login: u.Login, Mail: u.Mail})
+	}
+	return comptes
+}
+
+// assurerComptesDuRealm creates the OpenProject account of every user of the
+// realm that has none, in ONE Rails boot.
+//
+// WHY IT EXISTS: header SSO creates no account (docs/openproject.md). A user who
+// existed before this module was installed, or who was created straight in
+// Keycloak, reached projects.<domain> and read
+//
+//	Single Sign-On (SSO) pour l'utilisateur "<login>" a échoué: Nom
+//	d'utilisateur ou mot de passe incorrect
+//
+// which names nothing to fix — the account simply did not exist. Creating the
+// account when the console creates the user covers the users created from then
+// on; this step covers the others, INCLUDING ON AN INSTALLATION CREATED BY AN
+// EARLIER RELEASE, because re-running the installation is the upgrade path.
+//
+// IT IS IDEMPOTENT: the script finds each account by login and fills only what
+// is missing, so a second run creates nothing.
+func assurerComptesDuRealm(ctx context.Context, cli *k8sapi.Client, out io.Writer) error {
+	utilisateurs, err := utilisateursDuRealm(ctx)
+	if err != nil {
+		return fmt.Errorf("openproject: reading the realm's accounts to provision them: %w", err)
+	}
+	comptes := comptesDuRealm(utilisateurs, out)
+	if len(comptes) == 0 {
+		fmt.Fprintf(out, "  no account to create among the realm's %d accounts\n",
+			len(utilisateurs))
+		return nil
+	}
+	script, err := scriptComptes(comptes)
+	if err != nil {
+		return err
+	}
+	sortie, err := executerRailsSortie(ctx, cli, script)
+	if err != nil {
+		return err
+	}
+	resume, echecs := lireResumeComptes(sortie)
+	// A FAILED ACCOUNT IS A WARNING, NOT AN INSTALLATION FAILURE: the instance
+	// works and the other accounts exist; refusing the whole installation would
+	// leave the operator unable to re-apply a working configuration, and the
+	// remedy (a distinct address, a missing one) is on the Users page.
+	for _, e := range echecs {
+		fmt.Fprintf(out, "  ⚠ account not created: %s\n", e)
+	}
+	if resume != "" {
+		fmt.Fprintf(out, "  accounts: %s\n", resume)
+	}
+	return nil
+}
+
+// lireResumeComptes extracts the batch summary and the per-account failures
+// printed by scriptComptes.
+func lireResumeComptes(sortie string) (resume string, echecs []string) {
+	for _, brute := range strings.Split(sortie, "\n") {
+		ligne := strings.TrimSpace(brute)
+		if apres, ok := strings.CutPrefix(ligne, "CEFFIO_COMPTES "); ok {
+			resume = apres
+		}
+		if apres, ok := strings.CutPrefix(ligne, "CEFFIO_ECHEC "); ok {
+			echecs = append(echecs, apres)
+		}
+	}
+	return resume, echecs
 }
 
 // litteralSQL quotes a string for SQL. The value was already checked by
