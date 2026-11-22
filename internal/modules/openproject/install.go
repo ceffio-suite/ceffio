@@ -36,7 +36,7 @@ var (
 	// registry declares for this module. See step 0 of installer for why the
 	// install cannot leave that to `ceffio vault`.
 	assurerRoleVault = vault.AssurerRoleModule
-	lireCoffre    = func(ctx context.Context, composant, nom string) (map[string]string, error) {
+	lireCoffre       = func(ctx context.Context, composant, nom string) (map[string]string, error) {
 		return secrets.LireEntreeCoffre(ctx, secrets.DepuisEnvironnement(), composant, nom)
 	}
 	ecrireCoffre = func(ctx context.Context, composant, nom string, v map[string]string) error {
