@@ -40,6 +40,13 @@ the role, a new Rails secret invalidates every session and signed link, a new co
 signs everybody out. The passwords are hexadecimal, computed here: the database password is
 spliced into a `postgres://` URL and into SQL, where hexadecimal needs no escaping.
 
+**The install asserts its own vault access before deploying anything.** `ceffio vault`
+builds the module policies and the Kubernetes roles from the registry of the binary that
+runs it, so a vault deployed by an earlier release has no role for a module it never saw —
+and the pods then fail in Init with `invalid role name "openproject"`, after the
+15-minute wait. The installer writes the policy and the role itself (same content, so a
+re-run changes nothing), with the installation token, before the first secret is read.
+
 Installing waits up to 15 minutes for the first start: a fresh database runs every
 migration and the seed, and a Longhorn volume attachment on a fresh disk adds minutes.
 

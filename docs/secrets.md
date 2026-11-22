@@ -96,6 +96,13 @@ vault **refuses** a path outside the policy.
 Running it again destroys nothing and regenerates no key. Re-initialising an initialised
 vault would make every existing secret unreadable — which is why it does not.
 
+**The module policies and the Kubernetes roles are built by that same command**, one per
+module that declares a vault access, from the registry of the binary that runs it. A module
+installed afterwards therefore asserts its own policy and role during its installation,
+before it deploys a pod: otherwise the pod's injector fails in Init with
+`invalid role name "<module>"` and the installation waits 15 minutes for something a vault
+deployed by an earlier release cannot provide.
+
 An operator reads or writes an entry with the `bao` CLI inside the vault pod, through the
 web interface at `bao.<domain>` — which signs in through the same Keycloak account, like
 everything else — or with `ceffio module config` for the settings the modules expose.

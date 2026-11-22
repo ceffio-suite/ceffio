@@ -18,6 +18,7 @@ import (
 	"github.com/ceffio-suite/ceffio/internal/secrets"
 	"github.com/ceffio-suite/ceffio/internal/sso"
 	"github.com/ceffio-suite/ceffio/internal/storage"
+	"github.com/ceffio-suite/ceffio/internal/vault"
 	"github.com/ceffio-suite/ceffio/internal/version"
 )
 
@@ -31,7 +32,11 @@ var (
 // Seams, so the install sequence can be tested without a vault or Keycloak.
 var (
 	assurerClient = sso.AssurerClient
-	lireCoffre    = func(ctx context.Context, composant, nom string) (map[string]string, error) {
+	// assurerRoleVault asserts the vault policy and the Kubernetes role the
+	// registry declares for this module. See step 0 of installer for why the
+	// install cannot leave that to `ceffio vault`.
+	assurerRoleVault = vault.AssurerRoleModule
+	lireCoffre       = func(ctx context.Context, composant, nom string) (map[string]string, error) {
 		return secrets.LireEntreeCoffre(ctx, secrets.DepuisEnvironnement(), composant, nom)
 	}
 	ecrireCoffre = func(ctx context.Context, composant, nom string, v map[string]string) error {
@@ -58,6 +63,29 @@ func installer(ctx context.Context, env module.Env) error {
 	cli, err := nouveauClient()
 	if err != nil {
 		return fmt.Errorf("openproject: Kubernetes client: %w", err)
+	}
+
+	// 0. THE VAULT ROLE AND ITS POLICY, BEFORE THE FIRST POD.
+	//
+	// `ceffio vault` builds one policy and one Kubernetes role per module from
+	// the registry it read WHEN IT WAS DEPLOYED. A vault deployed by an earlier
+	// binary therefore has no role for a module added since, and the injector
+	// says so from inside a failing init container:
+	//
+	//	vault-agent-init: Code: 400. Errors: * invalid role name "openproject"
+	//
+	// The installation then waits 15 minutes for pods that cannot start, and
+	// names neither the cause nor the fix. Measured on the acceptance run of
+	// 2026-11-21. Asserting the access here costs two vault writes and turns
+	// that failure into a message.
+	//
+	// THE ACCESS COMES FROM THE REGISTRY, not from a second copy of the paths:
+	// what the module declares is exactly what the install asserts.
+	fmt.Fprintln(out, "∙ openproject: vault policy and Kubernetes role")
+	for _, acces := range (&openprojectModule{}).Info().Vault {
+		if err := assurerRoleVault(ctx, cli, idModule, acces.ServiceAccount, acces.Namespace, acces.Paths); err != nil {
+			return fmt.Errorf("openproject: vault access: %w", err)
+		}
 	}
 
 	// 1. THE SECRETS, GENERATED ONCE AND REUSED. A regenerated database

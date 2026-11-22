@@ -1017,16 +1017,12 @@ path "sys/health" { capabilities = ["read"] }`},
 				return "", err
 			}
 			politiques = append(politiques, struct{ nom, regle string }{
-				nom: "ceffio-" + m.Info().ID, regle: regle})
+				nom: nomPolitiqueModule(m.Info().ID), regle: regle})
 		}
 	}
 
 	for _, p := range politiques {
-		script := fmt.Sprintf("cat > /tmp/p.hcl <<'FIN_POLITIQUE'\n%s\nFIN_POLITIQUE\n", p.regle)
-		if _, err := cli.Executer(ctx, ns, pod, "openbao", "sh", "-c", script); err != nil {
-			return "", fmt.Errorf("writing policy %s: %w", p.nom, err)
-		}
-		if err := ecrirePolitique(ctx, cli, inst, p); err != nil {
+		if err := poserPolitiqueModule(ctx, cli, inst, p.nom, p.regle); err != nil {
 			return "", err
 		}
 	}
@@ -1172,18 +1168,13 @@ func configurerAuthKubernetes(ctx context.Context, cli *k8sapi.Client) error {
 		for _, acces := range m.Info().Vault {
 			roles = append(roles, struct{ nom, sa, ns, politique string }{
 				nom: m.Info().ID, sa: acces.ServiceAccount, ns: acces.Namespace,
-				politique: "ceffio-" + m.Info().ID})
+				politique: nomPolitiqueModule(m.Info().ID)})
 		}
 	}
 
 	for _, r := range roles {
-		if _, err := baoAvecJeton(ctx, cli, adm,
-			"write", "auth/kubernetes/role/"+r.nom,
-			"bound_service_account_names="+r.sa,
-			"bound_service_account_namespaces="+r.ns,
-			"policies="+r.politique,
-			"ttl=1h"); err != nil {
-			return fmt.Errorf("role \"%s\": %w", r.nom, err)
+		if err := poserRoleKubernetes(ctx, cli, adm, r.nom, r.sa, r.ns, r.politique); err != nil {
+			return err
 		}
 	}
 	fmt.Println("  ∙ Kubernetes authentication configured (role \"console\", 1 h TTL)")
