@@ -110,12 +110,30 @@ the module ships the answer to that one lookup — see
 
 ## Accounts
 
-**Header SSO creates no account.** OpenProject looks the login up and redirects to a failure
-page when nobody matches. The module therefore takes part in the Users page:
+**Header SSO creates no account — and the page it shows does not say so.** OpenProject looks
+the login up and, when nobody matches, redirects to a page reading *"Single Sign-On (SSO)
+pour l'utilisateur "<login>" a échoué: Nom d'utilisateur ou mot de passe incorrect"*. Nobody
+typed anything and no password is wrong: **the account does not exist**, and the message
+names nothing to act on. Provisioning is therefore the module's job, on two paths that cover
+each other:
+
+- **A user created from the Users page gets its account immediately**: the console calls the
+  module, which creates the account through Rails.
+- **Every other user of the realm is reconciled when the module is installed** — users who
+  existed before the module was installed, and users created straight in Keycloak.
+  Installation is re-runnable, so it is also the repair path: re-run it after adding users
+  outside the console, or after upgrading from a release that provisioned nobody.
+
+Reconciliation creates what is missing and corrects nothing else, so a second run creates
+nothing. It skips, with a warning that names them, the identities OpenProject cannot
+represent: a **disabled** Keycloak user, and a user with **no e-mail address** — OpenProject
+refuses an account without one, and the remedy is the address on the Users page. A client's
+`service-account-*` is skipped in silence: it never signs in through a browser.
+
+What the module does to a person's account, from the Users page:
 
 - creating a Ceffio user creates the OpenProject account;
-- a user created **before** the module was installed appears with a **create** action on
-  the Users page, which is what provisions the missing account;
+- a user the module has not provisioned appears with a **create** action, which creates it;
 - the Ceffio administrator (`adminceffio`) is an OpenProject administrator; no other user is
   promoted from here — who administers OpenProject is OpenProject's own decision;
 - suspend and resume set the account's status, delete removes it.
@@ -126,6 +144,20 @@ linked to an LDAP auth source named `Ceffio SSO`. The link is what marks the acc
 authenticated from outside and leaves it **without a password**, so the OpenProject login
 form cannot be used against it. Listing accounts, which happens on every page load, is one
 SQL query instead: a Rails boot per page load would cost tens of seconds.
+
+### Deleting an account
+
+OpenProject's delete contract (`Users::DeleteContract#deletion_allowed?`) asks
+`Setting.users_deletable_by_admins`, and that setting ships **false**: no administrator may
+delete anybody, so `Users::DeleteService` fails with `may not be accessed.` and the account
+stays — a failure the console could report but not explain. The module opens the setting for
+the duration of the call and restores it in an `ensure`, whether the deletion succeeded or
+raised. The setting belongs to the instance, not to the script: leaving it open would widen
+what every administrator may delete from then on.
+
+The consequence for an operator: a user who signs in with two identities (an older local
+account, and the account the suite created) keeps both until one is deleted **here** — a
+duplicate is not something header SSO resolves, because both accounts are valid.
 
 ### The lookup the header triggers
 
@@ -139,7 +171,7 @@ is what the module did until it shipped a responder: the auth source names
 and it writes nothing; it parses the search filter, takes the login out of it
 (`uid=<login>`), and returns the one entry that names that login. The account row decides
 what happens next: header SSO only logs in an account that exists and is active, which is
-why the Users page above is still the thing that provisions people.
+why the provisioning described above is still what decides whether a sign-in succeeds.
 
 It is the Ceffio image running its own `ldap-responder` subcommand — a few hundred lines
 with no dependency beyond the standard library. The alternatives were rejected on
